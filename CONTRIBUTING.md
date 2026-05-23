@@ -31,10 +31,21 @@ cd packages/dashboard && pnpm dev  # Vite dev server
 ### Daml development
 
 ```bash
-pnpm daml:deps      # download dependency DARs
+pnpm daml:deps      # download dependency DARs (legacy Daml Finance)
+node scripts/fetch-v2-dars.mjs --mode source-build  # Splice V2 DARs
 pnpm daml:build     # compile all Daml packages
 pnpm daml:test      # run Daml scenario tests
 ```
+
+**Note on Daml CI:** the canton-streams DAR depends on CIP-56 V2 Token
+Standard packages from `canton-network/splice@token-standard-v2-upcoming`.
+Building those requires cloning the upstream Splice repo and running
+`daml build` against 6+ source packages — a 10-30 minute operation per
+fresh CI runner. To keep push-triggered CI fast, **the Daml build is
+not in the default CI workflow**. Run it manually via the `Daml Build & Test (manual)`
+workflow in the Actions tab when you want to verify the Daml side.
+Contributors should run the local commands above before submitting a
+Daml-touching PR.
 
 ## Project structure
 

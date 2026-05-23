@@ -1,0 +1,77 @@
+name: Daml Build & Test (manual)
+
+# Triggered manually from the Actions tab — NOT on every push.
+#
+# Why manual: the canton-streams DAR depends on CIP-56 V2 Token Standard
+# DARs sourced from `canton-network/splice@token-standard-v2-upcoming`,
+# which require cloning the upstream Splice repo and running
+# `daml build` against 6+ source packages. That's a 10-30 minute
+# operation per fresh CI runner, which is too heavy to run on every
+# push. Run this when you want to verify the Daml side end-to-end.
+#
+# Inputs:
+#   splice_ref — git ref in canton-network/splice to build V2 DARs from
+#                (default: token-standard-v2-upcoming)
+
+on:
+  workflow_dispatch:
+    inputs:
+      splice_ref:
+        description: 'Splice git ref to build V2 DARs from'
+        required: false
+        default: 'token-standard-v2-upcoming'
+
+jobs:
+  daml:
+    name: Daml Build & Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install Daml SDK 3.4.10
+        run: |
+          curl -sSL https://get.daml.com/ | sh -s -- 3.4.10
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      - name: Verify Daml SDK install
+        run: |
+          daml version
+          ls -la "$HOME/.daml/bin"
+
+      - name: Fetch Splice V2 DARs (source build)
+        run: |
+          node scripts/fetch-v2-dars.mjs \
+            --mode source-build \
+            --splice-ref "${{ inputs.splice_ref }}"
+
+      - name: Verify V2 DARs are in place
+        run: |
+          ls -la packages/daml/main/.lib/ | head -20
+          test -f packages/daml/main/.lib/splice-api-token-allocation-v2-1.0.0.dar
+
+      - name: Build Daml packages
+        run: |
+          set -e
+          for pkg in interfaces main test scripts; do
+            if [ -f "packages/daml/$pkg/daml.yaml" ]; then
+              echo "=== Building packages/daml/$pkg ==="
+              (cd "packages/daml/$pkg" && daml build)
+            fi
+          done
+
+      - name: Run Daml tests
+        run: bash scripts/test-all-daml.sh
+
+      - name: Upload built DARs as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: canton-streams-dars
+          path: packages/daml/**/.daml/dist/*.dar
+          if-no-files-found: warn
+          retention-days: 14

@@ -50,40 +50,6 @@ jobs:
       - name: Test Dashboard
         run: pnpm --filter @canton-streams/dashboard test
 
-  # ─── Daml build & test ───
-  daml:
-    name: Daml Build & Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Daml SDK 3.4.10
-        run: |
-          curl -sSL https://get.daml.com/ | sh -s -- 3.4.10
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
-
-      - name: Verify Daml SDK install
-        run: |
-          daml version || echo "daml CLI not on PATH"
-          ls -la "$HOME/.daml/bin" || true
-
-      - name: Download Daml Finance + Splice V2 dependencies
-        run: bash packages/daml/get-dependencies.sh
-
-      - name: Build Daml packages
-        run: |
-          set -e
-          for pkg in interfaces main test scripts; do
-            if [ -f "packages/daml/$pkg/daml.yaml" ]; then
-              echo "=== Building packages/daml/$pkg ==="
-              (cd "packages/daml/$pkg" && daml build)
-            fi
-          done
-
-      - name: Run Daml tests
-        run: bash scripts/test-all-daml.sh
-        continue-on-error: true
-
   # ─── Docker build (push to main only) ───
   docker:
     name: Docker Build
@@ -96,3 +62,17 @@ jobs:
       - name: Build dashboard image
         run: |
           docker build -f docker/Dockerfile.dashboard -t canton-streams-dashboard:latest .
+
+# ──────────────────────────────────────────────────────────────────────────
+# Daml build & test is intentionally NOT in the push-triggered pipeline.
+#
+# The canton-streams DAR depends on CIP-56 V2 Token Standard packages from
+# `canton-network/splice@token-standard-v2-upcoming`. Until Splice publishes
+# pre-built V2 DARs as release artifacts, building them requires cloning
+# the upstream Splice repo and running `daml build` against 6+ source
+# packages — a 10-30 minute operation per fresh CI runner.
+#
+# We run the Daml build manually via `.github/workflows/daml.yml`
+# (workflow_dispatch). Contributors run `pnpm daml:deps && pnpm daml:build`
+# locally; see CONTRIBUTING.md for the developer-side flow.
+# ──────────────────────────────────────────────────────────────────────────
