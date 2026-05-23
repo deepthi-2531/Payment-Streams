@@ -54,7 +54,7 @@ export class FireblocksSigningProvider extends BaseSigningProvider {
       (w) => w.signingProviderId === 'fireblocks',
     );
     if (!hasFireblocks && this.options.warnOnMissingProvider !== false) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         '[canton-streams] Gateway at',
         this.connection.gatewayUrl,

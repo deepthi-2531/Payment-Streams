@@ -37,7 +37,7 @@ export class DfnsSigningProvider extends BaseSigningProvider {
     const accounts = await this.listAccounts();
     const hasDfns = accounts.some((w) => w.signingProviderId === 'dfns');
     if (!hasDfns && this.options.warnOnMissingProvider !== false) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         '[canton-streams] Gateway at',
         this.connection.gatewayUrl,

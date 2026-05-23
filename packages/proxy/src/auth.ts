@@ -516,6 +516,10 @@ export function extractPartyFromJwtUnsafe(token: string): string | null {
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Legacy helper retained for reference — the dev-auth path now reads the
+// party from the JWT `party`/`sub` claim directly (STR-83 Phase 7).
+// Kept here for documentation; not currently called from anywhere.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function extractPartyFromHeader(req: Request): string {
   const party = req.headers['x-canton-party'] as string | undefined;
   if (!party) {

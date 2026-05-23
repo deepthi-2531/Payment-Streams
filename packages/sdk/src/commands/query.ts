@@ -18,8 +18,9 @@ import type {
   VestingModeConfig,
 } from '../types/stream.js';
 import { VestingMode, StreamStatus, AssetType, SettlementMode } from '../types/stream.js';
+import type {
+  TEMPLATE_STREAM_ESCROW} from '../templates.js';
 import {
-  TEMPLATE_STREAM_ESCROW,
   ESCROW_TEMPLATES,
   CHOICE_WITHDRAW_STREAM,
   CHOICE_WITHDRAW_UTILITY,
@@ -892,6 +893,7 @@ async function findHistoricalStreamSnapshotForTemplate(
   return new Promise((resolve) => {
     let latestSnapshot: HistoricalStreamSnapshot | undefined;
     let settled = false;
+    // eslint-disable-next-line prefer-const -- assigned later inside the same closure but referenced earlier in `finish`
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let cancelFn: (() => void) | undefined;
 

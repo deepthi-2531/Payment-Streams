@@ -7,8 +7,8 @@
 import type { ArgumentsCamelCase, Argv } from 'yargs';
 import chalk from 'chalk';
 import ora from 'ora';
-import { CantonStreamsClient, StreamStatus } from '@canton-streams/sdk';
-import type { StreamFilter } from '@canton-streams/sdk';
+import { CantonStreamsClient } from '@canton-streams/sdk';
+import type { StreamFilter , StreamStatus } from '@canton-streams/sdk';
 import { resolveConfig, type GlobalOptions } from '../config.js';
 import { printStreamTable, printJson } from '../output.js';
 

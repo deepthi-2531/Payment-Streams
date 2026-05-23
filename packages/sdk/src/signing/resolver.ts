@@ -174,7 +174,7 @@ class SigningProviderResolverImpl implements SigningProviderResolver {
     for (const wallet of accounts) {
       const kind = normalizeSigningProviderId(wallet.signingProviderId);
       if (!kind) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           '[canton-streams] Unknown signingProviderId',
           wallet.signingProviderId,

@@ -183,7 +183,7 @@ export async function handler(argv: ArgumentsCamelCase<SandboxArgs>): Promise<vo
   });
 
   // Forward sandbox output to the console (after the spinner resolves)
-  let sandboxOutputBuffer: string[] = [];
+  const sandboxOutputBuffer: string[] = [];
   let sandboxForwarding = false;
 
   sandboxProcess.stdout?.on('data', (data: Buffer) => {

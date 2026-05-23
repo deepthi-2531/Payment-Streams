@@ -5,7 +5,7 @@
  * All monetary amounts use decimal.js Decimal for arbitrary-precision arithmetic.
  */
 
-import Decimal from 'decimal.js';
+import type Decimal from 'decimal.js';
 
 // ---------------------------------------------------------------------------
 // Enums

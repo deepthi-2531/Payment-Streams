@@ -48,7 +48,7 @@ export class CantonStreamsApi {
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+     
     _getParty?: () => string | null,
   ) {}
 

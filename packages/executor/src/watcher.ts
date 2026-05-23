@@ -10,7 +10,7 @@
  * @module watcher
  */
 
-import type { Transport, TemplateId } from '@canton-streams/sdk';
+import type { Transport } from '@canton-streams/sdk';
 import { TEMPLATE_DELEGATED_POLICY, TEMPLATE_EXECUTION_LOG } from '@canton-streams/sdk';
 import type { Logger } from 'pino';
 
@@ -89,7 +89,7 @@ export async function fetchRecentExecutions(
   transport: Transport,
   policyId: string,
   executorParty: string,
-  logger: Logger,
+  _logger: Logger,
 ): Promise<ExecutionLogContract[]> {
   const results = await transport.query<any>(
     TEMPLATE_EXECUTION_LOG,

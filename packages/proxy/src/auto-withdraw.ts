@@ -1446,7 +1446,7 @@ function warnInProcessSigningOnce(): void {
     return;
   }
   warnedInProcess = true;
-  // eslint-disable-next-line no-console
+   
   console.warn(
     '[canton-streams/proxy] In-process signing path is DEPRECATED (STR-90). ' +
     'Set PROXY_AUTO_WITHDRAW_USE_SIGNING_PROVIDER=true plus ' +

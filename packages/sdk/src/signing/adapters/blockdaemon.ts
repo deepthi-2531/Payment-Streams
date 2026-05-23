@@ -32,7 +32,7 @@ export class BlockdaemonSigningProvider extends BaseSigningProvider {
       (w) => w.signingProviderId === 'blockdaemon',
     );
     if (!hasBlockdaemon && this.options.warnOnMissingProvider !== false) {
-      // eslint-disable-next-line no-console
+       
       console.warn(
         '[canton-streams] Gateway at',
         this.connection.gatewayUrl,

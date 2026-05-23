@@ -1,4 +1,4 @@
-import Decimal from 'decimal.js';
+import type Decimal from 'decimal.js';
 
 interface AmountDisplayProps {
   amount: Decimal;

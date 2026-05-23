@@ -15,16 +15,22 @@ const logger = {
 } as any;
 
 describe('TransferOfferAdapter', () => {
-  it('handles configured DA Utility instruments by default', async () => {
+  it('handles caller-supplied DA Utility instruments + registrar prefixes', async () => {
+    // OSS-readiness pass dropped the organization-specific defaults
+    // (DEFAULT_INSTRUMENT_IDS / DEFAULT_REGISTRAR_PREFIXES). The adapter
+    // is now neutral; callers must opt in to specific instruments via
+    // the constructor.
     const adapter = new TransferOfferAdapter({
       baseUrl: 'https://wallet.example',
       credentials: {},
       fetchImpl: vi.fn() as any,
+      instrumentIds: ['USDCx', 'EX1'],
+      registrarPrefixes: ['example-registrar'],
     });
 
-    await expect(adapter.canHandle('decentralized-usdc::1220admin', 'USDCx')).resolves.toBe(true);
-    await expect(adapter.canHandle('bitsafe::1220admin', 'CBTC')).resolves.toBe(true);
-    await expect(adapter.canHandle('registrar::1220admin', 'BIT')).resolves.toBe(false);
+    await expect(adapter.canHandle('example-registrar::1220admin', 'USDCx')).resolves.toBe(true);
+    await expect(adapter.canHandle('example-registrar::1220admin', 'EX1')).resolves.toBe(true);
+    await expect(adapter.canHandle('unknown::1220admin', 'BIT')).resolves.toBe(false);
   });
 
   it('creates a hosted transfer, accepts the pending offer, and returns the receiver acceptance reference', async () => {
