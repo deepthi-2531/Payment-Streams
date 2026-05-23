@@ -74,6 +74,73 @@ End-user actions use the **CIP-103 wallet flow** through `@canton-network/dapp-s
 
 Server-side automation (auto-withdraw, scheduled finalize) uses the **REST proxy** with a JWT bearer token. The proxy reads identity from the JWT `party` (or `sub`) claim; it does **not** require a separate `X-Canton-Party` header. Set `VITE_SKIP_WALLET_PICKER=true` in `packages/dashboard/.env.local` for local development convenience (auto-selects the configured remote wallet without showing the picker UI).
 
+## Automation Architecture
+
+A streaming-payment protocol is only half the picture. Every real deployment also needs **automation**: someone has to drive `Allocation_ExecuteTransfer` per accrual interval, settle milestone legs when KPIs hit, top up subscription funding, retry failed transfers, claim inbound payouts. If that automation is designed off-chain after the templates are frozen, two things go wrong: (1) the templates miss the hooks the automation needs, and (2) each adopter reinvents the authorization story, usually badly.
+
+We treat automation as a first-class, **co-designed** part of the system and ship it alongside the on-ledger contracts. The commitment lives in four layers:
+
+### Layer 1 — On-ledger authorization primitive (`DelegatedPolicy`)
+
+`packages/daml/main/daml/CantonStreams/Policy/DelegatedPolicy.daml` is the contract that bounds automation **on the ledger itself**. It is signed by sender + recipient + executor, and the `ExecutePolicy` choice enforces every bound atomically:
+
+| Bound | Purpose |
+|---|---|
+| `expiresAt` | Hard time cap on the executor's authority |
+| `active` (`RevokePolicy` choice) | Sender can revoke unilaterally at any time |
+| `allowedActions: [DelegatedAction]` | Whitelist of choice names (`Withdraw`, `Cancel`, `Renew`, …) |
+| `streamFilters: [Text]` | Scope to specific streams |
+| `rateLimit.maxExecutionsPerPeriod` | "no more than N withdraws per hour" |
+| `rateLimit.maxAmountPerExecution` | "no more than X per call" |
+| `rateLimit.cooldownInterval` | Minimum gap between calls |
+
+Every execution also creates an **append-only `ExecutionLog`** contract, so the audit trail is on-chain and tamper-evident — not a JSON file on the operator's box.
+
+This is the answer to *"automation needs authorization"*: the authorization is part of the same Daml authority model as the streams themselves. There is no off-chain ACL.
+
+### Layer 2 — Named automation parties in the stream templates
+
+The stream-admin templates have the off-chain automation party **baked in** as a typed field, not assumed:
+
+| Template | Automation party | What it does |
+|---|---|---|
+| `StreamAdmin` | `escrowOperator` | Drives `Allocation_ExecuteTransfer` per accrual interval |
+| `StreamFlow` + `StreamFlowAdmin` | `escrowOperator` | Same, plus handles `TopUp` / `Pause` / `Resume` / `Stop` |
+| `MilestoneAdmin` | `confirmer` | Confirms named milestones via `ConfirmMilestone`; can be the sender (self-confirmed grants), an oracle, or a KPI validator |
+| `DelegatedPolicy` | `executor` | Runs bounded automation under the policy |
+
+Because the automation party is on-ledger, its signature is required for the operations it performs, and the Daml authority model decides what it can and cannot do. The templates were designed around this — they are not generic stream contracts retrofitted with an operator field.
+
+### Layer 3 — Reference automation runtimes
+
+Adopters don't write the common automation from scratch. Three runtimes ship in the same release:
+
+| Package | Role |
+|---|---|
+| `packages/proxy/src/transfer-events-subscriber.ts` | Event-driven advancement. Subscribes to `TransferEventsV2` and exercises `Allocation_ExecuteTransfer` on the next leg when a settle event arrives. Replaces the old poll-based auto-withdraw. |
+| `packages/executor/` | Bounded executor that consumes `DelegatedPolicy` contracts and runs within their on-ledger bounds. Reusable as-is or as a reference. |
+| `packages/proxy/src/auto-withdraw.ts` | Interactive-submission path for participants where direct gRPC submission isn't viable for the escrow operator. |
+
+The proxy + executor are bundled with the SDK + Daml templates in one monorepo, one versioned release line. Adopters can use them directly, fork them, or replace them — but they don't start from a blank page.
+
+### Layer 4 — Common operator workflows in the CLI
+
+`packages/cli/` ships `canton-streams` for batch stream creation, adoption-metrics aggregation, DAR vetting verification, and policy execution. `scripts/provision-streams-service.mjs` provisions a least-privilege service principal (`CanReadAsAnyParty + CanActAs` only for the escrow operator) so adopters don't accidentally hand an admin token to the automation.
+
+### Why this matters
+
+The reviewer concern this section answers: *"automation will need authorization and common logic, and its design will influence the payment streams. You have to design/build the other part at the same time."*
+
+Our commitment:
+
+1. **Automation parties are on-ledger fields** in the stream templates — not assumed, not off-chain.
+2. **Authorization is a Daml contract** (`DelegatedPolicy`), not an off-chain config — same authority model as the streams themselves.
+3. **Reference runtimes ship in the same release** — adopters don't reinvent auto-withdraw, milestone confirmation, or the executor loop.
+4. **Audit is on-chain** (`ExecutionLog`) — tamper-evident, queryable, jurisdiction-portable.
+5. **Operator workflows are scripted** — `provision-streams-service.mjs`, the CLI, the proxy readiness checks — so adopters land in a known-good production posture.
+
+For the concrete walkthrough of how all four layers interact in a real integration, see [INTEGRATION-EXAMPLE.md § "Trust-minimized executor"](docs/INTEGRATION-EXAMPLE.md#trust-minimized-executor) and [WALKTHROUGHS.md](docs/WALKTHROUGHS.md).
+
 ## Integrating into another Canton app
 
 The integration boundary is:
