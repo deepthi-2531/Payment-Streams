@@ -1,0 +1,292 @@
+-- | StreamAdmin — V2-only admin/observability contract for the
+-- iterated-allocation streaming pattern (STR-86 / plan §7 / STR-79).
+--
+-- ## Architectural pivot (STR-79 V2-only)
+--
+-- The legacy `StreamEscrow` template (this module's predecessor) carried
+-- the escrowed funds *inside* the contract via an `EscrowBalance` field.
+-- The V2-only architecture moves the funds out: they live in standard
+-- V2 `Allocation` contracts created by the sender via
+-- `AllocationFactory_Allocate` with `committed = True` and
+-- `nextIterationFunding` populated. `StreamAdmin` is the per-stream
+-- *observability* contract — it records the stream's metadata (vesting,
+-- cancellability, parties, observers) and pointers to the current
+-- iteration's `Allocation` cid.
+--
+-- This split is per the CIP-0112 May 2026 update:
+--
+--   * sender's wallet sees one `AllocationFactory_Allocate` prompt at
+--     create time covering the full deposit + iteration funding;
+--   * operator/executor exercises `Allocation_Settle` per accrual
+--     period, atomically transferring this period's amount and
+--     creating the next iteration's `Allocation` with refilled
+--     `nextIterationFunding`;
+--   * `StreamAdmin.Sync_Iteration` records the new allocation cid +
+--     advances `totalWithdrawn` on the admin contract for UX queries.
+--
+-- ## Coexistence with `StreamEscrow`
+--
+-- `StreamEscrow` continues to live in this package for the duration of
+-- the M3 hardening window. It is marked DEPRECATED and consumers MUST
+-- migrate to `StreamAdmin` + a V2 `Allocation` before M4 mainnet promotion.
+-- The two templates do not share state; each stream uses one or the other.
+--
+-- ## Lifecycle (V2 vocabulary only)
+--
+-- | User action          | What happens                                              |
+-- |----------------------|-----------------------------------------------------------|
+-- | Create stream        | Operator creates `StreamAdmin`; sender exercises          |
+-- |                      | `AllocationFactory_Allocate` for the V2 asset's factory   |
+-- |                      | (`committed = True`, `nextIterationFunding = Some(...)`); |
+-- |                      | operator records the resulting cid via `Sync_Iteration`.  |
+-- | Per-period accrual   | Operator exercises `Allocation_Settle` with one leg       |
+-- |                      | (operator → recipient) + refilled `nextIterationFunding`. |
+-- |                      | Operator exercises `Sync_Iteration` to update              |
+-- |                      | `totalWithdrawn` + record the new allocation cid.         |
+-- | Cancel               | Either party exercises `Allocation_Cancel` on the         |
+-- |                      | current allocation; operator records terminal state via   |
+-- |                      | `Mark_Cancelled`.                                         |
+-- | Complete             | When `nextIterationFunding` empties (final period), the   |
+-- |                      | chain ends; operator exercises `Mark_Completed`.          |
+--
+-- ## Files referencing this module
+--
+--   * `packages/daml/test/daml/Test/Stream/StreamAdminLifecycle.daml`
+--     — unit tests for the lifecycle observability semantics
+--   * `packages/sdk/src/commands/stream-admin.ts` (planned) — SDK
+--     orchestration that produces the create command + the
+--     `AllocationFactory_Allocate` command for the dApp to dispatch
+module CantonStreams.Stream.StreamAdmin where
+
+import CantonStreams.Interface.Types
+  ( StreamId
+  , VestingMode
+  , StreamStatus(..)
+  , InstrumentRef
+  )
+
+-- | A V2-only payment-stream admin/observability contract.
+--
+-- Signatories are sender + recipient + operator (three-of-three).
+-- The operator records iteration advances; the sender + recipient
+-- co-sign so the admin contract is visible to both parties and
+-- neither can be locked out of state queries.
+template StreamAdmin
+  with
+    streamId : StreamId
+    sender : Party
+    recipient : Party
+    operator : Party
+      -- ^ Escrow operator / executor. Responsible for driving
+      -- `Allocation_Settle` per accrual period and calling
+      -- `Sync_Iteration` to advance admin state.
+    instrumentRef : InstrumentRef
+      -- ^ Asset reference (admin + instrumentId + version). The
+      -- corresponding V2 `Allocation` carries the same instrument id
+      -- on its `transferLegSides`.
+    totalDeposited : Decimal
+      -- ^ Total committed at create time (the sender's
+      -- `AllocationFactory_Allocate` prompt covered this much).
+    vestingMode : VestingMode
+    startTime : Time
+    endTime : Time
+    cancellable : Bool
+      -- ^ Whether the sender can unilaterally exercise `Allocation_Cancel`.
+      -- If False, only mutual cancel (both parties co-sign) is allowed.
+    -- ----- mutable state -----
+    totalWithdrawn : Decimal
+      -- ^ Cumulative recipient receipts across all iterations.
+    numIterations : Int
+      -- ^ Number of settled iterations; the iteration chain depth.
+    status : StreamStatus
+    currentAllocationCid : Optional Text
+      -- ^ Contract id (as text — the admin contract does not depend
+      -- on the V2 Allocation template so it has no typed reference)
+      -- of the active V2 `Allocation` in the iteration chain. Updated
+      -- on each `Sync_Iteration`. `None` between operator-side
+      -- create-allocation and the first `Sync_Iteration`.
+    originalAllocationId : Optional Text
+      -- ^ The first allocation in the iteration chain (STR-97). All
+      -- subsequent allocations in the chain reference this via their
+      -- V2 `originalAllocationId` field. Set by the first
+      -- `Sync_Iteration`; never changes afterwards. Used by
+      -- subscribers / Foundation adoption-metrics tooling to correlate
+      -- all transfers belonging to a single stream.
+    observers : [Party]
+  where
+    signatory sender, recipient, operator
+    observer observers
+
+    ensure totalDeposited > 0.0
+      && startTime < endTime
+      && totalWithdrawn >= 0.0
+      && totalWithdrawn <= totalDeposited
+      && numIterations >= 0
+
+    -- | Record that a new iteration has settled. Operator-only.
+    --
+    -- Called after the operator exercises `Allocation_Settle` on the
+    -- active V2 `Allocation`. The operator passes:
+    --
+    --   * the amount transferred this iteration (asserted ≤ remaining
+    --     undrawn balance + asserted > 0)
+    --   * the new allocation cid (the next iteration's contract,
+    --     created atomically by V2 `Allocation_Settle` when
+    --     `nextIterationFunding` is `Some`)
+    --   * `None` for the new cid if the iteration was the final one
+    --     (`nextIterationFunding = None` on settle)
+    --
+    -- Status transitions to `Completed` automatically when
+    -- `totalWithdrawn == totalDeposited`.
+    nonconsuming choice Sync_Iteration : ContractId StreamAdmin
+      with
+        iterationAmount : Decimal
+          -- ^ Amount transferred in this iteration's settle.
+        newAllocationCid : Optional Text
+          -- ^ Next iteration's allocation cid (None for final).
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Iteration amount must be positive" (iterationAmount > 0.0)
+        let newTotalWithdrawn = totalWithdrawn + iterationAmount
+        assertMsg "Iteration overshoots committed balance"
+          (newTotalWithdrawn <= totalDeposited)
+
+        let newStatus =
+              if newTotalWithdrawn == totalDeposited
+              then Completed
+              else Active
+            newOriginal =
+              -- First iteration captures the original allocation id.
+              -- Subsequent iterations keep the original unchanged.
+              case originalAllocationId of
+                Some _ -> originalAllocationId
+                None -> newAllocationCid
+
+        archive self
+        create this with
+          totalWithdrawn = newTotalWithdrawn
+          numIterations = numIterations + 1
+          status = newStatus
+          currentAllocationCid = newAllocationCid
+          originalAllocationId = newOriginal
+
+    -- | Mark the stream as cancelled. Cancellation itself happens on
+    -- the underlying V2 `Allocation` via `Allocation_Cancel`; this
+    -- choice only records the terminal state on the admin contract
+    -- for UX + Foundation adoption-metrics queries.
+    --
+    -- Controller is `operator` because they observe the on-chain
+    -- `Allocation_Cancel` event and react. Sender + recipient see the
+    -- archive via the signatory set so cannot be surprised.
+    nonconsuming choice Mark_Cancelled : ContractId StreamAdmin
+      with
+        cancelTime : Time
+        finalWithdrawn : Decimal
+          -- ^ Amount recipient actually received before cancellation.
+          -- Asserted ≤ totalDeposited.
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Final withdrawn cannot exceed total deposited"
+          (finalWithdrawn <= totalDeposited)
+        assertMsg "Final withdrawn must be >= current totalWithdrawn"
+          (finalWithdrawn >= totalWithdrawn)
+        let _ = cancelTime  -- recorded by observers; not stored on-ledger here
+        archive self
+        create this with
+          totalWithdrawn = finalWithdrawn
+          status = Cancelled
+          currentAllocationCid = None
+
+    -- | Mark the stream as completed. Called when the iteration chain
+    -- terminates naturally (`nextIterationFunding = None` on the final
+    -- settle). Idempotent if status is already `Completed`.
+    nonconsuming choice Mark_Completed : ContractId StreamAdmin
+      controller operator
+      do
+        assertMsg "Stream already terminal"
+          (status == Active || status == Completed)
+        assertMsg "Stream not fully withdrawn"
+          (totalWithdrawn == totalDeposited)
+        if status == Completed
+          then pure self
+          else do
+            archive self
+            create this with
+              status = Completed
+              currentAllocationCid = None
+
+    -- | Non-consuming projection of stream metadata for off-chain
+    -- queries by sender / recipient / observer parties. Cheap
+    -- read-only choice; equivalent to ACS query on the contract +
+    -- a structured shape for clients that find the raw template
+    -- payload too verbose.
+    nonconsuming choice GetStreamAdminInfo : StreamAdminInfo
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == sender || viewer == recipient || viewer == operator
+           || viewer `elem` observers)
+        pure StreamAdminInfo with
+          streamId
+          sender
+          recipient
+          operator
+          totalDeposited
+          totalWithdrawn
+          numIterations
+          status
+          currentAllocationCid
+          originalAllocationId
+
+-- | Structured projection returned by `GetStreamAdminInfo`. Cheaper to
+-- consume than the raw template payload for UX clients.
+data StreamAdminInfo = StreamAdminInfo with
+    streamId : StreamId
+    sender : Party
+    recipient : Party
+    operator : Party
+    totalDeposited : Decimal
+    totalWithdrawn : Decimal
+    numIterations : Int
+    status : StreamStatus
+    currentAllocationCid : Optional Text
+    originalAllocationId : Optional Text
+  deriving (Eq, Show)
+
+-- | Helper: construct a fresh StreamAdmin at create time. All mutable
+-- state is initialized to "just created, no iterations settled yet".
+-- The caller provides the static fields + observer list.
+mkStreamAdmin :
+  StreamId
+  -> Party        -- sender
+  -> Party        -- recipient
+  -> Party        -- operator
+  -> InstrumentRef
+  -> Decimal      -- totalDeposited
+  -> VestingMode
+  -> Time         -- startTime
+  -> Time         -- endTime
+  -> Bool         -- cancellable
+  -> [Party]      -- observers
+  -> StreamAdmin
+mkStreamAdmin sid s r op ref dep vm st et cancellable obs = StreamAdmin with
+  streamId = sid
+  sender = s
+  recipient = r
+  operator = op
+  instrumentRef = ref
+  totalDeposited = dep
+  vestingMode = vm
+  startTime = st
+  endTime = et
+  cancellable
+  totalWithdrawn = 0.0
+  numIterations = 0
+  status = Active
+  currentAllocationCid = None
+  originalAllocationId = None
+  observers = obs

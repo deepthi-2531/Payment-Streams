@@ -1,0 +1,54 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — CommandService definition.
+// Updated to match Canton 3.4.11+ server API.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "CommandServiceOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/commands.proto";
+import "com/daml/ledger/api/v2/transaction.proto";
+import "com/daml/ledger/api/v2/transaction_filter.proto";
+
+// Command service for synchronous command submission.
+service CommandService {
+  // Submit a composite command and wait until persisted (no transaction body returned).
+  rpc SubmitAndWait(SubmitAndWaitRequest) returns (SubmitAndWaitResponse);
+
+  // Submit and wait for the resulting flat transaction.
+  rpc SubmitAndWaitForTransaction(SubmitAndWaitForTransactionRequest) returns (SubmitAndWaitForTransactionResponse);
+
+  // Submit and wait for a reassignment result.
+  rpc SubmitAndWaitForReassignment(SubmitAndWaitForReassignmentRequest) returns (SubmitAndWaitForReassignmentResponse);
+}
+
+message SubmitAndWaitRequest {
+  Commands commands = 1;
+}
+
+message SubmitAndWaitResponse {
+  string update_id = 1;
+  int64 completion_offset = 2;
+}
+
+message SubmitAndWaitForTransactionRequest {
+  Commands commands = 1;
+  TransactionFormat transaction_format = 2;
+}
+
+message SubmitAndWaitForTransactionResponse {
+  Transaction transaction = 1;
+}
+
+// Reassignment (not used by this SDK but kept for proto compatibility)
+message SubmitAndWaitForReassignmentRequest {
+  Commands commands = 1;
+}
+
+message SubmitAndWaitForReassignmentResponse {
+  // Reassignment details omitted for brevity
+}

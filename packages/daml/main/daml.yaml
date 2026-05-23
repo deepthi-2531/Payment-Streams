@@ -1,0 +1,34 @@
+sdk-version: 3.4.10
+name: canton-streams
+source: daml
+version: 0.2.8
+dependencies:
+  - daml-prim
+  - daml-stdlib
+data-dependencies:
+  - ../interfaces/.daml/dist/canton-streams-interfaces-0.2.3.dar
+  # ---------------------------------------------------------------------
+  # CIP-56 Token Standard V2 (STR-79 V2-only / STR-65 DAR fetch / STR-102
+  # legacy delete). Fetched from `canton-network/splice@token-standard-v2-upcoming`
+  # via `node scripts/fetch-v2-dars.mjs --mode source-build`.
+  #
+  # V1 interfaces are NOT bound here. Per CIP-0112 §5, V1 assets are
+  # expected to publish V2 alongside V1; once an asset advertises V2 in
+  # `supportedApis`, our library integrates with it.
+  - .lib/splice-api-token-metadata-v1-1.0.0.dar
+  - .lib/splice-api-token-holding-v2-1.0.0.dar
+  - .lib/splice-api-token-transfer-instruction-v2-1.0.0.dar
+  - .lib/splice-api-token-allocation-v2-1.0.0.dar
+  - .lib/splice-api-token-allocation-instruction-v2-1.0.0.dar
+  - .lib/splice-api-token-allocation-request-v2-1.0.0.dar
+  - .lib/splice-api-token-transfer-events-v2-1.0.0.dar
+# `-Wno-upgrade-interfaces` was needed when our templates implemented
+# in-package stub interfaces (Settlement.Stubs.*). With V2-only adoption
+# (STR-79 + STR-65 fetch), the stubs are deleted and our templates
+# implement the externally-imported Splice V2 interfaces — the
+# upgrade-safety check is satisfied and this flag should be removable.
+# Keeping it conservatively until first `daml build` with real V2 DARs
+# confirms no warnings.
+build-options:
+  - -Wno-upgrade-interfaces
+start-navigator: no

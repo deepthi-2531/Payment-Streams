@@ -1,0 +1,35 @@
+# Canton sandbox participant node
+# Multi-stage build: compile Daml packages, then deploy to Canton image
+
+# Stage 1: Build Daml DARs
+FROM digitalasset/daml-sdk:3.4.10 AS builder
+
+WORKDIR /build
+
+# Copy Daml source
+COPY packages/daml/ /build/packages/daml/
+COPY multi-package.yaml /build/
+
+# Download Finance DAR dependencies
+RUN cd packages/daml && bash get-dependencies.sh
+
+# Build all Daml packages
+RUN dpm build --all
+
+# Stage 2: Canton runtime
+FROM digitalasset/canton-open-source:3.4.10
+
+# Copy compiled DARs from builder stage
+COPY --from=builder /build/packages/daml/main/.daml/dist/*.dar /canton/dars/
+COPY --from=builder /build/packages/daml/interfaces/.daml/dist/*.dar /canton/dars/
+
+# Copy Finance DAR dependencies (needed at runtime for CIP-56 settlement)
+COPY --from=builder /build/packages/daml/main/.lib/*.dar /canton/dars/
+
+# Canton configuration for local sandbox mode
+COPY docker/canton.conf /canton/config/canton.conf
+COPY docker/bootstrap.canton /canton/config/bootstrap.canton
+
+EXPOSE 6865 7575 10011
+
+ENTRYPOINT ["bin/canton", "-c", "/canton/config/canton.conf", "--bootstrap", "/canton/config/bootstrap.canton"]

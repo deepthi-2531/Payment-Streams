@@ -1,0 +1,259 @@
+-- | MilestoneAdmin — V2-only admin/observability for milestone-based
+-- streaming (STR-88 / plan §7 / STR-79).
+--
+-- ## Architecture
+--
+-- Milestone-based streams use a **single** V2 `Allocation` with N
+-- `TransferLegSide`s (one per milestone). Sender approves the whole
+-- thing at create time via `AllocationFactory_Allocate` with
+-- `committed=True`, no `nextIterationFunding`. The operator settles
+-- legs one-by-one as milestones are confirmed off-chain (per
+-- the CIP-0112 update — the V2 spec supports per-leg settlement
+-- through `Allocation_Settle.extraArgs.legId`).
+--
+-- `MilestoneAdmin` is the observability companion: it records the
+-- milestone list + confirmation state + pointer to the underlying
+-- multi-leg V2 Allocation.
+--
+-- ## Wallet UX win (per CIP-0112)
+--
+-- Sender's wallet shows **one** `AllocationFactory_Allocate` prompt
+-- covering all milestones, instead of N separate V1 single-leg
+-- prompts. The wallet renders the per-leg breakdown from the
+-- AllocationSpecification's `transferLegSides`.
+--
+-- ## Lifecycle (V2 vocabulary only)
+--
+-- | User action       | What happens                                          |
+-- |-------------------|-------------------------------------------------------|
+-- | Create stream     | Operator creates `MilestoneAdmin`; sender exercises   |
+-- |                   | `AllocationFactory_Allocate` with N `TransferLegSide`s|
+-- |                   | totalling the full deposit, `committed=True`,         |
+-- |                   | `nextIterationFunding=None`. Operator records the     |
+-- |                   | allocation cid via `Bind_Allocation`.                 |
+-- | Confirm one       | Operator exercises V2 `Allocation_Settle` with        |
+-- |                   | extraArgs referencing the leg's id; the standard      |
+-- |                   | settle atomically transfers that leg only. Operator   |
+-- |                   | exercises `Confirm_Milestone` to record confirmation. |
+-- | Confirm batch     | Operator exercises V2                                 |
+-- |                   | `SettlementFactory_SettleBatch` with the relevant     |
+-- |                   | leg ids. Atomic. Operator exercises                   |
+-- |                   | `Confirm_Milestone_Batch` to record all.              |
+-- | Cancel            | Either party exercises V2 `Allocation_Cancel`; all    |
+-- |                   | unsettled legs release back to sender. Operator       |
+-- |                   | records via `Mark_Cancelled_Milestone_Admin`.         |
+--
+-- ## Coexistence with `MilestoneEscrow`
+--
+-- Legacy `MilestoneEscrow` is marked DEPRECATED. Consumers must migrate
+-- to `MilestoneAdmin` + V2 multi-leg `Allocation` before M4 mainnet
+-- promotion.
+module CantonStreams.Stream.MilestoneAdmin where
+
+-- DA.List doesn't export partition in this SDK; inline the split below.
+
+import CantonStreams.Interface.Types
+  ( StreamId
+  , StreamStatus(..)
+  , InstrumentRef
+  )
+
+-- | A single milestone in a milestone-based stream.
+data Milestone = Milestone with
+    name : Text
+      -- ^ Stable identifier, used as the V2 `transferLegId` on the
+      -- underlying Allocation.
+    description : Text
+    amount : Decimal
+    confirmed : Bool
+    confirmedAt : Optional Time
+  deriving (Eq, Show)
+
+-- | A V2-only milestone-stream admin/observability contract.
+template MilestoneAdmin
+  with
+    streamId : StreamId
+    sender : Party
+    recipient : Party
+    operator : Party
+    instrumentRef : InstrumentRef
+    milestones : [Milestone]
+      -- ^ Full list of milestones. Each entry's `confirmed` flag is
+      -- flipped from False → True via `Confirm_Milestone` /
+      -- `Confirm_Milestone_Batch` once the operator successfully
+      -- settles the corresponding leg.
+    totalDeposited : Decimal
+      -- ^ Sum of milestone amounts (asserted at create).
+    totalReleased : Decimal
+      -- ^ Sum of amounts of confirmed milestones.
+    status : StreamStatus
+    allocationCid : Optional Text
+      -- ^ V2 multi-leg `Allocation` cid bound to this admin contract.
+      -- Set by `Bind_Allocation` after the sender creates the
+      -- allocation via `AllocationFactory_Allocate`.
+    observers : [Party]
+  where
+    signatory sender, recipient, operator
+    observer observers
+
+    ensure totalDeposited > 0.0
+      && totalReleased >= 0.0
+      && totalReleased <= totalDeposited
+      -- Milestones list must be non-empty + sum equals totalDeposited
+      && length milestones > 0
+      && sum (map (.amount) milestones) == totalDeposited
+
+    -- | Bind the multi-leg V2 `Allocation` cid after the sender
+    -- creates it. Idempotent if already bound to the same cid.
+    nonconsuming choice Bind_Allocation : ContractId MilestoneAdmin
+      with
+        cid : Text
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        case allocationCid of
+          Some existing ->
+            -- idempotent if same cid; reject otherwise to avoid bind hijack
+            assertMsg "Allocation already bound to different cid" (existing == cid)
+          None -> pure ()
+        archive self
+        create this with allocationCid = Some cid
+
+    -- | Confirm a single milestone has settled. Called after the
+    -- operator successfully exercises V2 `Allocation_Settle` for
+    -- that leg.
+    nonconsuming choice Confirm_Milestone : ContractId MilestoneAdmin
+      with
+        milestoneName : Text
+        confirmedAt : Time
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        let matching = filter (\m -> m.name == milestoneName) milestones
+            others   = filter (\m -> m.name /= milestoneName) milestones
+        case matching of
+          [target] -> do
+            assertMsg "Milestone already confirmed" (not target.confirmed)
+            let updated = target with
+                  confirmed = True
+                  confirmedAt = Some confirmedAt
+                newMilestones = updated :: others
+                newReleased = totalReleased + target.amount
+                allDone = all (.confirmed) newMilestones
+            archive self
+            create this with
+              milestones = newMilestones
+              totalReleased = newReleased
+              status = if allDone then Completed else Active
+          _ ->
+            abort ("Milestone not found: " <> milestoneName)
+
+    -- | Confirm multiple milestones at once (after V2
+    -- `SettlementFactory_SettleBatch`). Atomic w.r.t. the admin
+    -- contract — all confirmations land in a single archive+create.
+    nonconsuming choice Confirm_Milestone_Batch : ContractId MilestoneAdmin
+      with
+        milestoneNames : [Text]
+        confirmedAt : Time
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Batch must be non-empty" (not (null milestoneNames))
+        -- Validate every requested milestone exists + is unconfirmed.
+        let isRequested m = m.name `elem` milestoneNames
+            toConfirm = filter isRequested milestones
+            untouched = filter (not . isRequested) milestones
+        assertMsg "Batch references unknown milestones"
+          (length toConfirm == length milestoneNames)
+        assertMsg "Batch contains already-confirmed milestones"
+          (all (\m -> not m.confirmed) toConfirm)
+        let confirmed = map (\m -> m with
+                              confirmed = True
+                              confirmedAt = Some confirmedAt) toConfirm
+            newMilestones = confirmed ++ untouched
+            newReleased = totalReleased + sum (map (.amount) confirmed)
+            allDone = all (.confirmed) newMilestones
+        archive self
+        create this with
+          milestones = newMilestones
+          totalReleased = newReleased
+          status = if allDone then Completed else Active
+
+    -- | Mark the milestone stream as cancelled. Called after the
+    -- operator exercises V2 `Allocation_Cancel`.
+    nonconsuming choice Mark_Cancelled_Milestone_Admin : ContractId MilestoneAdmin
+      with
+        cancelTime : Time
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        let _ = cancelTime
+        archive self
+        create this with
+          status = Cancelled
+          allocationCid = None
+
+    -- | Non-consuming projection of stream state.
+    nonconsuming choice GetMilestoneAdminInfo : MilestoneAdminInfo
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized"
+          (viewer == sender || viewer == recipient || viewer == operator
+           || viewer `elem` observers)
+        pure MilestoneAdminInfo with
+          streamId
+          sender
+          recipient
+          operator
+          milestones
+          totalDeposited
+          totalReleased
+          status
+          allocationCid
+
+-- | Structured projection returned by `GetMilestoneAdminInfo`.
+data MilestoneAdminInfo = MilestoneAdminInfo with
+    streamId : StreamId
+    sender : Party
+    recipient : Party
+    operator : Party
+    milestones : [Milestone]
+    totalDeposited : Decimal
+    totalReleased : Decimal
+    status : StreamStatus
+    allocationCid : Optional Text
+  deriving (Eq, Show)
+
+-- | Helper to build a fresh, pending milestone.
+mkPendingMilestone : Text -> Text -> Decimal -> Milestone
+mkPendingMilestone name desc amt = Milestone with
+  name
+  description = desc
+  amount = amt
+  confirmed = False
+  confirmedAt = None
+
+-- | Helper to construct a fresh MilestoneAdmin at create time.
+mkMilestoneAdmin :
+  StreamId
+  -> Party
+  -> Party
+  -> Party
+  -> InstrumentRef
+  -> [Milestone]
+  -> [Party]
+  -> MilestoneAdmin
+mkMilestoneAdmin sid s r op ref ms obs = MilestoneAdmin with
+  streamId = sid
+  sender = s
+  recipient = r
+  operator = op
+  instrumentRef = ref
+  milestones = ms
+  totalDeposited = sum (map (.amount) ms)
+  totalReleased = 0.0
+  status = Active
+  allocationCid = None
+  observers = obs

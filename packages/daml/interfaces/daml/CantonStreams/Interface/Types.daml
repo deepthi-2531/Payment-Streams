@@ -1,0 +1,226 @@
+-- | Core types for Canton Payment Streams.
+--
+-- These types are shared across all stream templates, workflows, and tests.
+-- StreamConfig and StreamState together fully describe a stream's parameters
+-- and current state at any point in time.
+module CantonStreams.Interface.Types where
+
+import DA.Time (RelTime)
+
+-- | Unique, opaque stream identifier. Caller-supplied (SDK generates UUID if not provided).
+-- Used as part of the contract key: (sender, streamId).
+type StreamId = Text
+
+-- | How tokens accrue over the stream's lifetime.
+data VestingMode
+  = Linear
+    -- ^ Fixed rate per second from start to end.
+    -- Accrual = deposit * (elapsed / duration)
+  | CliffLinear with
+      cliffTime : Time
+    -- ^ Zero accrual until cliffTime, then linear from cliff to end.
+    -- Accrual = 0 if now < cliffTime, else deposit * ((now - cliffTime) / (endTime - cliffTime))
+  | Stepped with
+      stepInterval : RelTime
+      amountPerStep : Decimal
+    -- ^ Fixed amount unlocked at regular intervals.
+    -- Accrual = min(deposit, floor(elapsed / stepInterval) * amountPerStep)
+  | RenewableTerm with
+      termDuration : RelTime
+    -- ^ Fixed-duration stream that can be renewed/topped up before expiry.
+    -- Accrual follows linear within each term.
+  deriving (Eq, Show)
+
+-- | Current lifecycle status of a stream.
+data StreamStatus
+  = Active
+    -- ^ Stream is running; accrual is ongoing.
+  | Completed
+    -- ^ Stream fully vested and settled.
+  | Cancelled
+    -- ^ Stream cancelled by sender (cancellable) or mutually.
+  deriving (Eq, Show)
+
+-- | Immutable configuration of a stream, set at creation time.
+data StreamConfig = StreamConfig with
+    streamId : StreamId
+      -- ^ Opaque, caller-supplied unique identifier.
+    sender : Party
+      -- ^ The party funding the stream (signatory).
+    recipient : Party
+      -- ^ The party receiving streamed tokens (signatory).
+    totalDeposited : Decimal
+      -- ^ Total prefunded amount locked in escrow.
+    startTime : Time
+      -- ^ When accrual begins.
+    endTime : Time
+      -- ^ When accrual reaches totalDeposited (for linear/cliff modes).
+    vestingMode : VestingMode
+      -- ^ Accrual curve type.
+    assetType : AssetType
+      -- ^ How the escrowed asset is held (local token, local holding, global holding).
+    instrumentRef : Optional InstrumentRef
+      -- ^ Concrete asset/instrument this stream represents. None for LocalToken
+      -- mode (numeric bookkeeping). For LocalHolding/GlobalHolding, identifies
+      -- the exact Daml Finance instrument being streamed.
+    cancellable : Bool
+      -- ^ Whether the sender can unilaterally cancel.
+    settlementMode : Optional SettlementMode
+      -- ^ How the escrow is backed (numeric, utility custody, local asset, delegated).
+      -- Optional for upgrade compatibility with v0.1.0, which did not include
+      -- this field. None should be treated as NumericLegacy by clients.
+  deriving (Eq, Show)
+
+-- | Mutable state of a stream, updated on each withdrawal/cancellation/renewal.
+data StreamState = StreamState with
+    totalWithdrawn : Decimal
+      -- ^ Cumulative amount withdrawn by recipient.
+    status : StreamStatus
+      -- ^ Current lifecycle status.
+    lastWithdrawTime : Optional Time
+      -- ^ Timestamp of last withdrawal (for audit).
+    renewalCount : Int
+      -- ^ Number of times stream has been renewed (renewable-term only).
+  deriving (Eq, Show)
+
+-- | Initial state for a newly created stream.
+initialStreamState : StreamState
+initialStreamState = StreamState with
+  totalWithdrawn = 0.0
+  status = Active
+  lastWithdrawTime = None
+  renewalCount = 0
+
+-- | Concrete reference to the asset/instrument a stream represents.
+--
+-- This avoids a dependency on the Daml Finance InstrumentKey type in the
+-- interfaces package (which has no Daml Finance DARs in data-dependencies).
+-- The fields mirror InstrumentKey exactly, so production code can convert
+-- between InstrumentRef and InstrumentKey without loss.
+--
+-- For LocalToken streams (numeric bookkeeping), instrumentRef is None.
+-- For LocalHolding/GlobalHolding streams, instrumentRef identifies the
+-- exact Daml Finance instrument being streamed, allowing UIs and operators
+-- to distinguish between different assets.
+--
+-- DEPRECATED for V2 paths: V2 of the CIP-56 token standard collapses the
+-- (depository, issuer, instrumentId, instrumentVersion) tuple into a
+-- single `InstrumentIdV2 { admin, id }`. New V2-aware code should use
+-- `InstrumentIdV2` (defined below) instead. `bridgeInstrumentRefToV2`
+-- converts from V1 to V2 for migration; the depository and instrumentVersion
+-- fields are dropped because V2 has no equivalent.
+data InstrumentRef = InstrumentRef with
+    depository : Party
+      -- ^ The party that hosts the instrument (typically the network operator).
+    issuer : Party
+      -- ^ The party that issued the instrument (token issuer / asset originator).
+    instrumentId : Text
+      -- ^ Unique identifier for the instrument (e.g. "USD-COIN", "ACME-EQUITY").
+    instrumentVersion : Text
+      -- ^ Version tag for the instrument (e.g. "1.0", "2024-Q1").
+  deriving (Eq, Show)
+
+-- | V2 InstrumentId — the addressing primitive used by the CIP-56 V2 token
+-- standard. Mirrors `Splice.Api.Token.HoldingV2.InstrumentId` so that the
+-- interfaces package can reference V2 instrument identifiers without
+-- importing the V2 DARs (which live in the main package). The mirror
+-- shape is binary-compatible with the V2 type and can be converted
+-- 1:1 in the main package's V2 adapter.
+data InstrumentIdV2 = InstrumentIdV2 with
+    admin : Party
+      -- ^ Registry app administering the instrument.
+    id : Text
+      -- ^ Unique identifier per instrument admin.
+  deriving (Eq, Show)
+
+-- | Migration bridge from V1 InstrumentRef to V2 InstrumentIdV2. The
+-- depository and instrumentVersion fields are dropped because V2 has
+-- no equivalent. The issuer maps to V2's `admin` because that matches
+-- the V2 semantics (the registry app administering the instrument).
+bridgeInstrumentRefToV2 : InstrumentRef -> InstrumentIdV2
+bridgeInstrumentRefToV2 ref =
+  InstrumentIdV2 with
+    admin = ref.issuer
+    id = ref.instrumentId
+
+-- | V2 Account — addressing primitive for sender / recipient on V2 paths.
+-- Mirrors `Splice.Api.Token.HoldingV2.Account`. The `provider` field is
+-- significant for institutional adoption: it identifies the custodian /
+-- service provider with visibility on movements.
+data AccountV2 = AccountV2 with
+    owner : Party
+    provider : Optional Party
+    id : Text
+  deriving (Eq, Show)
+
+-- | Describes how the stream's escrowed asset is held and settled.
+--
+-- This discriminator determines the settlement path used for withdrawals,
+-- cancellations, and renewals. The three modes correspond to the primary
+-- asset integration patterns on Canton:
+--
+--   LocalToken     — Validator-local tokens. Settlement via the numeric
+--                    adapter (simple decimal bookkeeping, no Daml Finance).
+--                    Used for dev/test or validator-scoped tokens that
+--                    do not need cross-participant transfer.
+--
+--   LocalHolding   — Validator-local Daml Finance holdings. Settlement via
+--                    Fungible.Split, Transferable.Transfer, and Fungible.Merge
+--                    on the local participant. Holdings exist but do not
+--                    cross domain boundaries.
+--
+--   GlobalHolding  — Global CIP-56 holdings. Same settlement operations as
+--                    LocalHolding, but the holdings are globally addressable
+--                    and can be reassigned across participants via the Canton
+--                    protocol. Requires the full Daml Finance stack.
+data AssetType
+  = LocalToken
+    -- ^ Numeric bookkeeping only; no Daml Finance dependency.
+  | LocalHolding
+    -- ^ Daml Finance holdings on the local participant.
+  | GlobalHolding
+    -- ^ CIP-56 globally-transferable Daml Finance holdings.
+  deriving (Eq, Show)
+
+-- | Settlement mode — determines how the stream's escrow is backed.
+--
+-- Each mode maps to a different on-ledger template and custody path:
+--
+--   NumericLegacy          — Phase 1 numeric bookkeeping (no real holdings).
+--   UtilityHoldingCustody  — Phase 2 Utility/CIP holdings (Holding_Lock/Split/Transfer).
+--   TokenStandardCustody   — Phase 2 external-token custody via token-standard transfers.
+--   LocalAssetCustody      — Phase 2 AMM AssetHolding (archive/recreate pattern).
+--   Delegated              — Phase 3 executor-delegated settlement (no prefunded escrow).
+data SettlementMode
+  = NumericLegacy
+    -- ^ Phase 1 numeric bookkeeping — no real holdings move.
+  | UtilityHoldingCustody
+    -- ^ Phase 2 Utility/CIP custody — real holdings locked/split/transferred.
+  | LocalAssetCustody
+    -- ^ Phase 2 local asset custody — AMM AssetHolding archive/recreate.
+  | Delegated
+    -- ^ Phase 3 delegated execution — executor service manages settlement.
+  | TokenStandardCustody
+    -- ^ Phase 2 external-token custody — sender/escrow/recipient transfers happen via token-standard flows.
+  deriving (Eq, Show)
+
+-- | Reference to the escrow operator service account.
+-- Lives on request and escrow contracts, not on StreamConfig.
+data EscrowOperatorRef = EscrowOperatorRef with
+    operator : Party
+      -- ^ Canton party ID of the escrow operator.
+    operatorLabel : Text
+      -- ^ Human-readable label for display.
+  deriving (Eq, Show)
+
+-- | Rounding policy: all accrual calculations truncate toward zero.
+-- This ensures we never overpay — dust stays with the sender on cancellation.
+--
+-- Invariant (with dust tolerance):
+--   refundable(now) + withdrawable(now) + totalWithdrawn <= totalDeposited
+--
+-- The strict equality version:
+--   refundable(now) + withdrawable(now) + totalWithdrawn + dust == totalDeposited
+-- where dust >= 0 and dust <= 1 minimum unit.
+data RoundingPolicy = TruncateTowardZero
+  deriving (Eq, Show)

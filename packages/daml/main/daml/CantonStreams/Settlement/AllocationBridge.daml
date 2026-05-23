@@ -1,0 +1,258 @@
+-- | AllocationBridge — V2 view-builder helpers for the
+-- AllocationRequestV2 interface.
+--
+-- ⚠ REWRITTEN against verified CIP-56 V2 spec (May 2026). See
+-- `docs/integration-guide/cip-56-v2-types-reference.md` for the
+-- verified type listing.
+--
+-- Per the V2-only architectural pivot (STR-79), escrow templates
+-- (StreamEscrow, StreamFlow, MilestoneEscrow) implement ONLY
+-- `AllocationRequestV2.AllocationRequest`. V1 was dropped — see
+-- STR-79 for the rationale. This module owns the V2 view builders
+-- so the per-template `interface instance` blocks stay focused on
+-- lifecycle authorization.
+--
+-- ## Notable shape facts (verified)
+--
+--   * V2 view is `AllocationRequestView` (no underscore)
+--   * V2 view has `allocations : [AllocationSpecification]` — list of
+--     AllocationSpec records, NOT a Map of legs
+--   * V2 view has `availableActions : Map AllocationRequestAction [[Party]]`
+--     for wallet-driven custom actions (pause/resume/topUp/etc.)
+--   * `SettlementInfo.executors` is a LIST per spec
+--   * `TransferLegSide` uses `side` (Sender/Receiver) + `otherside : Account`
+--   * `TransferLegSide.instrumentId : Text` (plain), NOT `InstrumentIdV2`;
+--     admin lives on `AllocationSpecification.admin`
+module CantonStreams.Settlement.AllocationBridge where
+
+import DA.Map (Map)
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+
+import CantonStreams.Interface.Types
+  ( StreamConfig
+  , StreamState
+  , InstrumentRef
+  )
+
+-- Real Splice V2 imports (STR-102 Phase 2). Stubs are deleted.
+import qualified Splice.Api.Token.AllocationRequestV2 as AR2
+import qualified Splice.Api.Token.AllocationV2 as A2
+import qualified Splice.Api.Token.HoldingV2 as H2
+import qualified Splice.Api.Token.MetadataV1 as M1
+
+-- | Wrap a key-value list into the V2 `Metadata` wrapper.
+-- The real V2 Metadata is `Metadata { values : TextMap Text }`, not
+-- raw `Map Text Text` like the stubs were.
+metaFromList : [(Text, Text)] -> M1.Metadata
+metaFromList kvs = M1.Metadata with values = TextMap.fromList kvs
+
+-- | Empty V2 metadata — alias for clarity at call-sites.
+emptyMeta : M1.Metadata
+emptyMeta = M1.emptyMetadata
+
+-- | Construct a bare V2 Account from a single party. The published
+-- HoldingV2 module exports the data type only; no `bareAccount` helper.
+-- Per the CIP-0112 update, `owner` is `Optional Party`.
+bareV2Account : Party -> H2.Account
+bareV2Account p = H2.Account with owner = Some p; provider = None; id = ""
+
+-- | Assert a settlement reference is non-empty. Moved from the deleted
+-- TokenStandardAdapter as part of STR-102 Phase 2. Used by StreamFlow +
+-- MilestoneEscrow's lifecycle choices to validate that a settlement
+-- reference was supplied by the executor.
+requireSettlementReference : Text -> Update ()
+requireSettlementReference ref =
+  assertMsg "settlement reference must be non-empty" (ref /= "")
+
+------------------------------------------------------------------------
+-- V2 settlement-info + leg-side + allocation-spec builders
+------------------------------------------------------------------------
+
+-- | Build V2 SettlementInfo. `executors` is plural per V2 spec.
+buildSettlementInfoV2 :
+  [Party]             -- ^ executors (plural; typically `[escrowOperator]`)
+  -> Text             -- ^ settlement id
+  -> M1.Metadata
+  -> A2.SettlementInfo
+buildSettlementInfoV2 executors id_ meta =
+  A2.SettlementInfo with
+    executors
+    id = id_
+    cid = None
+    meta
+
+-- | Build a `TransferLegSide` representing the sender's side of a leg.
+-- Used for the escrow operator's side of a stream withdrawal: the
+-- operator commits to sending `amount` to the recipient.
+buildSenderLegSide :
+  Text                 -- ^ transferLegId
+  -> H2.Account        -- ^ recipient account (the OTHER side)
+  -> Decimal
+  -> Text              -- ^ instrumentId (plain Text per V2 spec)
+  -> M1.Metadata
+  -> A2.TransferLegSide
+buildSenderLegSide legId recipientAcc amount instrumentId meta =
+  A2.TransferLegSide with
+    transferLegId = legId
+    side = A2.SenderSide
+    otherside = recipientAcc
+    amount
+    instrumentId
+    meta
+
+-- | Build a `TransferLegSide` representing the receiver's side of a leg.
+buildReceiverLegSide :
+  Text                 -- ^ transferLegId
+  -> H2.Account        -- ^ sender account (the OTHER side)
+  -> Decimal
+  -> Text              -- ^ instrumentId
+  -> M1.Metadata
+  -> A2.TransferLegSide
+buildReceiverLegSide legId senderAcc amount instrumentId meta =
+  A2.TransferLegSide with
+    transferLegId = legId
+    side = A2.ReceiverSide
+    otherside = senderAcc
+    amount
+    instrumentId
+    meta
+
+-- | Build an `AllocationSpecification` for a single withdrawal cycle.
+-- The escrow operator is the authorizer (they hold the funds and
+-- commit to sending them); the leg's `side = SenderSide`, `otherside`
+-- is the recipient's account.
+buildSimpleSpec :
+  Party                -- ^ asset admin
+  -> H2.Account        -- ^ authorizer = escrow operator account
+  -> H2.Account        -- ^ recipient account
+  -> Text              -- ^ transferLegId
+  -> Decimal           -- ^ amount
+  -> Text              -- ^ instrumentId (plain Text)
+  -> Optional Time     -- ^ settlementDeadline
+  -> Bool              -- ^ committed
+  -> Optional (TextMap.TextMap Decimal)  -- ^ nextIterationFunding
+  -> M1.Metadata
+  -> A2.AllocationSpecification
+buildSimpleSpec admin authorizer recipientAcc legId amount instrumentId deadline committed nextFunding meta =
+  A2.AllocationSpecification with
+    admin
+    authorizer
+    transferLegSides = [buildSenderLegSide legId recipientAcc amount instrumentId meta]
+    settlementDeadline = deadline
+    nextIterationFunding = nextFunding
+    committed
+    meta
+
+-- | Build a multi-leg AllocationSpecification — one TransferLegSide
+-- per leg, all authorized by the same authorizer (typically the
+-- escrow operator). Used by MilestoneEscrow's per-milestone shape.
+buildMultiLegSpec :
+  Party                -- ^ admin
+  -> H2.Account        -- ^ authorizer
+  -> [A2.TransferLegSide]
+  -> Optional Time     -- ^ deadline
+  -> Bool              -- ^ committed
+  -> Optional (TextMap.TextMap Decimal)
+  -> M1.Metadata
+  -> A2.AllocationSpecification
+buildMultiLegSpec admin authorizer legs deadline committed nextFunding meta =
+  A2.AllocationSpecification with
+    admin
+    authorizer
+    transferLegSides = legs
+    settlementDeadline = deadline
+    nextIterationFunding = nextFunding
+    committed
+    meta
+
+------------------------------------------------------------------------
+-- V2 view builders (CORRECTED to verified spec shape)
+------------------------------------------------------------------------
+
+-- | Build the V2 `AllocationRequestView` from a stream and its single
+-- pending allocation. The `availableActions` map drives wallet UX:
+-- which parties can take which actions on this request.
+buildV2View :
+  A2.SettlementInfo
+  -> [A2.AllocationSpecification]
+  -> Time                                                  -- ^ requestedAt
+  -> Optional Time                                         -- ^ settleAt
+  -> Map AR2.AllocationRequestAction [[Party]]
+  -> M1.Metadata
+  -> AR2.AllocationRequestView
+buildV2View settlement allocations requestedAt settleAt actions meta =
+  -- NOTE: `originalRequestId` was added in the CIP-0112 May 2026
+  -- update but is NOT yet in the published spec on the
+  -- `token-standard-v2-upcoming` branch. Add it back when the upstream
+  -- spec catches up.
+  AR2.AllocationRequestView with
+    originalRequestCid = None
+    settlement
+    allocations
+    requestedAt
+    settleAt
+    availableActions = actions
+    meta
+
+-- | Build a standard `availableActions` map for a single-recipient
+-- stream-withdrawal request. Per CIP-56 V2 spec, the action enum is
+-- `ARA_Accept | ARA_Reject | ARA_Custom { id }`. Executors can drive
+-- `AllocationRequest_Withdraw` via the interface choice directly;
+-- it is not enumerated in `availableActions` (they're always known
+-- via `settlement.executors`).
+streamWithdrawalActions :
+  Party                                                    -- ^ recipient
+  -> Map AR2.AllocationRequestAction [[Party]]
+streamWithdrawalActions recipient =
+  Map.fromList
+    [ (AR2.ARA_Accept, [[recipient]])
+    , (AR2.ARA_Reject, [[recipient]])
+    ]
+
+-- | Per plan §7.3 — map stream-specific operations (pause / resume /
+-- topUp / confirmMilestone) onto `ARA_Custom` actions. Adding these
+-- to the view's `availableActions` lets V2-aware wallets render them
+-- generically without stream-specific code.
+buildCustomAction : Text -> AR2.AllocationRequestAction
+buildCustomAction id_ = AR2.ARA_Custom with id = id_
+
+------------------------------------------------------------------------
+-- Conservation invariants
+------------------------------------------------------------------------
+
+-- | Total leg amount across all AllocationSpecifications in a V2 view.
+-- Sums every leg of every spec.
+totalLegAmountV2 : AR2.AllocationRequestView -> Decimal
+totalLegAmountV2 v =
+  sum [ leg.amount
+      | spec <- v.allocations
+      , leg <- spec.transferLegSides
+      ]
+
+-- | Check conservation: total leg amount across all allocations ≤
+-- remaining undrawn balance.
+checkConservationV2 : StreamConfig -> StreamState -> AR2.AllocationRequestView -> Bool
+checkConservationV2 cfg state v =
+  totalLegAmountV2 v <= (cfg.totalDeposited - state.totalWithdrawn)
+
+------------------------------------------------------------------------
+-- Helpers used by the three escrow templates
+------------------------------------------------------------------------
+
+-- | Convert a V1 `InstrumentRef` to the V2 `Text` instrumentId used in
+-- `TransferLegSide.instrumentId`. Per spec, V2 admin is captured
+-- separately on `AllocationSpecification.admin`, so the leg-side's
+-- `instrumentId` is just the V1 `instrumentId` field.
+instrumentIdTextFromV1 : InstrumentRef -> Text
+instrumentIdTextFromV1 ref = ref.instrumentId
+
+-- | Default escrow-operator authorizer account for a stream. Used as
+-- the `authorizer` in `AllocationSpecification`. Bare-party account
+-- with `provider = None`; institutional callers can override.
+escrowOperatorAccount : Party -> H2.Account
+escrowOperatorAccount op = bareV2Account op
+
+-- | Default recipient account. Bare-party with `provider = None`.
+streamRecipientAccount : Party -> H2.Account
+streamRecipientAccount p = bareV2Account p

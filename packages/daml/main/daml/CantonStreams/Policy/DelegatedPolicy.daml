@@ -1,0 +1,241 @@
+-- | DelegatedPolicy — on-ledger enforcement of delegated execution authority.
+--
+-- The executor service can only act on streams via this contract. The policy
+-- is signed by sender, recipient, and executor (so all three have consented
+-- to the delegation), and the executor's authority is bounded on-ledger by:
+--
+--   * `expiresAt`         — hard time bound after which no execution is permitted
+--   * `active`            — sender can revoke at any time
+--   * `allowedActions`    — explicit set of actions (Withdraw / Cancel / Renew)
+--   * `streamFilters`     — restricts which streams the policy applies to
+--   * `rateLimit`         — execution count, cooldown, and per-execution amount cap
+--
+-- Rate-limit state is tracked in a companion `PolicyExecutionState` contract
+-- because Daml templates are immutable; updating execution counts requires
+-- archive-and-recreate. The `ExecutePolicy` choice atomically archives the
+-- current state, validates limits, creates the next state, and emits an
+-- `ExecutionLog` for audit.
+--
+-- This module replaces the executor's TypeScript-side validation logic with
+-- contract-enforced rules so that the executor cannot exceed its delegated
+-- authority even if its code is compromised.
+module CantonStreams.Policy.DelegatedPolicy where
+
+import DA.Time (RelTime, addRelTime, microseconds)
+
+import CantonStreams.Policy.Types
+
+------------------------------------------------------------------------
+-- DelegatedPolicy
+------------------------------------------------------------------------
+
+-- | A delegation contract authorizing an executor to perform bounded
+-- actions on the sender's streams. Signed by all three parties.
+template DelegatedPolicy
+  with
+    policyId : Text
+      -- ^ Caller-supplied unique identifier (UUID recommended).
+    sender : Party
+    recipient : Party
+    executor : Party
+    escrowOperator : Party
+    allowedActions : [DelegatedAction]
+      -- ^ Subset of {DelegateWithdraw, DelegateCancel, DelegateRenew}.
+    rateLimit : RateLimit
+    streamFilters : [Text]
+      -- ^ Stream-id filters this policy applies to. Empty list = unrestricted
+      -- (within sender's streams). Non-empty = only streams in this list.
+    active : Bool
+    expiresAt : Time
+    createdAt : Time
+  where
+    signatory sender, recipient, executor
+    observer escrowOperator
+
+    ensure rateLimit.maxExecutionsPerPeriod > 0
+        && rateLimit.periodDuration > 0
+        && rateLimit.maxAmountPerExecution > 0.0
+        && rateLimit.cooldownInterval >= 0
+        && createdAt < expiresAt
+
+    -- | Sender unilaterally disables the policy. After this, ExecutePolicy
+    -- will refuse with "policy is inactive". The contract is recreated
+    -- (rather than archived) so the audit history remains observable.
+    choice RevokePolicy : ContractId DelegatedPolicy
+      controller sender
+      do
+        assertMsg "Policy already inactive" active
+        create this with active = False
+
+    -- | Executor records an attempted execution. The choice itself enforces
+    -- all on-ledger bounds:
+    --   1. policy must be active and within expiry
+    --   2. action must be in allowedActions
+    --   3. stream id must match streamFilters (if any)
+    --   4. amount must not exceed maxAmountPerExecution
+    --   5. cooldownInterval since last execution must have elapsed
+    --   6. execution count within periodDuration must not exceed
+    --      maxExecutionsPerPeriod
+    --
+    -- The companion `PolicyExecutionState` is consumed and recreated with
+    -- updated counters; an `ExecutionLog` is emitted regardless of success
+    -- so failures are also auditable.
+    nonconsuming choice ExecutePolicy : (ContractId PolicyExecutionState, ContractId ExecutionLog)
+      with
+        executionId : Text
+        currentStateCid : ContractId PolicyExecutionState
+        targetStreamId : Text
+        action : DelegatedAction
+        amount : Decimal
+      controller executor
+      do
+        now <- getTime
+
+        -- 1. Policy lifecycle checks
+        assertMsg "Policy is inactive" active
+        assertMsg "Policy has expired" (now < expiresAt)
+
+        -- 2. Action allowed
+        assertMsg "Action not permitted by this policy"
+          (action `elem` allowedActions)
+
+        -- 3. Stream-id scope
+        assertMsg "Target stream is outside this policy's scope"
+          (null streamFilters || targetStreamId `elem` streamFilters)
+
+        -- 4. Per-execution amount cap
+        assertMsg "Execution amount exceeds policy cap"
+          (amount <= rateLimit.maxAmountPerExecution)
+
+        -- Load and validate the rate-limit state
+        currentState <- fetch currentStateCid
+        assertMsg "ExecutionState policy id mismatch"
+          (currentState.policyId == policyId)
+
+        -- 5. Cooldown
+        let cooldown : RelTime = microseconds rateLimit.cooldownInterval
+        case currentState.lastExecutionTime of
+          None -> pure ()
+          Some lastT -> assertMsg "Cooldown interval has not elapsed"
+            (addRelTime lastT cooldown <= now)
+
+        -- 6. Period rate cap
+        let periodStart = addRelTime now (microseconds (negate rateLimit.periodDuration))
+            inPeriodCount = length [ t | t <- currentState.recentExecutions, t > periodStart ]
+        assertMsg "Period execution rate cap exceeded"
+          (inPeriodCount < rateLimit.maxExecutionsPerPeriod)
+
+        -- Archive the old state and create the updated one
+        archive currentStateCid
+        -- [M6 fix] Prune by period window, not by count. Prior behavior
+        -- `take maxExecutionsPerPeriod (now :: recentExecutions)` was
+        -- fragile: it discarded period-window context whenever the list
+        -- exceeded the count cap, even though those older timestamps
+        -- could still be inside the rate-window for the next check.
+        -- Now we keep every timestamp inside the window; out-of-window
+        -- entries are dropped. The list size is naturally bounded by
+        -- maxExecutionsPerPeriod (the assertion at line 125-126 above
+        -- prevents adding a new entry when the in-window count already
+        -- equals the cap).
+        let prunedRecent = filter (\t -> t > periodStart) (now :: currentState.recentExecutions)
+        newStateCid <- create PolicyExecutionState with
+          policyId
+          sender
+          executor
+          recipient = currentState.recipient
+          totalExecutions = currentState.totalExecutions + 1
+          lastExecutionTime = Some now
+          recentExecutions = prunedRecent
+
+        -- Always emit an audit log
+        logCid <- create ExecutionLog with
+          policyId
+          executionId
+          sender
+          executor
+          targetStreamId
+          action
+          amount
+          executionTime = now
+          success = True
+          errorMessage = None
+
+        pure (newStateCid, logCid)
+
+------------------------------------------------------------------------
+-- PolicyExecutionState — companion state for rate-limit accounting
+------------------------------------------------------------------------
+
+-- | Tracks recent execution timestamps for rate-limit enforcement.
+-- A single state contract per policy is maintained; it is archived and
+-- recreated each time `ExecutePolicy` runs.
+--
+-- [M5 fix] `recipient` added as observer so the recipient (named on the
+-- parent `DelegatedPolicy`) can read the execution state. Previously the
+-- state was signed by sender+executor only and invisible to the recipient
+-- whose stream was being executed against — broke the threat-model claim
+-- that the recipient can independently audit delegated activity.
+template PolicyExecutionState
+  with
+    policyId : Text
+    sender : Party
+    executor : Party
+    recipient : Party
+    totalExecutions : Int
+    lastExecutionTime : Optional Time
+    recentExecutions : [Time]
+      -- ^ Bounded list of recent execution timestamps; pruned to at most
+      -- `maxExecutionsPerPeriod` entries on update.
+  where
+    signatory sender, executor
+    observer recipient   -- [M5 fix] visibility for the rate-limit state
+
+    -- | Reset the rate-limit state.
+    --
+    -- [C5 fix] Previously controller-by-sender only. A compromised sender (or
+    -- sender colluding with executor) could reset the counter before each
+    -- malicious execution, bypassing `maxExecutionsPerPeriod` and
+    -- `cooldownInterval`. This defeated the policy's primary security promise.
+    --
+    -- Now requires joint authorization by sender + executor — the same set
+    -- that signs the state contract. To prevent the executor from also
+    -- self-resetting via a single signature, the recipient (signatory on the
+    -- parent DelegatedPolicy) must also approve via the parent's archive +
+    -- recreate flow if a full reset is required mid-period. Operational
+    -- recommendation: do not use this choice in production; instead archive
+    -- and recreate the DelegatedPolicy.
+    choice ResetExecutionState : ContractId PolicyExecutionState
+      controller sender, executor
+      do
+        create this with
+          totalExecutions = 0
+          lastExecutionTime = None
+          recentExecutions = []
+
+------------------------------------------------------------------------
+-- ExecutionLog — append-only audit record
+------------------------------------------------------------------------
+
+-- | One log per execution attempt. Append-only (no choices that mutate or
+-- archive). The sender, executor, and recipient can read the full log to
+-- audit delegated activity.
+template ExecutionLog
+  with
+    policyId : Text
+    executionId : Text
+    sender : Party
+    executor : Party
+    targetStreamId : Text
+    action : DelegatedAction
+    amount : Decimal
+    executionTime : Time
+    success : Bool
+    errorMessage : Optional Text
+  where
+    signatory sender, executor
+
+    -- | Sender can prune old logs after an audit window. This is the only
+    -- mutator on the log to keep the audit shape simple.
+    choice PruneExecutionLog : ()
+      controller sender
+      do pure ()

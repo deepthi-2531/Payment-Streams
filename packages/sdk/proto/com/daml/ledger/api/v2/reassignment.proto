@@ -1,0 +1,45 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — Reassignment definitions.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "ReassignmentOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/event.proto";
+import "google/protobuf/timestamp.proto";
+
+// A reassignment event (transfer between domains).
+message Reassignment {
+  string update_id = 1;
+  string command_id = 2;
+  string workflow_id = 3;
+  string offset = 4;
+  oneof event {
+    UnassignedEvent unassigned_event = 5;
+    AssignedEvent assigned_event = 6;
+  }
+  google.protobuf.Timestamp record_time = 7;
+}
+
+message UnassignedEvent {
+  string unassign_id = 1;
+  string contract_id = 2;
+  string template_id_package_id = 3;
+  string template_id_module_name = 4;
+  string template_id_entity_name = 5;
+  string source = 6;
+  string target = 7;
+  repeated string witness_parties = 8;
+  int64 assignment_exclusivity = 9;
+}
+
+message AssignedEvent {
+  string source = 1;
+  string target = 2;
+  string unassign_id = 3;
+  CreatedEvent created_event = 4;
+}

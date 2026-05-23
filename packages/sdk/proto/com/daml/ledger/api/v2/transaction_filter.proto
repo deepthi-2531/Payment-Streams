@@ -1,0 +1,65 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — Transaction filter and event format definitions.
+// Updated to match Canton 3.4.11+ server API.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "TransactionFilterOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/value.proto";
+
+// EventFormat — replaces the old TransactionFilter + verbose pattern.
+// Used in GetActiveContractsRequest and SubmitAndWaitForTransactionRequest.
+message EventFormat {
+  map<string, Filters> filters_by_party = 1;
+  Filters filters_for_any_party = 2;
+  bool verbose = 3;
+}
+
+// TransactionFormat — used in SubmitAndWaitForTransactionRequest.
+message TransactionFormat {
+  EventFormat event_format = 1;
+  TransactionShape transaction_shape = 2;
+}
+
+enum TransactionShape {
+  TRANSACTION_SHAPE_UNSPECIFIED = 0;
+  TRANSACTION_SHAPE_ACS_DELTA = 1;
+  TRANSACTION_SHAPE_LEDGER_EFFECTS = 2;
+}
+
+// Filters for a single party (or any party).
+message Filters {
+  repeated CumulativeFilter cumulative = 1;
+}
+
+// Cumulative filter — matching contracts satisfy *any* of the listed criteria.
+message CumulativeFilter {
+  oneof identifier_filter {
+    WildcardFilter wildcard_filter = 1;
+    InterfaceFilter interface_filter = 2;
+    TemplateFilter template_filter = 3;
+  }
+}
+
+// Filter by template ID.
+message TemplateFilter {
+  Identifier template_id = 1;
+  bool include_created_event_blob = 2;
+}
+
+// Filter by interface ID.
+message InterfaceFilter {
+  Identifier interface_id = 1;
+  bool include_interface_view = 2;
+  bool include_created_event_blob = 3;
+}
+
+// Match all templates.
+message WildcardFilter {
+  bool include_created_event_blob = 1;
+}

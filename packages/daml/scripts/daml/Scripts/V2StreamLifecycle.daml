@@ -1,0 +1,226 @@
+-- | Pure V2 Token-Standard stream lifecycle test against live TestNet.
+--
+-- Per docs/integration-guide/allocation-request-pattern.md:
+--
+--   "A payment stream is exactly the iterated case:
+--    1. Sender exercises AllocationFactory_Allocate(committed=True,
+--       nextIterationFunding=Some({CC: 1000}))
+--    2. Per accrual period: operator's SDK executor exercises
+--       Allocation_Settle(leg: 10 CC to recipient,
+--                          nextIterationFunding=Some({CC: 990}))
+--    3. After N periods: Allocation_Settle(nextIterationFunding = None)
+--       — chain terminates"
+--
+-- This script uses ONLY V2 vocabulary — no canton-streams admin
+-- templates. The lifecycle is the standard:
+--
+--   1. Sender calls AllocationFactory_Allocate on TokenRules
+--   2. Operator iterates Allocation_Settle
+--   3. Final settle with nextIterationFunding=None
+--
+-- ## Run
+--
+--   daml build
+--   daml script --no-legacy-assistant-warning \
+--     --dar .daml/dist/canton-streams-scripts-0.2.7.dar \
+--     --script-name Scripts.V2StreamLifecycle:runV2Stream \
+--     --ledger-host localhost --ledger-port 5001
+--
+module Scripts.V2StreamLifecycle where
+
+import Daml.Script
+import DA.Optional (fromSome)
+import DA.Time (time, addRelTime, days)
+import DA.Date (date, Month(..))
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+
+import qualified Splice.Api.Token.HoldingV2 as V2
+import qualified Splice.Api.Token.AllocationV2 as Alloc
+import qualified Splice.Api.Token.AllocationInstructionV2 as AInstr
+import qualified Splice.Api.Token.MetadataV1 as Meta
+
+import Splice.Testing.Tokens.TestTokenV2 (TokenRules(..))
+import Splice.Testing.Tokens.TestTokenV2.Holding (Token(..))
+
+-- ---------------------------------------------------------------------------
+-- Party resolution
+-- ---------------------------------------------------------------------------
+
+resolveParty : Text -> Script Party
+resolveParty pid = case partyFromText pid of
+  None -> abort ("Could not resolve party from text: " <> pid)
+  Some p -> pure p
+
+-- ---------------------------------------------------------------------------
+-- Setup: create TokenRules + admin's HoldingV2 (idempotent — if these
+-- already exist on ledger, the test will create new ones, which is fine
+-- for a smoke test). Returns the cids we need for the lifecycle.
+-- ---------------------------------------------------------------------------
+
+setupV2 : Script (Party, Party, ContractId TokenRules, ContractId Token)
+setupV2 = do
+  admin <- resolveParty "admin::<participant-fingerprint>"
+  swapuser <- resolveParty "Swapuser::<participant-fingerprint>"
+  debug "parties resolved"
+
+  let instrumentId = V2.InstrumentId with admin = admin; id = "v2-streams-test-token-life"
+      adminAccount = V2.Account with owner = Some admin; provider = None; id = ""
+      adminHolding = V2.HoldingView with
+        account = adminAccount
+        instrumentId = instrumentId
+        amount = 1000.0
+        lock = None
+        meta = Meta.emptyMetadata
+
+  rulesCid <- submit admin $ createCmd (TokenRules with admin)
+  debug ("TokenRules cid: " <> show rulesCid)
+
+  holdingCid <- submit admin $ createCmd (Token with holding = adminHolding)
+  debug ("admin holding cid: " <> show holdingCid)
+
+  pure (admin, swapuser, rulesCid, holdingCid)
+
+-- ---------------------------------------------------------------------------
+-- Build the AllocationSpecification for a streaming allocation:
+--   - sender's account = admin's account
+--   - one TransferLegSide for the per-iteration payment to recipient
+--   - committed = True (sender locks funds until settlement deadline)
+--   - nextIterationFunding = Some(remaining-after-first-iter)
+-- ---------------------------------------------------------------------------
+
+mkStreamSpec
+  : Party             -- admin (instrument admin + operator)
+  -> Party            -- sender (here admin)
+  -> Party            -- recipient (Swapuser)
+  -> Text             -- instrument id
+  -> Decimal          -- per-iteration amount
+  -> Decimal          -- remaining funding after this iter
+  -> Time             -- requestedAt
+  -> Time             -- settlementDeadline
+  -> Alloc.AllocationSpecification
+mkStreamSpec admin sender recipient instrId iterAmt remaining requestedAt deadline =
+  let senderAccount = V2.Account with owner = Some sender; provider = None; id = ""
+      recipientAccount = V2.Account with owner = Some recipient; provider = None; id = ""
+      legSide = Alloc.TransferLegSide with
+        transferLegId = "stream-iter-1"
+        side = Alloc.SenderSide
+        otherside = recipientAccount
+        amount = iterAmt
+        instrumentId = instrId
+        meta = Meta.emptyMetadata
+      nextIter = Some (TextMap.fromList [(instrId, remaining)])
+  in Alloc.AllocationSpecification with
+        admin
+        authorizer = senderAccount
+        transferLegSides = [legSide]
+        settlementDeadline = Some deadline
+        nextIterationFunding = nextIter
+        committed = True
+        meta = Meta.emptyMetadata
+
+-- ---------------------------------------------------------------------------
+-- Main entry: full lifecycle test
+-- ---------------------------------------------------------------------------
+
+runV2Stream : Script ()
+runV2Stream = do
+  (admin, swapuser, rulesCid, adminHoldingCid) <- setupV2
+
+  now <- getTime
+  let iterAmt = 100.0
+      total = 1000.0
+      remaining = total - iterAmt
+      deadline = now `addRelTime` days 30
+
+  debug ("--- step 1: AllocationFactory_Allocate (sender=admin) ---")
+
+  let spec = mkStreamSpec admin admin swapuser "v2-streams-test-token-life" iterAmt remaining now deadline
+
+  -- Exercise AllocationFactory_Allocate on the AllocationFactory interface
+  -- (TokenRules implements this).
+  -- The interface choice signature:
+  --   choice AllocationFactory_Allocate with
+  --     allocation : AllocationSpecification
+  --     requestedAt : Time
+  --     inputHoldingCids : [ContractId Holding]
+  --     extraArgs : ExtraArgs
+  --     actors : [Party]
+  let factoryCid = toInterfaceContractId @AInstr.AllocationFactory rulesCid
+      holdingIfaceCid = toInterfaceContractId @V2.Holding adminHoldingCid
+
+  let settlementInfo = Alloc.SettlementInfo with
+        executors = [admin]
+        id = "v2-stream-001"
+        cid = None
+        meta = Meta.emptyMetadata
+
+  -- TokenRules implementation looks up its own cid via
+  --   context.values["testTokenV2/tokenRules"] = AV_ContractId <coerced rulesCid>
+  -- Pass it through extraArgs.context.
+  let rulesAnyCid : ContractId Meta.AnyContract = coerceContractId rulesCid
+      tokenRulesCtx = TextMap.fromList
+        [ ("testTokenV2/tokenRules", Meta.AV_ContractId rulesAnyCid) ]
+
+  result <- submit admin $ exerciseCmd factoryCid AInstr.AllocationFactory_Allocate with
+    settlement = settlementInfo
+    allocation = spec
+    requestedAt = now
+    inputHoldingCids = [holdingIfaceCid]
+    extraArgs = Meta.ExtraArgs with
+      context = Meta.ChoiceContext with values = tokenRulesCtx
+      meta = Meta.emptyMetadata
+    actors = [admin]
+
+  debug ("AllocationFactory_Allocate result: " <> show result)
+
+  -- Extract the Allocation cid from the result
+  case result.output of
+    AInstr.AllocationInstructionResult_Completed allocCid -> do
+      debug ("--- step 2: Allocation_Settle iterations (executor=admin) ---")
+      let extraArgs = Meta.ExtraArgs with
+            context = Meta.ChoiceContext with values = tokenRulesCtx
+            meta = Meta.emptyMetadata
+
+      -- Iteration 1: settle 100 + roll 800 forward
+      r1 <- submit admin $ exerciseCmd allocCid Alloc.Allocation_Settle with
+        actors = [admin]
+        extraTransferLegSides = []
+        nextIterationFunding = Some (TextMap.fromList [("v2-streams-test-token-life", 800.0)])
+        extraArgs
+      debug ("iter 1 output: " <> show r1.output)
+
+      case r1.output of
+        Alloc.AllocationResult_Settled settledNextOpt1 -> do
+          case settledNextOpt1 of
+            Some nextCid1 -> do
+              debug ("iter 1 next allocation cid: " <> show nextCid1)
+              -- Iteration 2: settle 100 + roll 700 forward
+              r2 <- submit admin $ exerciseCmd nextCid1 Alloc.Allocation_Settle with
+                actors = [admin]
+                extraTransferLegSides = []
+                nextIterationFunding = Some (TextMap.fromList [("v2-streams-test-token-life", 700.0)])
+                extraArgs
+              debug ("iter 2 output: " <> show r2.output)
+
+              case r2.output of
+                Alloc.AllocationResult_Settled settledNextOpt2 -> do
+                  case settledNextOpt2 of
+                    Some nextCid2 -> do
+                      debug ("iter 2 next allocation cid: " <> show nextCid2)
+                      -- Iteration 3 (final): settle, terminate chain
+                      r3 <- submit admin $ exerciseCmd nextCid2 Alloc.Allocation_Settle with
+                        actors = [admin]
+                        extraTransferLegSides = []
+                        nextIterationFunding = None  -- terminate
+                        extraArgs
+                      debug ("iter 3 (FINAL) output: " <> show r3.output)
+                      debug "🎉 V2 stream lifecycle complete: 3 iterations + final termination on TestNet"
+                    None -> abort "iter 2 had no nextAllocationCid (unexpected since funding was Some)"
+                _ -> abort ("iter 2 did not return _Settled, got: " <> show r2.output)
+            None -> abort "iter 1 had no nextAllocationCid (unexpected since funding was Some)"
+        _ -> abort ("iter 1 did not return _Settled, got: " <> show r1.output)
+
+    _ -> abort ("AllocationFactory_Allocate did not return _Completed, got: " <> show result.output)
+
+  pure ()

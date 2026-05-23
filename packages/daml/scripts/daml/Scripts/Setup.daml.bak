@@ -1,0 +1,148 @@
+-- | Setup script for Canton Payment Streams.
+--
+-- Allocates parties (Alice=employer, Bob/Charlie=employees) and creates
+-- sample streams of each vesting mode for development and testing.
+--
+-- NOTE: This script uses the numeric StreamEscrow path (LocalToken asset mode)
+-- for local development without Daml Finance holdings. For production setup
+-- with CIP-56 holdings, use the holding-backed workflow
+-- (CantonStreams.Workflow.CreateStream).
+module Scripts.Setup where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.Escrow (StreamEscrow(..))
+import CantonStreams.Stream.Group (StreamGroupContract(..))
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | Parties allocated during setup.
+data SetupParties = SetupParties with
+    alice : Party    -- Employer / stream sender
+    bob : Party      -- Employee 1 / stream recipient
+    charlie : Party  -- Employee 2 / stream recipient
+  deriving (Eq, Show)
+
+-- | Result of setup: parties plus contract IDs for created streams.
+data SetupResult = SetupResult with
+    parties : SetupParties
+    linearStreamCid : ContractId StreamEscrow
+    cliffStreamCid : ContractId StreamEscrow
+    steppedStreamCid : ContractId StreamEscrow
+    renewableStreamCid : ContractId StreamEscrow
+    groupCid : ContractId StreamGroupContract
+  deriving (Eq, Show)
+
+-- | Helper: create a numeric StreamEscrow directly (both parties as signatories).
+createNumericStream : StreamConfig -> Decimal -> Party -> [Party] -> Script (ContractId StreamEscrow)
+createNumericStream cfg deposit sender obs =
+  submitMulti [cfg.sender, cfg.recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = sender
+      observers = obs
+
+-- | Allocate parties and create sample streams.
+setup : Script SetupResult
+setup = script do
+  -- Allocate parties
+  alice <- allocatePartyWithHint "Alice" (PartyIdHint "Alice")
+  bob <- allocatePartyWithHint "Bob" (PartyIdHint "Bob")
+  charlie <- allocatePartyWithHint "Charlie" (PartyIdHint "Charlie")
+
+  let parties = SetupParties with alice; bob; charlie
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+
+  setTime start
+
+  -- 1. Linear stream: Alice -> Bob, $36,000 over 6 months
+  let linearCfg = StreamConfig with
+        streamId = "salary-bob-2025-h1"
+        sender = alice
+        recipient = bob
+        totalDeposited = 36000.0
+        startTime = start
+        endTime = end
+        vestingMode = Linear
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+  linearStreamCid <- createNumericStream linearCfg 36000.0 alice [charlie]
+
+  debug "Setup: Created linear stream (Alice->Bob, $36,000)"
+
+  -- 2. Cliff+Linear stream: Alice -> Charlie, $24,000 with 3-month cliff
+  let cliffTime = time (date 2025 Apr 1) 0 0 0
+      cliffCfg = StreamConfig with
+        streamId = "salary-charlie-2025-h1"
+        sender = alice
+        recipient = charlie
+        totalDeposited = 24000.0
+        startTime = start
+        endTime = end
+        vestingMode = CliffLinear with cliffTime
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+  cliffStreamCid <- createNumericStream cliffCfg 24000.0 alice [bob]
+
+  debug "Setup: Created cliff+linear stream (Alice->Charlie, $24,000)"
+
+  -- 3. Stepped stream: Alice -> Bob, $12,000 in monthly steps of $2,000
+  let steppedCfg = StreamConfig with
+        streamId = "bonus-bob-2025"
+        sender = alice
+        recipient = bob
+        totalDeposited = 12000.0
+        startTime = start
+        endTime = end
+        vestingMode = Stepped with
+          stepInterval = days 30
+          amountPerStep = 2000.0
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = False
+  steppedStreamCid <- createNumericStream steppedCfg 12000.0 alice []
+
+  debug "Setup: Created stepped stream (Alice->Bob, $12,000)"
+
+  -- 4. Renewable-term stream: Alice -> Charlie, $9,000 with 90-day term
+  let renewEnd = time (date 2025 Apr 1) 0 0 0
+      renewCfg = StreamConfig with
+        streamId = "consulting-charlie-q1"
+        sender = alice
+        recipient = charlie
+        totalDeposited = 9000.0
+        startTime = start
+        endTime = renewEnd
+        vestingMode = RenewableTerm with termDuration = days 90
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+  renewableStreamCid <- createNumericStream renewCfg 9000.0 alice []
+
+  debug "Setup: Created renewable-term stream (Alice->Charlie, $9,000)"
+
+  -- 5. Create a stream group for payroll management
+  groupCid <- submit alice do
+    createCmd StreamGroupContract with
+      owner = alice
+      label = "2025-H1-Payroll"
+      streamIds = ["salary-bob-2025-h1", "salary-charlie-2025-h1", "bonus-bob-2025", "consulting-charlie-q1"]
+      observers = [bob, charlie]
+
+  debug "Setup: Created stream group '2025-H1-Payroll'"
+  debug "Setup: Complete. All sample streams created."
+
+  pure SetupResult with
+    parties
+    linearStreamCid
+    cliffStreamCid
+    steppedStreamCid
+    renewableStreamCid
+    groupCid

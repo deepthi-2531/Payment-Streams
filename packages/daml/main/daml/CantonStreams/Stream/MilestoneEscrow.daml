@@ -1,0 +1,365 @@
+-- | Milestone-release streaming — event-triggered tranche release.
+--
+-- Where `StreamEscrow` releases tokens **over time** (via the `Linear`,
+-- `CliffLinear`, `Stepped`, `RenewableTerm` vesting modes), and
+-- `StreamFlow` releases continuously **per second** via a flow rate,
+-- `MilestoneEscrow` releases tokens **on admin confirmation of named
+-- milestones**.
+--
+-- This fills a gap the time-based templates don't cover:
+--
+--   * Grant disbursements that release on deliverable acceptance
+--   * Vesting that unlocks on KPI achievement (e.g. revenue milestone,
+--     user-count milestone, audit-pass milestone)
+--   * Partner reward schedules gated on adoption metrics
+--   * Bounty payments released on milestone confirmation
+--   * Private-round investor milestones (e.g. "release 25% on
+--     mainnet launch, 25% on product-market fit signal, 50% on
+--     break-even revenue")
+--
+-- Adapted from the `MilestoneStream` template in
+-- `Canton_Streams_RewardApp` (STR-62 porting work), but reworked onto
+-- the Canton Payment Streams conventions:
+--
+--   * Settlement via off-chain wallet-gateway transfers (recorded as
+--     settlement references) instead of in-template GrowToken creation
+--   * Standard signatory set (sender + recipient + escrowOperator)
+--   * `admin` party as a separate observer who confirms milestones —
+--     may be the same party as `sender` (sender-confirmed) or a
+--     distinct party (oracle / KPI-validator)
+--   * `InstrumentRef` for asset binding (CC, USDCx, V2-native asset)
+--   * `TokenStandardEscrowBalance`-style accounting via the shared
+--     `TokenStandardAdapter` helpers
+module CantonStreams.Stream.MilestoneEscrow where
+
+import qualified DA.Map as Map
+import qualified DA.List as List
+import DA.Date (date, Month(..))
+import DA.Optional (isSome, fromSome)
+import DA.Time (days, addRelTime, time)
+
+import CantonStreams.Interface.Types
+-- TokenStandardAdapter import removed by STR-102 Phase 2 — its symbols
+-- aren't used here.
+
+-- AllocationRequest stubs (swap for real Splice DAR imports when STR-65 lands).
+-- V1 stub import removed by the V2-only pivot (STR-79).
+import qualified Splice.Api.Token.AllocationRequestV2 as AR2
+import qualified CantonStreams.Settlement.AllocationBridge as Bridge
+
+------------------------------------------------------------------------
+-- Milestone — a named tranche of the total deposit
+------------------------------------------------------------------------
+
+-- | A single named milestone. Tranche amount is released to the
+-- recipient when `confirmed = True` (set by `ConfirmMilestone`).
+data Milestone = Milestone with
+    name : Text
+      -- ^ Stable identifier for the milestone. Must be unique within a
+      --   stream. Used as the key when `ConfirmMilestone` is exercised.
+    description : Text
+      -- ^ Human-readable description for audit / dashboard display.
+    amount : Decimal
+      -- ^ Amount released when this milestone is confirmed.
+    confirmed : Bool
+      -- ^ Whether this milestone has been confirmed.
+    confirmedAt : Optional Time
+      -- ^ When confirmed (None if not yet confirmed); audit metadata.
+    settlementReference : Optional Text
+      -- ^ Settlement reference for the off-chain transfer triggered by
+      --   this confirmation (None if not yet confirmed).
+  deriving (Eq, Show)
+
+-- | Aggregate the pending (unconfirmed) total across a list of milestones.
+pendingTotal : [Milestone] -> Decimal
+pendingTotal ms = sum [m.amount | m <- ms, not m.confirmed]
+
+-- | Aggregate the released (confirmed) total.
+releasedTotal : [Milestone] -> Decimal
+releasedTotal ms = sum [m.amount | m <- ms, m.confirmed]
+
+-- | Find a milestone by name. Returns the first match.
+findMilestone : Text -> [Milestone] -> Optional Milestone
+findMilestone targetName ms = case filter (\m -> m.name == targetName) ms of
+  (m :: _) -> Some m
+  _ -> None
+
+-- | Replace a milestone by name with a new value. If no match, returns
+-- the input list unchanged.
+updateMilestone : Text -> Milestone -> [Milestone] -> [Milestone]
+updateMilestone targetName replacement =
+  map (\m -> if m.name == targetName then replacement else m)
+
+------------------------------------------------------------------------
+-- MilestoneEscrow template
+------------------------------------------------------------------------
+
+-- | Milestone-release streaming contract.
+--
+-- Signatory set: sender + recipient + escrowOperator (same as
+-- TokenStandardEscrow). The `admin` party is an observer — they confirm
+-- milestones via the `ConfirmMilestone` choice, but they are not a
+-- signatory (so the admin's signature is not required at creation time).
+-- Setting `admin == sender` makes the sender the confirmer (sender-gated
+-- milestones, useful for grant disbursements). A distinct admin lets an
+-- oracle / KPI-validator confirm.
+template MilestoneEscrow
+  with
+    streamId : Text
+    sender : Party
+    recipient : Party
+    escrowOperator : Party
+    admin : Party
+    instrumentRef : InstrumentRef
+    milestones : [Milestone]
+    totalDeposited : Decimal
+      -- ^ Initial deposited amount, equal to the sum of all milestone
+      --   amounts at creation time.
+    totalReleased : Decimal
+      -- ^ Cumulative confirmed-milestone amount.
+    escrowAmount : Decimal
+      -- ^ Currently held off-chain escrow balance (decreases as
+      --   milestones are confirmed and released).
+    fundingReference : Text
+    lastSettlementReference : Optional Text
+    observers : [Party]
+  where
+    signatory sender, recipient, escrowOperator
+    observer admin, observers
+
+    ensure totalDeposited > 0.0
+        && totalReleased >= 0.0
+        && totalReleased <= totalDeposited
+        && escrowAmount >= 0.0
+        && length milestones > 0
+        && releasedTotal milestones == totalReleased
+        && (releasedTotal milestones + pendingTotal milestones) == totalDeposited
+        -- [H3 fix] Milestone names must be unique. Without this, two
+        -- milestones named "phase-1" would both be released by a single
+        -- `ConfirmMilestone "phase-1"` exercise — the off-chain settlement
+        -- would move funds for both, while `totalReleased` only ticks once.
+        && length (List.dedup [m.name | m <- milestones]) == length milestones
+        && all (\m -> m.name /= "") milestones
+
+    -- | View pending (unconfirmed) milestones. Open to recipient, admin,
+    -- and any observers — useful for dashboards.
+    nonconsuming choice GetPendingMilestones : [Milestone]
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == sender || viewer == recipient
+            || viewer == admin || viewer == escrowOperator
+            || viewer `elem` observers)
+        pure [m | m <- milestones, not m.confirmed]
+
+    -- | Total pending amount across all unconfirmed milestones.
+    nonconsuming choice GetTotalPending : Decimal
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == sender || viewer == recipient
+            || viewer == admin || viewer == escrowOperator
+            || viewer `elem` observers)
+        pure (pendingTotal milestones)
+
+    -- | Admin confirms a milestone by name. Releases the milestone's
+    -- amount via off-chain settlement (sender's wallet-gateway transfers
+    -- to recipient) and updates on-ledger accounting.
+    --
+    -- The Daml layer validates:
+    --   * milestone exists and is not already confirmed
+    --   * confirmed amount matches the milestone's declared amount
+    --   * confirmed amount does not exceed remaining escrow balance
+    --   * settlement reference is non-empty
+    choice ConfirmMilestone : ContractId MilestoneEscrow
+      with
+        milestoneName : Text
+        confirmTime : Time
+        settlementReference : Text
+        confirmedAmount : Decimal
+      controller admin, escrowOperator
+      do
+        Bridge.requireSettlementReference settlementReference
+
+        let target = findMilestone milestoneName milestones
+        assertMsg ("Milestone not found or already confirmed: " <> milestoneName)
+          (isSome target && not (fromSome target).confirmed)
+
+        let m = fromSome target
+        assertMsg "Confirmed amount must match the milestone's declared amount"
+          (confirmedAmount == m.amount)
+        assertMsg "Insufficient escrow balance for milestone release"
+          (confirmedAmount <= escrowAmount)
+
+        let updatedMilestone = m with
+              confirmed = True
+              confirmedAt = Some confirmTime
+              settlementReference = Some settlementReference
+            updatedMilestones = updateMilestone milestoneName updatedMilestone milestones
+
+        archive self
+        create this with
+          milestones = updatedMilestones
+          totalReleased = totalReleased + confirmedAmount
+          escrowAmount = escrowAmount - confirmedAmount
+          lastSettlementReference = Some settlementReference
+
+    -- | Sender refunds the remaining escrow when all milestones are
+    -- confirmed but the escrow has residual (e.g. milestones funded
+    -- partially or dust remaining).
+    choice ClaimResidualRefund : ContractId MilestoneEscrow
+      with
+        refundAmount : Decimal
+        refundReference : Text
+      controller sender, escrowOperator
+      do
+        Bridge.requireSettlementReference refundReference
+        assertMsg "Cannot claim refund — pending milestones remain"
+          (pendingTotal milestones == 0.0)
+        assertMsg "Refund amount must match the remaining escrow balance"
+          (refundAmount == escrowAmount)
+        assertMsg "Refund amount must be positive" (refundAmount > 0.0)
+
+        archive self
+        create this with
+          escrowAmount = 0.0
+          lastSettlementReference = Some refundReference
+
+    -- | Mutual cancellation. Settles confirmed milestones already
+    -- released; refunds remaining escrow to sender; archives pending
+    -- (unconfirmed) milestones.
+    --
+    -- Useful for early-termination scenarios where some milestones were
+    -- met and confirmed, others were not, and both parties agree to
+    -- wind down the stream.
+    choice CancelMilestoneStream : ContractId MilestoneEscrow
+      with
+        cancelTime : Time
+        senderRefund : Decimal
+        refundReference : Optional Text
+      controller sender, recipient, escrowOperator
+      do
+        assertMsg "Sender refund must equal remaining escrow balance"
+          (senderRefund == escrowAmount)
+        assertMsg "Refund must be non-negative" (senderRefund >= 0.0)
+
+        let lastRef = case refundReference of
+              Some ref -> Some ref
+              None -> lastSettlementReference
+
+        -- Mark all pending milestones as archived by description; the
+        -- contract is then frozen at this state for audit.
+        let archivedMilestones = map (\m ->
+              if m.confirmed
+              then m
+              else m with description = m.description <> " [cancelled at " <> show cancelTime <> "]"
+              ) milestones
+
+        archive self
+        create this with
+          milestones = archivedMilestones
+          escrowAmount = 0.0
+          lastSettlementReference = lastRef
+
+    --------------------------------------------------------------------
+    -- CIP-0112 § 5 dual-interface: AllocationRequest V1 + V2
+    --------------------------------------------------------------------
+    -- Per plan §7.3, MilestoneEscrow uses **V2 multi-leg
+    -- AllocationSpecification** as the idiomatic settlement shape: a
+    -- single AllocationRequest contains one TransferLegSide per
+    -- unconfirmed milestone, and confirmed milestones are settled
+    -- atomically via `SettlementFactory_SettleBatch` (or per-leg
+    -- via `Allocation_Settle` keyed by leg id).
+    --
+    -- V1 was dropped per STR-79 V2-only decision. V1 had no multi-leg
+    -- primitive and would have required per-milestone fresh
+    -- AllocationRequestV1 emission — doubling audit surface for
+    -- marginal value.
+
+    interface instance AR2.AllocationRequest for MilestoneEscrow where
+      -- Real V2 interface impl signature is 2-arg: ContractId + choice record.
+      allocationRequest_acceptImpl _ _ = do
+        abort "AllocationRequest_Accept V2 not yet wired on MilestoneEscrow — use ConfirmMilestone (lifecycle migration in STR-88; per-leg Allocation_Settle target)"
+      allocationRequest_rejectImpl _ _ = do
+        abort "AllocationRequest_Reject V2 not yet wired on MilestoneEscrow — use CancelMilestoneStream"
+      allocationRequest_withdrawImpl _ _ = do
+        abort "AllocationRequest_Withdraw V2 not yet wired on MilestoneEscrow — use CancelMilestoneStream as escrow operator"
+      -- ExtraObservers: no additional disclosure needed; request
+      -- signatories (sender + recipient + admin + escrowOperator) cover it.
+      allocationRequest_acceptExtraObservers _ = []
+      allocationRequest_rejectExtraObservers _ = []
+      allocationRequest_withdrawExtraObservers _ = []
+
+      view =
+        let pending = [m | m <- milestones, not m.confirmed]
+            authorizerAcc = Bridge.escrowOperatorAccount escrowOperator
+            recipientAcc = Bridge.streamRecipientAccount recipient
+            instrumentIdText = instrumentRef.instrumentId
+            adminParty = instrumentRef.issuer
+            -- One TransferLegSide per unconfirmed milestone (the
+            -- multi-leg AllocationSpecification — per plan §7.3).
+            mkLeg m =
+              Bridge.buildSenderLegSide
+                (streamId <> ":milestone:" <> m.name)
+                recipientAcc
+                m.amount
+                instrumentIdText
+                (Bridge.metaFromList
+                  [ ("milestoneName", m.name)
+                  , ("milestoneDescription", m.description)
+                  ])
+            legs = map mkLeg pending
+            requestedAtSentinel = toLedgerTime 0
+            spec = Bridge.buildMultiLegSpec
+              adminParty
+              authorizerAcc
+              legs
+              (Some (addRelTime requestedAtSentinel (days 90)))    -- deadline
+              True                                                 -- committed (milestones lock funds)
+              None                                                 -- nextIterationFunding (per-confirmation, not iterated)
+              Bridge.emptyMeta
+            settlement = Bridge.buildSettlementInfoV2
+              [escrowOperator]
+              (streamId <> ":milestone-batch")
+              Bridge.emptyMeta
+            -- Per plan §7.3, milestone confirmations are ARA_Custom actions
+            -- so V2 wallets can render + drive each pending milestone.
+            customActions =
+              [ ( Bridge.buildCustomAction ("confirmMilestone:" <> m.name)
+                , [[admin, escrowOperator]]
+                )
+              | m <- pending
+              ]
+            actions = Map.union
+              (Bridge.streamWithdrawalActions recipient)
+              (Map.fromList customActions)
+        in Bridge.buildV2View
+            settlement
+            [spec]
+            requestedAtSentinel
+            (Some (addRelTime requestedAtSentinel (days 90)))
+            actions
+            (Bridge.metaFromList
+              [ ("streamId", streamId)
+              , ("milestonesPending", show (length pending))
+              , ("milestonesConfirmed", show (length milestones - length pending))
+              , ("totalReleased", show totalReleased)
+              , ("totalDeposited", show totalDeposited)
+              , ("settlementShape", "per-leg")
+              ])
+
+------------------------------------------------------------------------
+-- Helpers (private to this module)
+------------------------------------------------------------------------
+
+-- | Sentinel `Time` value used by the AllocationRequest views when
+-- the contract has no available timestamp source (pure-function views
+-- cannot call `getTime`). Resolves to the Unix epoch (1970-01-01).
+-- The SDK overwrites this at exercise time with the actual
+-- `requestedAt` of the AllocationRequest.
+toLedgerTime : Int -> Time
+toLedgerTime _ = time (date 1970 Jan 1) 0 0 0

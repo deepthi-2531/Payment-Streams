@@ -1,0 +1,108 @@
+-- | Stream interface — the abstract contract interface that all stream
+-- implementations must satisfy.
+--
+-- Defines the view type, accrual query methods, and choice signatures
+-- for withdraw, cancel, mutual-cancel, and stream info retrieval.
+module CantonStreams.Interface.Stream where
+
+import CantonStreams.Interface.Types
+
+-- | View projected from any Stream interface instance.
+-- Contains the full stream configuration, current state, and escrow reference.
+data StreamView = StreamView with
+    config : StreamConfig
+    state : StreamState
+  deriving (Eq, Show)
+
+-- | Result of a withdrawal operation.
+data WithdrawResult = WithdrawResult with
+    amountWithdrawn : Decimal
+    newTotalWithdrawn : Decimal
+    newStatus : StreamStatus
+  deriving (Eq, Show)
+
+-- | Result of a cancellation operation.
+data CancelResult = CancelResult with
+    recipientAmount : Decimal
+      -- ^ Amount settled to recipient (accrued - already withdrawn).
+    senderRefund : Decimal
+      -- ^ Amount returned to sender (totalDeposited - accrued).
+  deriving (Eq, Show)
+
+-- | Abstract interface for all payment stream contracts.
+--
+-- Any template implementing this interface must provide:
+-- - Accrual calculation methods (getAccrued, getWithdrawable, getRefundable)
+-- - Withdraw, Cancel, MutualCancel choices
+-- - A non-consuming GetStreamInfo choice for querying state
+interface Stream where
+  viewtype StreamView
+
+  -- | Compute total accrued amount at the given time.
+  -- Monotonic in time. Truncates toward zero.
+  getAccrued : Time -> Decimal
+
+  -- | Compute withdrawable amount: accrued(now) - totalWithdrawn.
+  -- Always >= 0.
+  getWithdrawable : Time -> Decimal
+
+  -- | Compute refundable amount: totalDeposited - accrued(now).
+  -- Always >= 0.
+  getRefundable : Time -> Decimal
+
+  -- | Withdraw accrued, unwithdrawn tokens. Controller: recipient.
+  choice Withdraw : WithdrawResult
+    with
+      actor : Party
+      withdrawTime : Time
+    controller actor
+    do
+      let v = view this
+      assertMsg "Only recipient can withdraw" (actor == v.config.recipient)
+      assertMsg "Stream not active" (v.state.status == Active)
+      withdraw this actor withdrawTime
+
+  -- | Cancel a cancellable stream. Controller: sender.
+  -- Settles accrued amount to recipient, returns remainder to sender.
+  choice Cancel : CancelResult
+    with
+      actor : Party
+      cancelTime : Time
+    controller actor
+    do
+      let v = view this
+      assertMsg "Only sender can cancel" (actor == v.config.sender)
+      assertMsg "Stream not cancellable" v.config.cancellable
+      assertMsg "Stream not active" (v.state.status == Active)
+      cancel this actor cancelTime
+
+  -- | Mutual cancellation — requires both sender and recipient.
+  -- Same settlement as Cancel but no cancellable flag check.
+  choice MutualCancel : CancelResult
+    with
+      senderActor : Party
+      recipientActor : Party
+      cancelTime : Time
+    controller senderActor, recipientActor
+    do
+      let v = view this
+      assertMsg "Invalid sender" (senderActor == v.config.sender)
+      assertMsg "Invalid recipient" (recipientActor == v.config.recipient)
+      assertMsg "Stream not active" (v.state.status == Active)
+      mutualCancel this senderActor recipientActor cancelTime
+
+  -- | Non-consuming query for current stream state.
+  nonconsuming choice GetStreamInfo : StreamView
+    with
+      viewer : Party
+    controller viewer
+    do
+      let v = view this
+      assertMsg "Not authorized to view"
+        (viewer == v.config.sender || viewer == v.config.recipient)
+      pure v
+
+  -- Methods that templates must implement
+  withdraw : Party -> Time -> Update WithdrawResult
+  cancel : Party -> Time -> Update CancelResult
+  mutualCancel : Party -> Party -> Time -> Update CancelResult

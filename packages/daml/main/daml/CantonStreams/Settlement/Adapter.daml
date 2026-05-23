@@ -1,0 +1,57 @@
+-- | NumericAdapter — phase 1 numeric-only settlement adapter for testing.
+--
+-- Phase 1 numeric-only adapter for testing. Use HoldingAdapter for
+-- production with Daml Finance.
+--
+-- This module provides pure (non-Update) helper functions that track
+-- token operations as simple Decimal arithmetic. It is used by the
+-- StreamEscrow template for integration tests and environments that
+-- do not have Daml Finance library DARs on the classpath.
+--
+-- For production settlement with actual CIP-56 Holding operations
+-- (Fungible.Split, Fungible.Merge, Transferable.Transfer), use:
+--   CantonStreams.Settlement.HoldingAdapter
+--
+-- Design choice: Direct holding manipulation, not the full Settlement
+-- factory pipeline. Bilateral streams don't need multi-leg settlement.
+module CantonStreams.Settlement.Adapter where
+
+-- | Represents a token amount held in escrow.
+-- Phase 1: numeric tracking. Phase 1+: ContractId Holding.I
+data EscrowBalance = EscrowBalance with
+    amount : Decimal
+    owner : Party
+  deriving (Eq, Show)
+
+-- | Split an escrow balance into two parts: (withdrawn, remainder).
+-- The withdrawn amount goes to the recipient; remainder stays in escrow.
+--
+-- Precondition: splitAmount <= balance.amount
+-- Postcondition: withdrawn.amount + remainder.amount == balance.amount
+splitEscrow : EscrowBalance -> Decimal -> Party -> (EscrowBalance, EscrowBalance)
+splitEscrow balance splitAmount recipient =
+  let withdrawn = EscrowBalance with amount = splitAmount; owner = recipient
+      remainder = EscrowBalance with amount = balance.amount - splitAmount; owner = balance.owner
+  in (withdrawn, remainder)
+
+-- | Settle a cancellation: split escrow into recipient portion and sender refund.
+--
+-- Returns (recipientBalance, senderRefund).
+-- Precondition: recipientAmount + senderRefundAmount <= escrow.amount
+settleCancel : EscrowBalance -> Decimal -> Decimal -> Party -> Party -> (EscrowBalance, EscrowBalance)
+settleCancel escrow recipientAmount senderRefundAmount recipient sender =
+  let recipientBalance = EscrowBalance with amount = recipientAmount; owner = recipient
+      senderRefund = EscrowBalance with amount = senderRefundAmount; owner = sender
+  in (recipientBalance, senderRefund)
+
+-- | Merge two escrow balances (for renewal top-ups).
+-- Both must have the same owner.
+--
+-- Precondition: a.owner == b.owner
+mergeEscrow : EscrowBalance -> EscrowBalance -> EscrowBalance
+mergeEscrow a b =
+  EscrowBalance with amount = a.amount + b.amount; owner = a.owner
+
+-- | Get the amount from an escrow balance.
+getEscrowAmount : EscrowBalance -> Decimal
+getEscrowAmount balance = balance.amount

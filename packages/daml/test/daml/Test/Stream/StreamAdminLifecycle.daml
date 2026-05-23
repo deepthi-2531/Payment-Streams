@@ -1,0 +1,231 @@
+-- | Tests for `CantonStreams.Stream.StreamAdmin` — the V2-only admin /
+-- observability template per STR-86.
+--
+-- These tests exercise the lifecycle observability semantics in
+-- isolation from a real V2 `Allocation` chain. The pattern:
+--
+--   1. Create a StreamAdmin (operator + sender + recipient co-sign).
+--   2. Simulate N iterations by calling `Sync_Iteration` with the
+--      amount transferred + next allocation cid (we use synthetic Text
+--      cids here since these tests don't spin up a V2 token registry).
+--   3. Verify lifecycle invariants:
+--        - totalWithdrawn accumulates correctly across iterations
+--        - status transitions to Completed when fully drawn
+--        - originalAllocationId is set by the FIRST sync and stays
+--          stable across subsequent iterations (STR-97)
+--        - Mark_Cancelled / Mark_Completed enforce their preconditions
+--
+-- Full end-to-end iteration-chain tests (with real V2 AllocationFactory_Allocate
+-- + Allocation_Settle drive) land in `Test.Stream.V2WalletOnly` (STR-89)
+-- and require the splice-token-test infrastructure.
+module Test.Stream.StreamAdminLifecycle where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import DA.Optional (fromSome)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.StreamAdmin
+
+-- | Common setup: allocate parties + build a fresh StreamAdmin payload.
+setupStreamAdmin : Script
+  ( Party                  -- alice (sender)
+  , Party                  -- bob (recipient)
+  , Party                  -- carol (operator)
+  , ContractId StreamAdmin
+  )
+setupStreamAdmin = do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let start = time (date 2026 Jan 1) 0 0 0
+      end = time (date 2026 Jul 1) 0 0 0  -- 181 days
+      ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "TEST-COIN"
+        instrumentVersion = "1.0"
+      payload = mkStreamAdmin "admin-001" alice bob carol ref 1000.0 Linear start end True []
+  setTime start
+  adminCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  pure (alice, bob, carol, adminCid)
+
+-- | Single iteration advances state correctly + sets originalAllocationId.
+testSyncIterationFirst : Script ()
+testSyncIterationFirst = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  newCid <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-002"
+  Some admin <- queryContractId carol newCid
+  assertMsg "totalWithdrawn advanced" (admin.totalWithdrawn == 100.0)
+  assertMsg "numIterations incremented" (admin.numIterations == 1)
+  assertMsg "status still Active" (admin.status == Active)
+  assertMsg "currentAllocationCid updated"
+    (admin.currentAllocationCid == Some "alloc-002")
+  assertMsg "originalAllocationId set by first iteration"
+    (admin.originalAllocationId == Some "alloc-002")
+  debug ("GOLDEN:stream_admin_first_iter:totalWithdrawn:100.0")
+
+-- | 5 iterations: totalWithdrawn accumulates; originalAllocationId stays stable.
+testSyncIterationChain : Script ()
+testSyncIterationChain = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  -- iteration 1 — sets the original
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-002"
+  -- iterations 2..5
+  c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-003"
+  c3 <- submit carol $ exerciseCmd c2 Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-004"
+  c4 <- submit carol $ exerciseCmd c3 Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-005"
+  c5 <- submit carol $ exerciseCmd c4 Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-006"
+  Some admin <- queryContractId carol c5
+  assertMsg "totalWithdrawn = 500" (admin.totalWithdrawn == 500.0)
+  assertMsg "numIterations = 5" (admin.numIterations == 5)
+  assertMsg "status still Active (not yet fully withdrawn)" (admin.status == Active)
+  -- originalAllocationId set on iteration 1 ("alloc-002") MUST be unchanged
+  assertMsg "originalAllocationId stable across iterations"
+    (admin.originalAllocationId == Some "alloc-002")
+  -- currentAllocationCid advances to the latest
+  assertMsg "currentAllocationCid is latest"
+    (admin.currentAllocationCid == Some "alloc-006")
+  debug ("GOLDEN:stream_admin_chain:original:alloc-002:current:alloc-006:iter:5")
+
+-- | Final iteration auto-transitions status to Completed.
+testSyncIterationCompletesStream : Script ()
+testSyncIterationCompletesStream = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  -- Drain in one big iteration (1000 = totalDeposited).
+  newCid <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 1000.0
+    newAllocationCid = None  -- final iteration, no next allocation
+  Some admin <- queryContractId carol newCid
+  assertMsg "totalWithdrawn = 1000" (admin.totalWithdrawn == 1000.0)
+  assertMsg "status auto-transitioned to Completed" (admin.status == Completed)
+  assertMsg "currentAllocationCid is None on final"
+    (admin.currentAllocationCid == None)
+
+-- | Overshoot is rejected.
+testSyncIterationOvershootRejects : Script ()
+testSyncIterationOvershootRejects = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  -- First settle 800/1000.
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 800.0
+    newAllocationCid = Some "alloc-002"
+  -- Try to settle 300 more → overshoots 1000 by 100.
+  submitMustFail carol $ exerciseCmd c1 Sync_Iteration with
+    iterationAmount = 300.0
+    newAllocationCid = Some "alloc-003"
+
+-- | Negative / zero amounts rejected.
+testSyncIterationRejectsZero : Script ()
+testSyncIterationRejectsZero = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  submitMustFail carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 0.0
+    newAllocationCid = Some "alloc-002"
+
+-- | Mark_Cancelled records terminal state with finalWithdrawn.
+testMarkCancelled : Script ()
+testMarkCancelled = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  -- Settle 300 then cancel.
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 300.0
+    newAllocationCid = Some "alloc-002"
+  let cancelAt = time (date 2026 Mar 1) 0 0 0
+  c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled with
+    cancelTime = cancelAt
+    finalWithdrawn = 300.0
+  Some admin <- queryContractId carol c2
+  assertMsg "status = Cancelled" (admin.status == Cancelled)
+  assertMsg "currentAllocationCid cleared on cancel"
+    (admin.currentAllocationCid == None)
+  assertMsg "totalWithdrawn reflects final" (admin.totalWithdrawn == 300.0)
+
+-- | Mark_Cancelled rejects regressed finalWithdrawn.
+testMarkCancelledRejectsRegress : Script ()
+testMarkCancelledRejectsRegress = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 500.0
+    newAllocationCid = Some "alloc-002"
+  -- Can't claim recipient received LESS than they already withdrew.
+  submitMustFail carol $ exerciseCmd c1 Mark_Cancelled with
+    cancelTime = time (date 2026 Mar 1) 0 0 0
+    finalWithdrawn = 400.0
+
+-- | Mark_Completed requires fully drawn balance.
+testMarkCompletedRequiresFullDraw : Script ()
+testMarkCompletedRequiresFullDraw = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 500.0
+    newAllocationCid = Some "alloc-002"
+  -- Only 500/1000 drawn — Mark_Completed must fail.
+  submitMustFail carol $ exerciseCmd c1 Mark_Completed
+
+-- | Mark_Completed is idempotent if already Completed.
+testMarkCompletedIdempotent : Script ()
+testMarkCompletedIdempotent = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 1000.0
+    newAllocationCid = None
+  -- Already Completed via Sync_Iteration auto-transition.
+  -- Mark_Completed should succeed and return the same cid.
+  c2 <- submit carol $ exerciseCmd c1 Mark_Completed
+  Some admin <- queryContractId carol c2
+  assertMsg "status remains Completed" (admin.status == Completed)
+
+-- | GetStreamAdminInfo returns the structured projection for authorized viewer.
+testGetStreamAdminInfo : Script ()
+testGetStreamAdminInfo = script do
+  (alice, bob, carol, adminCid) <- setupStreamAdmin
+  -- Iterate once so there's some state to project.
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-002"
+  info <- submit bob $ exerciseCmd c1 GetStreamAdminInfo with viewer = bob
+  assertMsg "info.streamId" (info.streamId == "admin-001")
+  assertMsg "info.totalWithdrawn" (info.totalWithdrawn == 100.0)
+  assertMsg "info.numIterations" (info.numIterations == 1)
+  assertMsg "info.originalAllocationId set"
+    (info.originalAllocationId == Some "alloc-002")
+  -- The viewer must be sender/recipient/operator/observer.
+  let _ = (alice, carol)  -- referenced in setup; not used here
+  -- A random party cannot view.
+  dave <- allocateParty "Dave"
+  submitMustFail dave $ exerciseCmd c1 GetStreamAdminInfo with viewer = dave
+
+-- | originalAllocationId stays `None` if first iteration has no next cid.
+-- This is the "single-shot" stream case: one iteration settles the whole
+-- deposit and the chain terminates immediately.
+testOriginalAllocationIdNoneOnSingleShot : Script ()
+testOriginalAllocationIdNoneOnSingleShot = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 1000.0
+    newAllocationCid = None
+  Some admin <- queryContractId carol c1
+  -- For a single-shot, the original cid IS None (caller didn't pass
+  -- one because the chain is done after this one iteration). Consumers
+  -- treating None as "no chain" need to handle this case.
+  assertMsg "originalAllocationId stays None when single-shot"
+    (admin.originalAllocationId == None)
+  assertMsg "status = Completed" (admin.status == Completed)
+
+-- Suppress unused-import warning when fromSome isn't referenced.
+_unusedHelpers : Int
+_unusedHelpers = let _ = fromSome in 0

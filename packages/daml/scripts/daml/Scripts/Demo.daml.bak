@@ -1,0 +1,176 @@
+-- | Interactive demo script for Canton Payment Streams.
+--
+-- Walks through the full lifecycle: setup, advance time, exercise
+-- withdrawals, cancel, renew, and display balances at each step.
+module Scripts.Demo where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+import DA.Optional (fromSome)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Stream.Group (StreamGroupContract(..), GetGroupInfo(..))
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+import CantonStreams.Workflow.CreateStream
+
+import Scripts.Setup (setup, SetupResult(..), SetupParties(..))
+
+-- | Helper to display stream info at a given time.
+showStreamState : Text -> ContractId StreamEscrow -> Party -> Time -> Script ()
+showStreamState label cid viewer queryTime = do
+  info <- submit viewer do
+    exerciseCmd cid GetStreamInfo with
+      viewer
+      queryTime
+  debug ("--- " <> label <> " ---")
+  debug ("  StreamId: " <> info.config.streamId)
+  debug ("  Status: " <> show info.state.status)
+  debug ("  TotalDeposited: " <> show info.config.totalDeposited)
+  debug ("  TotalWithdrawn: " <> show info.state.totalWithdrawn)
+  debug ("  LastWithdrawTime: " <> show info.state.lastWithdrawTime)
+  debug ("  RenewalCount: " <> show info.state.renewalCount)
+
+-- | Full interactive demo.
+demo : Script ()
+demo = script do
+  debug "=== Canton Payment Streams Demo ==="
+  debug ""
+
+  -- Phase 1: Setup
+  debug "--- Phase 1: Setup ---"
+  result <- setup
+  let alice = result.parties.alice
+      bob = result.parties.bob
+      charlie = result.parties.charlie
+
+  let t0 = time (date 2025 Jan 1) 0 0 0
+
+  -- Show initial state of all streams
+  debug ""
+  debug "--- Initial Stream States ---"
+  showStreamState "Linear (Alice->Bob)" result.linearStreamCid bob t0
+  showStreamState "Cliff (Alice->Charlie)" result.cliffStreamCid charlie t0
+  showStreamState "Stepped (Alice->Bob)" result.steppedStreamCid bob t0
+  showStreamState "Renewable (Alice->Charlie)" result.renewableStreamCid charlie t0
+
+  -- Show group info
+  groupInfo <- submit alice do
+    exerciseCmd result.groupCid GetGroupInfo with viewer = alice
+  debug ""
+  debug ("--- Group '" <> fst groupInfo <> "' contains " <> show (length (snd groupInfo)) <> " streams ---")
+
+  -- Phase 2: Advance to February — Bob withdraws from linear stream
+  debug ""
+  debug "--- Phase 2: February — Bob withdraws from linear stream ---"
+  let feb1 = time (date 2025 Feb 1) 0 0 0
+  setTime feb1
+
+  r1 <- submit bob do
+    exerciseCmd result.linearStreamCid Withdraw_Stream with withdrawTime = feb1
+
+  debug ("  Bob withdrew: $" <> show r1.amountWithdrawn)
+  debug ("  New total withdrawn: $" <> show r1.newTotalWithdrawn)
+  debug ("  Stream status: " <> show r1.newStatus)
+
+  -- Phase 3: Advance to March — Bob tries stepped withdraw (should get some steps)
+  debug ""
+  debug "--- Phase 3: March — Bob withdraws from stepped stream ---"
+  let mar1 = time (date 2025 Mar 1) 0 0 0
+  setTime mar1
+
+  r2 <- submit bob do
+    exerciseCmd result.steppedStreamCid Withdraw_Stream with withdrawTime = mar1
+
+  debug ("  Bob withdrew (stepped): $" <> show r2.amountWithdrawn)
+  debug ("  Steps completed worth: $" <> show r2.newTotalWithdrawn)
+
+  -- Phase 4: Advance to March — Charlie tries cliff withdraw (should fail, before cliff)
+  debug ""
+  debug "--- Phase 4: March — Charlie tries cliff withdraw (before cliff) ---"
+  submitMustFail charlie do
+    exerciseCmd result.cliffStreamCid Withdraw_Stream with withdrawTime = mar1
+  debug "  Charlie's withdraw correctly rejected (before cliff date April 1)"
+
+  -- Phase 5: Advance to April — Charlie withdraws after cliff
+  debug ""
+  debug "--- Phase 5: April — Charlie withdraws after cliff ---"
+  let apr1 = time (date 2025 Apr 1) 0 0 0
+  setTime apr1
+
+  r3 <- submit charlie do
+    exerciseCmd result.cliffStreamCid Withdraw_Stream with withdrawTime = apr1
+
+  debug ("  Charlie withdrew (cliff unlocked): $" <> show r3.amountWithdrawn)
+  debug ("  Stream status: " <> show r3.newStatus)
+
+  -- Phase 6: Charlie withdraws from renewable stream
+  debug ""
+  debug "--- Phase 6: April — Charlie withdraws from renewable stream ---"
+  r4 <- submit charlie do
+    exerciseCmd result.renewableStreamCid Withdraw_Stream with withdrawTime = apr1
+
+  debug ("  Charlie withdrew (renewable): $" <> show r4.amountWithdrawn)
+
+  -- Phase 7: Alice renews Charlie's consulting stream
+  debug ""
+  debug "--- Phase 7: April — Alice renews consulting stream ---"
+
+  -- Find the current renewable escrow
+  renewEscrows <- query @StreamEscrow charlie
+  let renewableResults = filter (\(_, e) -> e.config.streamId == "consulting-charlie-q1") renewEscrows
+  assertMsg "Should find renewable stream" (length renewableResults > 0)
+  let (renewCid, _) = head renewableResults
+
+  let newEnd = time (date 2025 Jul 1) 0 0 0
+  newRenewCid <- submit alice do
+    exerciseCmd renewCid Renew_Stream with
+      additionalDeposit = 9000.0
+      newEndTime = newEnd
+
+  debug "  Renewed consulting stream: +$9,000, extended to July 1"
+
+  -- Show renewed state
+  renewedEscrows <- query @StreamEscrow charlie
+  let renewedResults = filter (\(_, e) -> e.config.streamId == "consulting-charlie-q1") renewedEscrows
+  let (_, renewed) = head renewedResults
+  debug ("  New total deposit: $" <> show renewed.config.totalDeposited)
+  debug ("  Renewal count: " <> show renewed.state.renewalCount)
+
+  -- Phase 8: Alice cancels Bob's linear stream
+  debug ""
+  debug "--- Phase 8: May — Alice cancels Bob's linear stream ---"
+  let may1 = time (date 2025 May 1) 0 0 0
+  setTime may1
+
+  -- Find Bob's linear stream (updated after withdrawal)
+  linearEscrows <- query @StreamEscrow bob
+  let linearResults = filter (\(_, e) -> e.config.streamId == "salary-bob-2025-h1") linearEscrows
+  let (linearCid, _) = head linearResults
+
+  cancelResult <- submit alice do
+    exerciseCmd linearCid Cancel_Stream with cancelTime = may1
+
+  debug ("  Cancelled. Bob receives: $" <> show cancelResult.recipientAmount)
+  debug ("  Alice refund: $" <> show cancelResult.senderRefund)
+
+  -- Phase 9: Final summary
+  debug ""
+  debug "=== Final Summary ==="
+
+  allEscrowsBob <- query @StreamEscrow bob
+  allEscrowsCharlie <- query @StreamEscrow charlie
+
+  debug ("  Bob's streams: " <> show (length allEscrowsBob))
+  forA_ allEscrowsBob $ \(_, e) -> do
+    debug ("    " <> e.config.streamId <> " | Status: " <> show e.state.status <> " | Withdrawn: $" <> show e.state.totalWithdrawn)
+
+  debug ("  Charlie's streams: " <> show (length allEscrowsCharlie))
+  forA_ allEscrowsCharlie $ \(_, e) -> do
+    debug ("    " <> e.config.streamId <> " | Status: " <> show e.state.status <> " | Withdrawn: $" <> show e.state.totalWithdrawn)
+
+  debug ""
+  debug "=== Demo Complete ==="

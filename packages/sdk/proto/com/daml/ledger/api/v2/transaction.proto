@@ -1,0 +1,34 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — Transaction message definitions.
+// Field numbers match Canton 3.4.11+ server reflection.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "TransactionOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/event.proto";
+import "google/protobuf/timestamp.proto";
+
+// A flat transaction — contains only root-level create/archive events.
+// Field numbers from Canton 3.4.11+ server reflection.
+message Transaction {
+  string update_id = 1;
+  string command_id = 2;
+  string workflow_id = 3;
+  google.protobuf.Timestamp effective_at = 4;
+  repeated Event events = 5;
+  int64 offset = 6;
+  string synchronizer_id = 7;
+  TraceContext trace_context = 8;
+  google.protobuf.Timestamp record_time = 9;
+  optional bytes external_transaction_hash = 10;
+}
+
+message TraceContext {
+  optional string traceparent = 1;
+  optional string tracestate = 2;
+}

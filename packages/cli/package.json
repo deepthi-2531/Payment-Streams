@@ -1,0 +1,56 @@
+{
+  "name": "@canton-streams/cli",
+  "version": "0.2.7",
+  "description": "CLI tool for Canton Payment Streams",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "canton",
+    "daml",
+    "cli",
+    "payment-streams",
+    "streaming-payments"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/deepthi-2531/Payment-Streams.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/deepthi-2531/Payment-Streams#readme",
+  "bugs": {
+    "url": "https://github.com/deepthi-2531/Payment-Streams/issues"
+  },
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "canton-streams": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint src/",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@canton-streams/sdk": "workspace:^",
+    "yargs": "17.7.2",
+    "chalk": "5.6.2",
+    "cli-table3": "0.6.5",
+    "csv-parse": "6.1.0",
+    "decimal.js": "10.5.0",
+    "ora": "9.3.0",
+    "yaml": "2.7.1"
+  },
+  "devDependencies": {
+    "tsup": "8.5.1",
+    "typescript": "5.9.3",
+    "@types/node": "22.14.0",
+    "@types/yargs": "17.0.35"
+  }
+}

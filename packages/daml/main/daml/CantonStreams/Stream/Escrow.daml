@@ -1,0 +1,338 @@
+-- | StreamEscrow — the primary on-ledger contract for a payment stream.
+--
+-- Each StreamEscrow represents a single prefunded stream between a
+-- sender and a recipient. All lifecycle operations (withdraw, cancel,
+-- renew, complete) are choices on the template.
+--
+-- ## Dual-interface AllocationRequest (CIP-0112 § 5)
+--
+-- Per plan §7.2, this template implements BOTH the V1 and V2
+-- `AllocationRequest` interfaces on the same contract. V1-only wallets
+-- (today's CC and USDCx clients) exercise the V1 interface; V2-aware
+-- wallets exercise the V2 interface and light up multi-leg / iterated /
+-- lock-in-place. When CC and USDCx publish V2 interfaces per CIP-0112,
+-- no library code changes are required — the same deployment
+-- automatically benefits from V2 features.
+--
+-- The interface `view` impls are built by `Settlement.AllocationBridge`
+-- to keep this module focused on lifecycle logic.
+--
+-- The native lifecycle choices (`Withdraw_Stream`, `Cancel_Stream`,
+-- `MutualCancel_Stream`, `Renew_Stream`, `Complete_Stream`) remain the
+-- authoritative settlement path for the deprecation window. The
+-- interface choices are provided so V2 wallets recognize StreamEscrow
+-- as an AllocationRequest contract for read-only purposes; they fail
+-- closed if exercised, redirecting callers to the native choices. This
+-- is widened to full interface-driven settlement as part of STR-75
+-- (SDK) + STR-77 (proxy event subscriber).
+--
+-- Key: (sender, streamId) — multiple streams between same parties.
+-- Signatories: sender + recipient (both must consent to creation).
+module CantonStreams.Stream.Escrow where
+
+import qualified DA.Map as Map
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (StreamView(..), WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter
+
+-- Real Splice V2 AllocationRequest import (STR-102 Phase 2).
+-- V1 was removed by the V2-only pivot (STR-79).
+import qualified Splice.Api.Token.AllocationRequestV2 as AR2
+import qualified CantonStreams.Settlement.AllocationBridge as Bridge
+
+-- | Compute accrued amount based on vesting mode. Top-level helper.
+computeAccrued : StreamConfig -> Time -> Decimal
+computeAccrued cfg now = case cfg.vestingMode of
+  Linear ->
+    linearAccrual cfg.totalDeposited cfg.startTime cfg.endTime now
+  CliffLinear cliffTime ->
+    cliffLinearAccrual cfg.totalDeposited cfg.startTime cfg.endTime cliffTime now
+  Stepped stepInterval amountPerStep ->
+    steppedAccrual cfg.totalDeposited cfg.startTime stepInterval amountPerStep now
+  RenewableTerm _ ->
+    linearAccrual cfg.totalDeposited cfg.startTime cfg.endTime now
+
+-- | Check if a vesting mode is renewable.
+isRenewable : VestingMode -> Bool
+isRenewable (RenewableTerm _) = True
+isRenewable _ = False
+
+-- | Build the V2 InstrumentIdV2 for the AllocationRequestV2 view. If
+-- the stream has a V1 InstrumentRef, bridge it; otherwise use a
+-- sentinel that V2 wallets should treat as "not V2-allocatable".
+streamInstrumentIdV2 : StreamConfig -> InstrumentIdV2
+streamInstrumentIdV2 cfg = case cfg.instrumentRef of
+  Some ref -> bridgeInstrumentRefToV2 ref
+  None -> InstrumentIdV2 with
+    admin = cfg.sender
+    id = "NUMERIC-LEGACY"
+
+-- | Build the V2 AccountV2 representation of the stream's recipient.
+-- Bare-party with `provider = None`; institutional callers can refine
+-- this via a custom escrow template that supplies a provider.
+streamRecipientAccountV2 : StreamConfig -> AccountV2
+streamRecipientAccountV2 cfg =
+  AccountV2 with
+    owner = cfg.recipient
+    provider = None
+    id = ""
+
+-- | The primary payment stream contract.
+template StreamEscrow
+  with
+    config : StreamConfig
+    state : StreamState
+    escrow : EscrowBalance
+    observers : [Party]
+  where
+    signatory config.sender, config.recipient
+    observer observers
+
+    -- Note: Contract keys not supported in Daml LF 2.x (SDK 3.4+).
+    -- Streams looked up by contract ID or query with streamId filter.
+
+    -- Ensure invariants on every contract creation/archival
+    ensure config.totalDeposited > 0.0
+      && config.startTime < config.endTime
+      && state.totalWithdrawn >= 0.0
+      && state.totalWithdrawn <= config.totalDeposited
+      && escrow.amount >= 0.0
+
+    -- | Withdraw accrued tokens. Only the recipient can call this.
+    nonconsuming choice Withdraw_Stream : WithdrawResult
+      with
+        withdrawTime : Time
+      controller config.recipient
+      do
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued config withdrawTime
+            amount = withdrawable accrued state.totalWithdrawn
+
+        assertMsg "Nothing to withdraw" (amount > 0.0)
+
+        -- Verify invariant before settlement
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
+        let newTotalWithdrawn = state.totalWithdrawn + amount
+            newStatus = if newTotalWithdrawn >= config.totalDeposited
+                        then Completed else Active
+            (_, remainderEscrow) = splitEscrow escrow amount config.recipient
+
+        -- Archive current and create updated
+        archive self
+        create this with
+          state = state with
+            totalWithdrawn = newTotalWithdrawn
+            status = newStatus
+            lastWithdrawTime = Some withdrawTime
+          escrow = remainderEscrow
+
+        pure WithdrawResult with
+          amountWithdrawn = amount
+          newTotalWithdrawn
+          newStatus
+
+    -- | Cancel the stream. Only sender can call, and only if cancellable.
+    nonconsuming choice Cancel_Stream : CancelResult
+      with
+        cancelTime : Time
+      controller config.sender
+      do
+        assertMsg "Stream not cancellable" config.cancellable
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued config cancelTime
+            recipientAmount = accrued - state.totalWithdrawn
+            senderRefundAmount = config.totalDeposited - accrued
+
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
+        archive self
+        create this with
+          state = state with
+            status = Cancelled
+            totalWithdrawn = accrued
+          escrow = EscrowBalance with amount = 0.0; owner = config.sender
+
+        pure CancelResult with
+          recipientAmount = max 0.0 recipientAmount
+          senderRefund = max 0.0 senderRefundAmount
+
+    -- | Mutual cancellation — both parties agree. No cancellable flag needed.
+    nonconsuming choice MutualCancel_Stream : CancelResult
+      with
+        cancelTime : Time
+      controller config.sender, config.recipient
+      do
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued config cancelTime
+            recipientAmount = accrued - state.totalWithdrawn
+            senderRefundAmount = config.totalDeposited - accrued
+
+        archive self
+        create this with
+          state = state with
+            status = Cancelled
+            totalWithdrawn = accrued
+          escrow = EscrowBalance with amount = 0.0; owner = config.sender
+
+        pure CancelResult with
+          recipientAmount = max 0.0 recipientAmount
+          senderRefund = max 0.0 senderRefundAmount
+
+    -- | Renew a renewable-term stream with additional deposit.
+    nonconsuming choice Renew_Stream : ContractId StreamEscrow
+      with
+        additionalDeposit : Decimal
+        newEndTime : Time
+        renewTime : Time
+          -- ^ Caller-supplied "now" used for renewal-from-Completed pricing.
+          -- Should equal the ledger time at submission (within RecordTime
+          -- tolerance); accrual math is anchored here so the new term curve
+          -- is consistent across off-chain expectation + on-chain effect.
+      controller config.sender
+      do
+        assertMsg "Not a renewable stream" (isRenewable config.vestingMode)
+        assertMsg "Stream must be active or completed" (state.status `elem` [Active, Completed])
+        assertMsg "Additional deposit must be positive" (additionalDeposit > 0.0)
+        assertMsg "New end time must be after current end" (newEndTime > config.endTime)
+        assertMsg "Renew time must be at/before new end" (renewTime <= newEndTime)
+
+        let newEscrow = EscrowBalance with
+              amount = escrow.amount + additionalDeposit
+              owner = config.sender
+
+        -- [H2 fix] When renewing a Completed stream, reset the accrual
+        -- anchor so the new term's curve doesn't price below the already-
+        -- withdrawn amount. Previously the renewed stream kept the
+        -- original `startTime`, so for a completed stream the curve at
+        -- `renewTime` could yield `withdrawable = 0` until catch-up.
+        --
+        -- For Active renewals we preserve `startTime` (continuous term).
+        let (newStartTime, newTotalDeposited, newTotalWithdrawn) =
+              if state.status == Completed
+                then (renewTime, additionalDeposit, 0.0)
+                else (config.startTime, config.totalDeposited + additionalDeposit, state.totalWithdrawn)
+
+        archive self
+        create this with
+          config = config with
+            startTime = newStartTime
+            totalDeposited = newTotalDeposited
+            endTime = newEndTime
+          state = state with
+            status = Active
+            totalWithdrawn = newTotalWithdrawn
+            renewalCount = state.renewalCount + 1
+          escrow = newEscrow
+
+    -- | Mark stream as completed when fully vested and withdrawn.
+    nonconsuming choice Complete_Stream : ContractId StreamEscrow
+      with
+        completeTime : Time
+      controller config.recipient
+      do
+        let accrued = computeAccrued config completeTime
+        assertMsg "Stream not fully vested" (accrued >= config.totalDeposited)
+        assertMsg "Stream not active" (state.status == Active)
+
+        archive self
+        create this with
+          state = state with status = Completed
+
+    -- | Non-consuming query for current stream state.
+    nonconsuming choice GetStreamInfo : StreamView
+      with
+        viewer : Party
+        queryTime : Time
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == config.sender || viewer == config.recipient || viewer `elem` observers)
+        let accrued = computeAccrued config queryTime
+        pure StreamView with
+          config
+          state = state with
+            totalWithdrawn = state.totalWithdrawn
+
+    --------------------------------------------------------------------
+    -- CIP-0112 V2 AllocationRequest interface (V2-only per STR-79)
+    --------------------------------------------------------------------
+    -- The V2 interface instance makes StreamEscrow recognizable as an
+    -- `AllocationRequest` contract to V2 wallets. The `view` is derived
+    -- from current stream state via the shared `Settlement.AllocationBridge`
+    -- builders (STR-71).
+    --
+    -- V1 was removed per the V2-only architectural pivot (STR-79):
+    -- "deprecated but still supported" doubles audit scope and silently
+    -- rots while attention is on V2. Library requires V2 assets.
+    --
+    -- For the M3 deprecation window the interface choices fail closed
+    -- and redirect to the native `Withdraw_Stream` / `Cancel_Stream`
+    -- choices. STR-86 widens this so the standard V2 interface choices
+    -- become the primary path; STR-77 wires the proxy subscriber to
+    -- react to V2 `Allocation_Settle` events instead of polling.
+
+    interface instance AR2.AllocationRequest for StreamEscrow where
+      -- Lifecycle drive will land in STR-86; today the *Impl methods
+      -- fail closed and direct callers to the native Daml choices.
+      -- Real V2 interface impl signature is 2-arg: ContractId + choice record.
+      allocationRequest_acceptImpl _ _ = do
+        abort "AllocationRequest_Accept not yet wired on StreamEscrow — use Withdraw_Stream (lifecycle migration in STR-86)"
+      allocationRequest_rejectImpl _ _ = do
+        abort "AllocationRequest_Reject not yet wired on StreamEscrow — use Cancel_Stream (lifecycle migration in STR-86)"
+      allocationRequest_withdrawImpl _ _ = do
+        abort "AllocationRequest_Withdraw not yet wired on StreamEscrow — use Cancel_Stream as escrow operator (lifecycle migration in STR-86)"
+      -- ExtraObservers: extra parties to disclose the choice exercise to.
+      -- For streams the request signatories (sender + recipient) already
+      -- see everything; no additional observers needed.
+      allocationRequest_acceptExtraObservers _ = []
+      allocationRequest_rejectExtraObservers _ = []
+      allocationRequest_withdrawExtraObservers _ = []
+
+      view =
+        let undrawn = config.totalDeposited - state.totalWithdrawn
+            -- V2 instrument id is just the V1 ref's instrumentId Text;
+            -- the asset admin lives on AllocationSpecification.admin
+            instrumentIdText = case config.instrumentRef of
+              Some r -> r.instrumentId
+              None -> "NUMERIC-LEGACY"
+            admin = case config.instrumentRef of
+              Some r -> r.issuer
+              None -> config.sender
+            authorizerAcc = Bridge.escrowOperatorAccount escrow.owner
+            recipientAcc = Bridge.streamRecipientAccount config.recipient
+            legId = config.streamId <> ":leg-1"
+            spec = Bridge.buildSimpleSpec
+              admin
+              authorizerAcc
+              recipientAcc
+              legId
+              undrawn
+              instrumentIdText
+              (Some config.endTime)              -- settlementDeadline
+              False                              -- committed
+              None                               -- nextIterationFunding (not iterated)
+              Bridge.emptyMeta
+            settlement = Bridge.buildSettlementInfoV2
+              [escrow.owner]                     -- executors (plural per spec)
+              (config.streamId <> ":v2-cycle")
+              Bridge.emptyMeta
+            actions = Bridge.streamWithdrawalActions config.recipient
+        in Bridge.buildV2View
+            settlement
+            [spec]
+            config.startTime                     -- requestedAt
+            (Some config.endTime)                -- settleAt
+            actions
+            (Bridge.metaFromList
+              [ ("streamId", config.streamId)
+              , ("streamStatus", show state.status)
+              , ("vestingMode", show config.vestingMode)
+              ])

@@ -1,0 +1,62 @@
+{
+  "defaults": {
+    "cantonJsonApiUrl": "http://validator-host:7575",
+    "synchronizerId": "global-domain::<synchronizer-id>"
+  },
+  "scripts": {
+    "testnetHybridStreamProbe": {
+      "tokenStandardPackageId": "<canton-streams-package-id>"
+    },
+    "testnetTokenStandardStreamProbe": {
+      "tokenStandardPackageId": "<canton-streams-package-id>",
+      "cantonHost": "validator-host",
+      "cantonPort": 5001,
+      "cantonUseTls": false,
+      "proxyBaseUrl": "http://127.0.0.1:18083",
+      "senderWalletName": "host-wallet",
+      "recipientWalletName": "host-wallet",
+      "instrumentId": "USDCx",
+      "instrumentVersion": "testnet",
+      "instrumentAdmin": "<registrar-party>",
+      "instrumentDepository": "<depository-party>"
+    },
+    "sdkDebug": {
+      "host": "localhost",
+      "port": 5001,
+      "parties": {
+        "streamsUser": "<party-id>",
+        "dnva": "<party-id>",
+        "dflx": "<party-id>",
+        "primary": "<party-id>",
+        "cbtcNetwork": "<party-id>",
+        "cbtcAdmin": "<party-id>"
+      },
+      "packages": {
+        "utilityRegistryApp": "<package-id>",
+        "utilityRegistryHolding": "<package-id>"
+      },
+      "contracts": {
+        "cbtcOffer1": "<contract-id>",
+        "cbtcOffer2": "<contract-id>",
+        "cbtcOffer3": "<contract-id>",
+        "acceptTransfer": "<contract-id>"
+      },
+      "auth0": {
+        "tokenUrl": "https://<tenant>.auth0.com/oauth/token",
+        "clientId": "<client-id>",
+        "clientSecret": "<client-secret>",
+        "audience": "https://canton.network.global"
+      }
+    },
+    "findChoices": {
+      "submitHost": "localhost:5001",
+      "actAsParty": "<party-id>",
+      "contractId": "<contract-id>",
+      "template": {
+        "packageId": "<package-id>",
+        "moduleName": "Utility.Registry.App.V0.Model.Transfer",
+        "entityName": "TransferOffer"
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+// Canton bootstrap script — runs after node startup
+// Uploads DARs and creates initial parties
+
+import java.io.File
+
+// Wait for participant to be ready
+participant1.health.wait_for_running()
+
+// Upload all DAR files
+val darDir = new File("/canton/dars")
+if (darDir.exists()) {
+  darDir.listFiles().filter(_.getName.endsWith(".dar")).foreach { dar =>
+    println(s"Uploading DAR: ${dar.getName}")
+    participant1.dars.upload(dar.getAbsolutePath)
+  }
+}
+
+// Allocate default parties for development
+val alice = participant1.parties.enable("Alice")
+val bob = participant1.parties.enable("Bob")
+val charlie = participant1.parties.enable("Charlie")
+
+println(s"Parties created: Alice=$alice, Bob=$bob, Charlie=$charlie")

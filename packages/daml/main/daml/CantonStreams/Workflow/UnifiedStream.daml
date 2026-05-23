@@ -1,0 +1,332 @@
+-- | Unified propose / accept / operator-consent / finalize workflow for stream creation.
+--
+-- This module consolidates the previously per-settlement-mode workflows
+-- (`CreateStream`, `CreateTokenStandardStream`, `CreateUtilityHoldingStream`,
+-- `CreateLocalAssetStream`) into a single propose-and-accept machine
+-- parameterized over the full signatory set:
+--
+--   * Sender         — proposes the stream and prefunds it.
+--   * Recipient      — accepts (or counter-proposes) the terms.
+--   * Operator(s)    — list of operating parties whose authority is required.
+--                      Each must explicitly OperatorAccept; today's per-mode
+--                      workflows assumed operator consent via Finalize.
+--   * Trigger Party  — optional first-class role that drives state transitions
+--                      after the stream is active. Authority must be aggregated
+--                      at proposal time; bolting it in afterwards is unsound.
+--   * Observers      — read-only parties.
+--
+-- Workflow shape:
+--
+--   1. Sender creates a `UnifiedStreamRequest` (single signatory).
+--   2. Recipient `AcceptRecipient` (now sender + recipient signatories).
+--      Or `CounterPropose` to fork a new request with modified terms; the
+--      previous request remains addressable via `previousRequestCid` for audit.
+--      Or `RejectAsRecipient reason`.
+--   3. Each operator in the operators list `OperatorAccept`s (or `OperatorReject`s).
+--      The contract tracks which operators have accepted; once all have, the
+--      contract transitions to `FullyAcceptedStreamRequest`.
+--   4. (Optional) Trigger party `TriggerPartyAccept`s to confirm role acceptance.
+--   5. The `FullyAcceptedStreamRequest` exposes mode-specific finalization
+--      choices (`FinalizeAsNumeric`, `FinalizeAsTokenStandard`, etc.) that
+--      produce the appropriate escrow contract.
+--
+-- Lifecycle controls:
+--
+--   * `expiresAt` — proposals auto-expire; expired requests cannot be accepted.
+--   * `previousRequestCid` — counter-propose chain for audit.
+--   * `rejectReason` — captured on rejection for audit.
+--
+-- The legacy per-mode workflow files are retained for backwards compatibility
+-- but are deprecated; new integrations should use this unified workflow.
+module CantonStreams.Workflow.UnifiedStream where
+
+import DA.List (sort)
+import DA.Optional (isNone)
+
+import CantonStreams.Interface.Types
+
+-- | Operator entry on the request. Each operator independently accepts
+-- via `OperatorAccept`; the request transitions to fully-accepted only
+-- after every operator has accepted.
+data OperatorRef = OperatorRef with
+    operator : Party
+    operatorLabel : Text
+  deriving (Eq, Show)
+
+-- | The full signatory set for a proposed stream. This is the data a
+-- consumer mints when creating a stream — Sender, Recipient, the list of
+-- Operators required to consent, and an optional Trigger Party that drives
+-- state transitions after the stream is active.
+data StreamRoleSet = StreamRoleSet with
+    sender : Party
+    recipient : Party
+    operators : [OperatorRef]
+      -- ^ Required operators. Empty list = no operator consent required
+      -- (e.g. legacy NumericLegacy mode). Non-empty = each must `OperatorAccept`
+      -- before the request is fully accepted.
+    triggerParty : Optional Party
+      -- ^ Optional party authorized to drive automation (advance, claim,
+      -- top-up triggers). When present, it must accept via `TriggerPartyAccept`
+      -- so its authority is aggregated up front, not bolted in later.
+    observers : [Party]
+  deriving (Eq, Show)
+
+-- | Modal payload — the settlement-mode-specific data needed at finalize time.
+-- This is intentionally an open product; the finalize choice for each mode
+-- consumes only the fields it needs.
+data ModalPayload = ModalPayload with
+    -- TokenStandardCustody fields
+    tokenStandardEscrowOperator : Optional Party
+    tokenStandardFundingReference : Optional Text
+    tokenStandardSenderAccountRef : Optional Text
+    tokenStandardRecipientAccountRef : Optional Text
+    -- UtilityHoldingCustody fields
+    utilityHoldingFundingHoldingCid : Optional Text
+      -- ^ Stored as Text serialization of the contract id; the finalize choice
+      -- decodes it. Keeping this off the strongly-typed payload avoids
+      -- importing the Utility.Registry.Holding modules into the unified
+      -- workflow (which should remain mode-agnostic).
+    -- LocalAssetCustody fields
+    localAssetCustodian : Optional Party
+    localAssetReference : Optional Text
+  deriving (Eq, Show)
+
+-- | Empty modal payload — useful for NumericLegacy mode and as a starting
+-- point for callers building per-mode payloads.
+emptyModalPayload : ModalPayload
+emptyModalPayload = ModalPayload with
+    tokenStandardEscrowOperator = None
+    tokenStandardFundingReference = None
+    tokenStandardSenderAccountRef = None
+    tokenStandardRecipientAccountRef = None
+    utilityHoldingFundingHoldingCid = None
+    localAssetCustodian = None
+    localAssetReference = None
+
+------------------------------------------------------------------------
+-- Stage 1 — UnifiedStreamRequest (single signatory: sender)
+------------------------------------------------------------------------
+
+-- | Pending stream creation request. Signed by sender only. Counterparties
+-- consent via the choices below.
+template UnifiedStreamRequest
+  with
+    config : StreamConfig
+    roles : StreamRoleSet
+    depositAmount : Decimal
+    payload : ModalPayload
+    expiresAt : Time
+      -- ^ Hard expiry. After this time, no choice on this contract is
+      -- accepted; the request can only be archived via `ExpireRequest`.
+    previousRequestCid : Optional (ContractId UnifiedStreamRequest)
+      -- ^ For counter-propose chains. The audit trail of prior versions.
+  where
+    signatory roles.sender
+    observer roles.recipient
+           , [op.operator | op <- roles.operators]
+           , optional [] (\p -> [p]) roles.triggerParty
+           , roles.observers
+
+    ensure config.totalDeposited > 0.0
+        && config.startTime < config.endTime
+        && depositAmount == config.totalDeposited
+        && config.sender == roles.sender
+        && config.recipient == roles.recipient
+
+    -- | Recipient accepts the proposed terms.
+    choice AcceptRecipient : ContractId AcceptedStreamRequest
+      controller roles.recipient
+      do
+        now <- getTime
+        assertMsg "Request has expired" (now < expiresAt)
+        create AcceptedStreamRequest with
+          config
+          roles
+          depositAmount
+          payload
+          expiresAt
+          acceptedOperators = []
+          triggerPartyAccepted = isNone roles.triggerParty
+          previousRequestCid
+
+    -- | Recipient declines with a free-form reason captured for audit.
+    choice RejectAsRecipient : ()
+      with
+        rejectReason : Text
+      controller roles.recipient
+      do pure ()
+
+    -- | Recipient counter-proposes a modified set of terms. Creates a new
+    -- request with `previousRequestCid = Some self`, archiving this one.
+    -- The counter-propose flow lets the recipient propose new amounts,
+    -- timing, vesting mode, or operator set without losing the audit chain.
+    choice CounterPropose : ContractId UnifiedStreamRequest
+      with
+        newConfig : StreamConfig
+        newRoles : StreamRoleSet
+        newDepositAmount : Decimal
+        newPayload : ModalPayload
+        newExpiresAt : Time
+      controller roles.recipient, roles.sender
+      do
+        self <- pure self
+        create UnifiedStreamRequest with
+          config = newConfig
+          roles = newRoles
+          depositAmount = newDepositAmount
+          payload = newPayload
+          expiresAt = newExpiresAt
+          previousRequestCid = Some self
+
+    -- | Sender withdraws the request before any acceptances.
+    choice WithdrawRequestAsSender : ()
+      controller roles.sender
+      do pure ()
+
+    -- | Anyone observing can archive an expired request.
+    choice ExpireRequest : ()
+      controller roles.sender
+      do
+        now <- getTime
+        assertMsg "Request is not yet expired" (now >= expiresAt)
+
+------------------------------------------------------------------------
+-- Stage 2 — AcceptedStreamRequest (sender + recipient signatories)
+------------------------------------------------------------------------
+
+-- | The recipient has accepted; now operators (and optionally trigger party)
+-- must explicitly consent. The contract tracks acceptance progress and only
+-- transitions to `FullyAcceptedStreamRequest` when all required parties
+-- have accepted.
+template AcceptedStreamRequest
+  with
+    config : StreamConfig
+    roles : StreamRoleSet
+    depositAmount : Decimal
+    payload : ModalPayload
+    expiresAt : Time
+    acceptedOperators : [Party]
+      -- ^ Operators that have accepted so far.
+    triggerPartyAccepted : Bool
+      -- ^ Whether the trigger party has accepted (or whether none is required).
+    previousRequestCid : Optional (ContractId UnifiedStreamRequest)
+  where
+    signatory roles.sender, roles.recipient
+    observer [op.operator | op <- roles.operators]
+           , optional [] (\p -> [p]) roles.triggerParty
+           , roles.observers
+
+    -- | An operator on the required list explicitly consents.
+    choice OperatorAccept : ContractId AcceptedStreamRequest
+      with
+        operator : Party
+      controller operator
+      do
+        let requiredOperators = sort [op.operator | op <- roles.operators]
+        now <- getTime
+        assertMsg "Request has expired" (now < expiresAt)
+        assertMsg "Party is not in the required operator set"
+          (operator `elem` requiredOperators)
+        assertMsg "Operator has already accepted"
+          (operator `notElem` acceptedOperators)
+        create this with
+          acceptedOperators = operator :: acceptedOperators
+
+    -- | An operator on the required list explicitly rejects.
+    -- Archives the request (no operator can be made to participate).
+    choice OperatorReject : ()
+      with
+        operator : Party
+        rejectReason : Text
+      controller operator
+      do
+        let requiredOperators = sort [op.operator | op <- roles.operators]
+        assertMsg "Party is not in the required operator set"
+          (operator `elem` requiredOperators)
+        pure ()
+
+    -- | The trigger party (if present) explicitly consents.
+    choice TriggerPartyAccept : ContractId AcceptedStreamRequest
+      controller (optional roles.sender (\p -> p) roles.triggerParty)
+      do
+        now <- getTime
+        assertMsg "Request has expired" (now < expiresAt)
+        assertMsg "Trigger party already accepted (or not required)"
+          (not triggerPartyAccepted)
+        create this with triggerPartyAccepted = True
+
+    -- | The trigger party rejects; request is archived.
+    choice TriggerPartyReject : ()
+      with
+        rejectReason : Text
+      controller (optional roles.sender (\p -> p) roles.triggerParty)
+      do pure ()
+
+    -- | Once all required acceptances are in, transition to fully accepted.
+    -- Either party can drive this transition.
+    choice Promote : ContractId FullyAcceptedStreamRequest
+      controller roles.sender, roles.recipient
+      do
+        let requiredOperators = sort [op.operator | op <- roles.operators]
+            allOperatorsAccepted = sort acceptedOperators == requiredOperators
+        assertMsg "Not all operators have accepted yet" allOperatorsAccepted
+        assertMsg "Trigger party has not accepted yet" triggerPartyAccepted
+        create FullyAcceptedStreamRequest with
+          config
+          roles
+          depositAmount
+          payload
+          previousRequestCid
+
+    -- | Mutual cancellation of the request before finalization.
+    choice MutualCancelAccepted : ()
+      controller roles.sender, roles.recipient
+      do pure ()
+
+------------------------------------------------------------------------
+-- Stage 3 — FullyAcceptedStreamRequest (all required signatories)
+------------------------------------------------------------------------
+
+-- | All required parties have consented. From here, mode-specific finalize
+-- choices produce the appropriate escrow contract. Each finalize choice is
+-- controlled by the relevant operator and reads from the modal payload.
+--
+-- Note: we keep finalize choices here (rather than dispatching out via
+-- separate templates) so that the signatory set is preserved through the
+-- finalize step. This is what makes it safe to surface arbitrary
+-- settlement-mode-specific data in the produced escrow.
+template FullyAcceptedStreamRequest
+  with
+    config : StreamConfig
+    roles : StreamRoleSet
+    depositAmount : Decimal
+    payload : ModalPayload
+    previousRequestCid : Optional (ContractId UnifiedStreamRequest)
+  where
+    signatory roles.sender, roles.recipient
+            , [op.operator | op <- roles.operators]
+            , optional [] (\p -> [p]) roles.triggerParty
+    observer roles.observers
+
+    -- | Mode-specific finalize choices live in adapter modules. They are
+    -- expressed as choices on this template so that:
+    --   (a) the signatory set is intact (sender + recipient + operators
+    --       + trigger party), and
+    --   (b) the modal payload is carried through unchanged.
+    --
+    -- The actual finalize choices are added by the per-mode adapter
+    -- modules (e.g. `CantonStreams.Workflow.Adapters.NumericFinalize`).
+    -- See the module-specific finalize files for the concrete escrow-creation
+    -- logic. Keeping them out of this module preserves the unified workflow's
+    -- mode-agnostic shape.
+    nonconsuming choice ReadFinalizationContext : (StreamConfig, StreamRoleSet, Decimal, ModalPayload)
+      controller roles.sender
+      do pure (config, roles, depositAmount, payload)
+
+    -- | Either signatory can archive a fully-accepted request that has not
+    -- yet been finalized (e.g. if mode-specific finalize fails repeatedly).
+    choice DiscardAcceptedRequest : ()
+      with
+        reason : Text
+      controller roles.sender, roles.recipient
+      do pure ()

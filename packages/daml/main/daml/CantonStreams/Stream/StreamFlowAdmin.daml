@@ -1,0 +1,243 @@
+-- | StreamFlowAdmin — V2-only admin/observability for the rolling
+-- top-up / non-prefunded streaming pattern (STR-87 / plan §7.4 / STR-79).
+--
+-- ## Architecture
+--
+-- Like `StreamAdmin` (STR-86), this template is observability-only:
+-- the actual locked funds live in V2 `Allocation` contracts the sender
+-- creates via `AllocationFactory_Allocate` with `committed = True` and
+-- `nextIterationFunding` populated. What differs from `StreamAdmin`:
+--
+--   * **Open-ended**: no fixed `endTime` / `totalDeposited`. The
+--     stream runs until cancelled or the funded balance depletes.
+--   * **Variable funding**: `currentFundedAmount` is the sum of all
+--     V2 allocations contributed to the chain so far (initial + top-ups).
+--     `TopUp_Flow_Admin` records that the sender created an additional
+--     committed `Allocation` and the operator merged it into the
+--     iteration chain via `SettlementFactory_SettleBatch` self-transfer.
+--   * **Pause/Resume**: operator can pause settle iterations via
+--     `Pause_Flow_Admin`. Allocation just sits committed; no settle =
+--     no transfer. `Resume_Flow_Admin` clears the flag.
+--
+-- ## Lifecycle (V2 vocabulary only)
+--
+-- | User action | What happens                                                 |
+-- |-------------|--------------------------------------------------------------|
+-- | Create      | Operator creates `StreamFlowAdmin`; sender exercises         |
+-- |             | `AllocationFactory_Allocate` for initial funding             |
+-- |             | (`committed=True, nextIterationFunding=Some(initial)`);      |
+-- |             | operator records cid via `Sync_Iteration_Flow` with          |
+-- |             | iterationAmount=0 (initialization marker).                   |
+-- | Withdraw    | Operator exercises V2 `Allocation_Settle` for the period     |
+-- |             | amount + `Sync_Iteration_Flow` to advance admin state.       |
+-- | TopUp       | Sender exercises `AllocationFactory_Allocate` for the        |
+-- |             | additional amount; operator exercises                        |
+-- |             | `SettlementFactory_SettleBatch` self-transfer to merge into  |
+-- |             | the existing chain + `TopUp_Flow_Admin` to bump              |
+-- |             | `currentFundedAmount`.                                       |
+-- | Pause       | Operator exercises `Pause_Flow_Admin`; executor skips        |
+-- |             | future settle calls.                                         |
+-- | Resume      | Operator exercises `Resume_Flow_Admin`; executor resumes.    |
+-- | Stop        | Either party exercises V2 `Allocation_Cancel`; operator      |
+-- |             | exercises `Mark_Cancelled_Flow_Admin`.                       |
+--
+-- ## Coexistence with `StreamFlow`
+--
+-- The legacy `StreamFlow` template (this module's predecessor) carries
+-- locked balance directly via `fundedAmount` + `totalWithdrawn` fields.
+-- That template is marked DEPRECATED and consumers MUST migrate to
+-- `StreamFlowAdmin` + a V2 `Allocation` chain before M4 mainnet
+-- promotion.
+module CantonStreams.Stream.StreamFlowAdmin where
+
+import CantonStreams.Interface.Types
+  ( StreamId
+  , StreamStatus(..)
+  , InstrumentRef
+  )
+
+-- | A V2-only rolling top-up stream's admin/observability contract.
+template StreamFlowAdmin
+  with
+    streamId : StreamId
+    sender : Party
+    recipient : Party
+    operator : Party
+      -- ^ Escrow operator / executor.
+    instrumentRef : InstrumentRef
+    flowRate : Decimal
+      -- ^ Tokens-per-microsecond rate (for off-chain accrual
+      -- computation; operator pumps `Allocation_Settle` according to
+      -- this rate per accrual period).
+    startTime : Time
+      -- ^ When accrual starts (no fixed endTime — open-ended).
+    -- ----- mutable state -----
+    currentFundedAmount : Decimal
+      -- ^ Sum of all V2 allocations contributed (initial + top-ups
+      -- merged). The next-iteration funding available for settlement.
+    totalWithdrawn : Decimal
+      -- ^ Cumulative recipient receipts across all iterations.
+    numIterations : Int
+    paused : Bool
+      -- ^ When True, operator skips `Allocation_Settle` calls.
+    status : StreamStatus
+    currentAllocationCid : Optional Text
+    originalAllocationId : Optional Text
+      -- ^ First allocation in the chain (STR-97). Stays stable across
+      -- iterations + top-ups (top-up merges via SettlementFactory_SettleBatch
+      -- self-transfer, which preserves originalAllocationId per V2 spec).
+    observers : [Party]
+  where
+    signatory sender, recipient, operator
+    observer observers
+
+    ensure currentFundedAmount >= 0.0
+      && totalWithdrawn >= 0.0
+      && totalWithdrawn <= currentFundedAmount
+      && numIterations >= 0
+      && flowRate >= 0.0
+
+    -- | Record that a new settle iteration has fired. Operator-only.
+    -- Same pattern as StreamAdmin.Sync_Iteration but with currentFunded
+    -- balance check (open-ended so we don't have a totalDeposited cap).
+    nonconsuming choice Sync_Iteration_Flow : ContractId StreamFlowAdmin
+      with
+        iterationAmount : Decimal
+        newAllocationCid : Optional Text
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Stream is paused — cannot settle while paused" (not paused)
+        assertMsg "Iteration amount must be non-negative" (iterationAmount >= 0.0)
+        let newTotalWithdrawn = totalWithdrawn + iterationAmount
+        assertMsg "Iteration overshoots funded balance"
+          (newTotalWithdrawn <= currentFundedAmount)
+        let newOriginal = case originalAllocationId of
+              Some _ -> originalAllocationId
+              None -> newAllocationCid
+        archive self
+        create this with
+          totalWithdrawn = newTotalWithdrawn
+          numIterations = numIterations + 1
+          currentAllocationCid = newAllocationCid
+          originalAllocationId = newOriginal
+
+    -- | Record a top-up. Called after the operator successfully merges
+    -- a new sender `Allocation` into the chain via V2
+    -- `SettlementFactory_SettleBatch` self-transfer.
+    nonconsuming choice TopUp_Flow_Admin : ContractId StreamFlowAdmin
+      with
+        topUpAmount : Decimal
+        newAllocationCid : Optional Text
+          -- ^ The merged-chain allocation cid (post-batch).
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "TopUp amount must be positive" (topUpAmount > 0.0)
+        archive self
+        create this with
+          currentFundedAmount = currentFundedAmount + topUpAmount
+          currentAllocationCid = newAllocationCid
+
+    -- | Set the pause flag. Operator-only.
+    nonconsuming choice Pause_Flow_Admin : ContractId StreamFlowAdmin
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Stream already paused" (not paused)
+        archive self
+        create this with paused = True
+
+    -- | Clear the pause flag. Operator-only.
+    nonconsuming choice Resume_Flow_Admin : ContractId StreamFlowAdmin
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Stream not paused" paused
+        archive self
+        create this with paused = False
+
+    -- | Mark the stream as cancelled. Same shape as StreamAdmin.Mark_Cancelled.
+    nonconsuming choice Mark_Cancelled_Flow_Admin : ContractId StreamFlowAdmin
+      with
+        cancelTime : Time
+        finalWithdrawn : Decimal
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Final withdrawn cannot exceed funded"
+          (finalWithdrawn <= currentFundedAmount)
+        assertMsg "Final withdrawn must be >= current totalWithdrawn"
+          (finalWithdrawn >= totalWithdrawn)
+        let _ = cancelTime
+        archive self
+        create this with
+          totalWithdrawn = finalWithdrawn
+          status = Cancelled
+          currentAllocationCid = None
+
+    -- | Non-consuming projection for off-chain queries.
+    nonconsuming choice GetStreamFlowAdminInfo : StreamFlowAdminInfo
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == sender || viewer == recipient || viewer == operator
+           || viewer `elem` observers)
+        pure StreamFlowAdminInfo with
+          streamId
+          sender
+          recipient
+          operator
+          currentFundedAmount
+          totalWithdrawn
+          numIterations
+          paused
+          status
+          currentAllocationCid
+          originalAllocationId
+
+-- | Structured projection returned by `GetStreamFlowAdminInfo`.
+data StreamFlowAdminInfo = StreamFlowAdminInfo with
+    streamId : StreamId
+    sender : Party
+    recipient : Party
+    operator : Party
+    currentFundedAmount : Decimal
+    totalWithdrawn : Decimal
+    numIterations : Int
+    paused : Bool
+    status : StreamStatus
+    currentAllocationCid : Optional Text
+    originalAllocationId : Optional Text
+  deriving (Eq, Show)
+
+-- | Helper to construct a fresh StreamFlowAdmin at create time.
+mkStreamFlowAdmin :
+  StreamId
+  -> Party         -- sender
+  -> Party         -- recipient
+  -> Party         -- operator
+  -> InstrumentRef
+  -> Decimal       -- flowRate (tokens/microsecond)
+  -> Time          -- startTime
+  -> Decimal       -- initialFundedAmount
+  -> [Party]       -- observers
+  -> StreamFlowAdmin
+mkStreamFlowAdmin sid s r op ref rate st initialFund obs = StreamFlowAdmin with
+  streamId = sid
+  sender = s
+  recipient = r
+  operator = op
+  instrumentRef = ref
+  flowRate = rate
+  startTime = st
+  currentFundedAmount = initialFund
+  totalWithdrawn = 0.0
+  numIterations = 0
+  paused = False
+  status = Active
+  currentAllocationCid = None
+  originalAllocationId = None
+  observers = obs

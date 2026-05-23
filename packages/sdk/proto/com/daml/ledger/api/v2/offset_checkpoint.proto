@@ -1,0 +1,18 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — Offset checkpoint definitions.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "OffsetCheckpointOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "google/protobuf/timestamp.proto";
+
+message OffsetCheckpoint {
+  string offset = 1;
+  google.protobuf.Timestamp record_time = 2;
+  string domain_id = 3;
+}

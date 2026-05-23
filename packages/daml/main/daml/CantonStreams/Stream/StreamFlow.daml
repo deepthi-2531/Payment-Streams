@@ -1,0 +1,502 @@
+-- | Non-prefunded / rolling top-up streaming.
+--
+-- Where `StreamEscrow` represents a **prefunded** stream with a fixed
+-- total deposit known at creation time, `StreamFlow` represents an
+-- **open-ended** stream with a `flowRate` (tokens per microsecond) and
+-- no fixed end time. The sender maintains a funded balance via `TopUp`;
+-- withdrawals are strictly bounded by the actually-funded balance (no
+-- unsecured credit).
+--
+-- This is the right model for:
+--
+--   * open-ended subscriptions
+--   * recurring infrastructure billing
+--   * ongoing service retainers
+--   * long-lived incentive programs
+--   * metered or usage-shaped recurring payment relationships
+--
+-- ## Accrual semantics
+--
+-- Conceptually, the recipient is owed `flowRate × elapsed` tokens at any
+-- moment. `elapsed` excludes any time the stream was Paused.
+--
+--   accrued(now) = flowRate × elapsed(now)
+--                = flowRate × ((now - startTime) - cumulativePausedDuration(now))
+--
+-- The actually withdrawable amount is bounded by the funded balance:
+--
+--   withdrawable(now) = min(accrued(now), fundedAmount) - totalWithdrawn
+--
+-- When `accrued(now) > fundedAmount`, the gap is the sender's "debt" —
+-- not borrowable on-ledger; the sender clears it by calling `TopUp`.
+-- The library does not extend credit; withdrawals strictly stop at the
+-- funded boundary.
+--
+-- ## Settlement (V2-only iterated allocation — STR-68 + STR-79)
+--
+-- StreamFlow uses **V2 iterated allocation** exclusively: a single
+-- `AllocationV2.Allocation` is created when the stream starts, and
+-- `Allocation_Settle.nextIterationFunding` tops it up for each
+-- subsequent accrual period. `numIterations` tracks the cycle count.
+--
+-- V1 is not supported (STR-79 V2-only decision). Per the spec author's
+-- CIP-0112 update, V2 committed-iterated allocations are the V2
+-- primitive for prefunded/streaming flows. V1 had no iterated
+-- equivalent and was a degraded fallback we chose to drop entirely.
+--
+-- This template implements the V2 AllocationRequest interface so
+-- V2-aware wallets recognize it as a recurring request and the
+-- proxy's TransferEventsV2 subscriber (STR-77) can react.
+module CantonStreams.Stream.StreamFlow where
+
+import qualified DA.Map as Map
+import DA.Time (RelTime, addRelTime, convertRelTimeToMicroseconds, days, microseconds, subTime)
+
+import CantonStreams.Interface.Types
+-- TokenStandardAdapter import removed by STR-102 Phase 2 — its symbols
+-- (TokenStandardEscrowBalance, assertInstrumentRefMatches) aren't used here.
+
+-- AllocationRequest stubs (swap for real Splice DAR imports when STR-65 lands).
+-- V1 stub import removed by the V2-only pivot (STR-79).
+import qualified Splice.Api.Token.AllocationRequestV2 as AR2
+import qualified CantonStreams.Settlement.AllocationBridge as Bridge
+import qualified DA.TextMap as TextMap
+
+------------------------------------------------------------------------
+-- FlowStatus — lifecycle states for a StreamFlow
+------------------------------------------------------------------------
+
+-- | Lifecycle state for a non-prefunded streaming flow.
+data FlowStatus
+  = FlowActive
+    -- ^ Accruing normally. `pausedAt` is None.
+  | FlowPaused
+    -- ^ Accrual halted. `pausedAt` is Some <pause time>. The cumulative
+    --   paused duration grows by (now - pausedAt) and is excluded from
+    --   `elapsed` for accrual purposes.
+  | FlowStopped
+    -- ^ Terminated. No further accrual or top-up; final settlement
+    --   recorded in `totalWithdrawn` and `fundedAmount`.
+  deriving (Eq, Show)
+
+------------------------------------------------------------------------
+-- Accrual helpers
+------------------------------------------------------------------------
+
+-- | Compute elapsed accrual-time in microseconds, excluding pauses.
+--
+-- If the stream is currently Paused, the elapsed clock is frozen at
+-- `pausedAt` (any time since `pausedAt` is added to cumulative paused
+-- duration only when Resume is exercised).
+flowElapsedMicros
+  : Time           -- ^ startTime
+  -> RelTime       -- ^ cumulativePausedDuration (from prior pauses)
+  -> FlowStatus
+  -> Optional Time -- ^ pausedAt (Some when Paused)
+  -> Time          -- ^ now
+  -> Int
+flowElapsedMicros startTime cumulativePaused status pausedAt now =
+  let totalElapsed = convertRelTimeToMicroseconds (subTime now startTime)
+      cumulativePausedMicros = convertRelTimeToMicroseconds cumulativePaused
+      currentPauseMicros = case (status, pausedAt) of
+        (FlowPaused, Some t) -> convertRelTimeToMicroseconds (subTime now t)
+        _ -> 0
+  in totalElapsed - cumulativePausedMicros - currentPauseMicros
+
+-- | Compute accrued amount given flow rate and elapsed accrual-time
+-- (already in microseconds). `flowRate` is tokens-per-microsecond;
+-- multiplied by elapsed microseconds gives total accrued.
+--
+-- [M2 fix] Bound elapsedMicros to Int64 max divided by an expected
+-- multiplier safety factor. Daml LF `Int` is 64-bit. Without an
+-- explicit bound, a stream older than \~292 years overflows Int64.
+-- We pick a conservative bound at 100 years (\~3.15e15 µs) which is
+-- well below Int64 max (\~9.22e18) and gives 60+ years of safety
+-- margin against multiplication overflow in flowRate * elapsedMicros.
+flowAccrued : Decimal -> Int -> Decimal
+flowAccrued flowRate elapsedMicros =
+  -- 100 years in microseconds: 100 * 365.25 * 86400 * 1_000_000
+  let maxElapsedMicros : Int = 3155760000000000
+  in if elapsedMicros <= 0 then 0.0
+     else if elapsedMicros > maxElapsedMicros
+       then error "flowAccrued: elapsedMicros exceeds 100-year bound; stream too old to compute"
+       else flowRate * intToDecimal elapsedMicros
+
+-- | Compute withdrawable amount for a flow stream.
+--
+-- Bounded by both the accrued amount AND the funded balance (no credit
+-- extended). The unfunded portion of accrued is the sender's "debt" and
+-- can only be claimed after a TopUp.
+flowWithdrawable
+  : Decimal  -- ^ accrued
+  -> Decimal -- ^ fundedAmount
+  -> Decimal -- ^ totalWithdrawn
+  -> Decimal
+flowWithdrawable accrued fundedAmount totalWithdrawn =
+  let claimable = min accrued fundedAmount
+  in max 0.0 (claimable - totalWithdrawn)
+
+-- | Compute the sender's outstanding debt — the gap between what's owed
+-- (accrued but not yet funded) and what's actually funded. Always ≥ 0.
+flowDebt : Decimal -> Decimal -> Decimal
+flowDebt accrued fundedAmount =
+  max 0.0 (accrued - fundedAmount)
+
+------------------------------------------------------------------------
+-- AllocationRequest view helpers
+------------------------------------------------------------------------
+
+-- | Iterated-allocation cycle period for view-level `allocateBefore`.
+-- Per plan §7.3, StreamFlow uses iterated AllocationV2: one Allocation
+-- with periodic re-settle via `nextIterationFunding`. The view's
+-- `allocateBefore` describes the NEXT iteration's deadline. We default
+-- to "1 day from stream start"; per-cycle deadlines are recomputed at
+-- exercise time by the SDK (STR-75 `buildAllocationSettle`).
+defaultIterationPeriod : RelTime
+defaultIterationPeriod = days 1
+
+-- | The amount the recipient could claim right now from this StreamFlow
+-- if they exercised Withdraw_Flow. Pure function over contract state
+-- (no `getTime`), so it returns the upper-bound based on funded balance
+-- minus already-withdrawn. The actual amount at exercise time is also
+-- bounded by current accrued — that's enforced by `flowWithdrawable`
+-- in `Withdraw_Flow`.
+flowClaimableUpperBound : Decimal -> Decimal -> Decimal
+flowClaimableUpperBound funded withdrawn = max 0.0 (funded - withdrawn)
+
+------------------------------------------------------------------------
+-- StreamFlow template
+------------------------------------------------------------------------
+
+-- | Non-prefunded streaming contract.
+--
+-- Signatory set: sender, recipient, escrowOperator — same as
+-- TokenStandardEscrow so the off-chain wallet-gateway settlement model
+-- applies identically.
+--
+-- Implements `AllocationRequestV2` per CIP-0112 V2-only (STR-79).
+-- V2 uses iterated allocation (`Allocation_Settle.nextIterationFunding`)
+-- for recurring settlement. V1 was dropped — V1 had no iterated
+-- primitive and would have doubled audit surface for marginal value.
+template StreamFlow
+  with
+    sender : Party
+    recipient : Party
+    escrowOperator : Party
+    streamId : Text
+      -- ^ Caller-supplied unique identifier.
+    instrumentRef : InstrumentRef
+      -- ^ Asset reference (CC, USDCx, any CIP-56 V1 asset).
+    flowRate : Decimal
+      -- ^ Tokens per microsecond. Must be > 0.
+    startTime : Time
+      -- ^ When accrual began.
+    fundedAmount : Decimal
+      -- ^ Cumulative amount funded via creation + top-ups, minus any
+      --   amount returned via Stop.
+    totalWithdrawn : Decimal
+      -- ^ Cumulative amount withdrawn by recipient. Bounded above by
+      --   fundedAmount (no unsecured credit).
+    status : FlowStatus
+    pausedAt : Optional Time
+      -- ^ When the current pause began (None if FlowActive or FlowStopped).
+    cumulativePausedDuration : RelTime
+      -- ^ Total time spent paused across all prior pause/resume cycles.
+      --   Excluded from `elapsed` for accrual.
+    lastSettlementReference : Optional Text
+    numIterations : Int
+      -- ^ V2 iterated-allocation cycle counter — increments each time
+      --   the recipient settles an accrued tranche. V1 paths leave this
+      --   at 0 (no iterated semantics).
+    observers : [Party]
+  where
+    signatory sender, recipient, escrowOperator
+    observer observers
+
+    ensure flowRate > 0.0
+        && fundedAmount >= 0.0
+        && totalWithdrawn >= 0.0
+        && totalWithdrawn <= fundedAmount
+        && numIterations >= 0
+        && (status /= FlowPaused || pausedAt /= None)
+        && (status == FlowPaused || pausedAt == None)
+
+    -- | Sender adds to the funded balance. Always permitted as long as
+    -- the stream is not Stopped. Required to clear any outstanding debt.
+    --
+    -- V2 iterated semantics (STR-68): TopUp_Flow corresponds to the
+    -- executor exercising `Allocation_Settle.nextIterationFunding` with
+    -- an additional amount — i.e. the V2 wallet sees a top-up as the
+    -- next iteration's funding being adjusted upward.
+    nonconsuming choice TopUp_Flow : ContractId StreamFlow
+      with
+        topUpAmount : Decimal
+        settlementReference : Text
+      controller sender, escrowOperator
+      do
+        assertMsg "Stream is stopped; no further top-ups permitted"
+          (status /= FlowStopped)
+        Bridge.requireSettlementReference settlementReference
+        assertMsg "Top-up amount must be positive" (topUpAmount > 0.0)
+
+        archive self
+        create this with
+          fundedAmount = fundedAmount + topUpAmount
+          lastSettlementReference = Some settlementReference
+
+    -- | Recipient withdraws accrued + funded amount.
+    --
+    -- V2 iterated semantics: each Withdraw_Flow increments
+    -- `numIterations` and corresponds to one `Allocation_Settle`
+    -- exercise on the underlying V2 Allocation. The proxy's
+    -- TransferEventsV2 subscriber (STR-77) reacts to the settle event
+    -- and exercises this choice to advance contract state.
+    nonconsuming choice Withdraw_Flow : ContractId StreamFlow
+      with
+        withdrawTime : Time
+        settlementReference : Text
+      controller recipient, escrowOperator
+      do
+        assertMsg "Stream is stopped; no further withdrawals permitted"
+          (status /= FlowStopped)
+        Bridge.requireSettlementReference settlementReference
+
+        let elapsedMicros = flowElapsedMicros startTime cumulativePausedDuration
+                              status pausedAt withdrawTime
+            accrued = flowAccrued flowRate elapsedMicros
+            amount = flowWithdrawable accrued fundedAmount totalWithdrawn
+
+        assertMsg "Nothing withdrawable (either no accrual yet or funded balance exhausted)"
+          (amount > 0.0)
+
+        archive self
+        create this with
+          totalWithdrawn = totalWithdrawn + amount
+          lastSettlementReference = Some settlementReference
+          numIterations = numIterations + 1
+
+    -- | Sender pauses the stream. Accrual stops at the pause time.
+    --
+    -- V2 mapping (per plan §7.3): pause corresponds to
+    -- `AllocationAction.AA_Custom { id = "pause" }` on the underlying
+    -- V2 Allocation. The custom-action surface is exposed to V2 wallets
+    -- via the AllocationRequest_View metadata; V1 wallets fall back to
+    -- the native Pause_Flow choice.
+    nonconsuming choice Pause_Flow : ContractId StreamFlow
+      with
+        pauseTime : Time
+      controller sender
+      do
+        assertMsg "Stream must be active to pause" (status == FlowActive)
+        archive self
+        create this with
+          status = FlowPaused
+          pausedAt = Some pauseTime
+
+    -- | Sender resumes the stream. Cumulative paused duration is
+    -- updated; subsequent accrual proceeds normally.
+    --
+    -- V2 mapping: `AllocationAction.AA_Custom { id = "resume" }`.
+    nonconsuming choice Resume_Flow : ContractId StreamFlow
+      with
+        resumeTime : Time
+      controller sender
+      do
+        assertMsg "Stream must be paused to resume" (status == FlowPaused)
+        pauseStart <- case pausedAt of
+          Some t -> pure t
+          None -> abort "Invariant violation: FlowPaused but pausedAt is None"
+        assertMsg "Resume time must be at or after pause time"
+          (resumeTime >= pauseStart)
+        let thisPauseMicros = convertRelTimeToMicroseconds (subTime resumeTime pauseStart)
+            cumulativeMicros = convertRelTimeToMicroseconds cumulativePausedDuration
+            newCumulative = microseconds (cumulativeMicros + thisPauseMicros)
+        archive self
+        create this with
+          status = FlowActive
+          pausedAt = None
+          cumulativePausedDuration = newCumulative
+
+    -- | Mutual termination. Final accrual is computed at `stopTime`;
+    -- recipient is owed `withdrawable`, sender gets any remaining funded
+    -- balance back. Settlement happens off-chain; references are recorded.
+    --
+    -- After Stop, no further withdraw/top-up is permitted on this contract.
+    --
+    -- V2 mapping: corresponds to `Allocation_Cancel` on the iterated
+    -- Allocation. The cancel-and-refund flow is symmetric: the recipient
+    -- claims their accrued tranche via one final settle, then the
+    -- sender's remaining funding is returned.
+    nonconsuming choice Stop_Flow : ContractId StreamFlow
+      with
+        stopTime : Time
+        recipientSettlement : Decimal
+        senderRefund : Decimal
+        recipientSettlementReference : Optional Text
+        senderRefundReference : Optional Text
+      controller sender, recipient, escrowOperator
+      do
+        assertMsg "Stream already stopped" (status /= FlowStopped)
+        assertMsg "Recipient settlement must be non-negative" (recipientSettlement >= 0.0)
+        assertMsg "Sender refund must be non-negative" (senderRefund >= 0.0)
+        -- [M1 fix] Bound stopTime to ledger time. Without this, controllers
+        -- could supply a future-dated stopTime to inflate `owedToRecipient`
+        -- (the accrued amount is computed at `stopTime` not `getTime`).
+        -- All three controllers must collude for the choice to exercise, but
+        -- the contract should still defensively enforce stopTime <= now.
+        now <- getTime
+        assertMsg "stopTime must be at or before ledger time" (stopTime <= now)
+
+        let elapsedMicros = flowElapsedMicros startTime cumulativePausedDuration
+                              status pausedAt stopTime
+            accrued = flowAccrued flowRate elapsedMicros
+            owedToRecipient = flowWithdrawable accrued fundedAmount totalWithdrawn
+            remainingFunded = max 0.0 (fundedAmount - totalWithdrawn - owedToRecipient)
+
+        assertMsg "Recipient settlement must match the owed-but-unwithdrawn amount"
+          (recipientSettlement == owedToRecipient)
+        assertMsg "Sender refund must match the remaining funded balance"
+          (senderRefund == remainingFunded)
+
+        let lastRef = case senderRefundReference of
+              Some ref -> Some ref
+              None -> case recipientSettlementReference of
+                Some ref -> Some ref
+                None -> lastSettlementReference
+
+        archive self
+        create this with
+          status = FlowStopped
+          pausedAt = None
+          totalWithdrawn = totalWithdrawn + owedToRecipient
+          fundedAmount = totalWithdrawn + owedToRecipient
+          lastSettlementReference = lastRef
+
+    -- | Read-only view of current flow state (computes accrued at query time).
+    nonconsuming choice GetFlowInfo : FlowView
+      with
+        viewer : Party
+        queryTime : Time
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == sender || viewer == recipient
+            || viewer == escrowOperator || viewer `elem` observers)
+        let elapsedMicros = flowElapsedMicros startTime cumulativePausedDuration
+                              status pausedAt queryTime
+            accrued = flowAccrued flowRate elapsedMicros
+            withdrawable = flowWithdrawable accrued fundedAmount totalWithdrawn
+            debt = flowDebt accrued fundedAmount
+        pure FlowView with
+          streamId
+          sender
+          recipient
+          flowRate
+          startTime
+          fundedAmount
+          totalWithdrawn
+          status
+          accrued
+          withdrawable
+          debt
+
+    --------------------------------------------------------------------
+    -- CIP-0112 § 5 dual-interface: AllocationRequest V1 + V2
+    --------------------------------------------------------------------
+    -- CIP-0112 V2 AllocationRequest interface (V2-only per STR-79)
+    --------------------------------------------------------------------
+    -- StreamFlow exposes the V2 AllocationRequest shape so V2 wallets
+    -- recognize the recurring stream. V2 wallets use the view's
+    -- iterated-allocation hints (numIterations, nextSettleBefore in
+    -- meta) to drive `Allocation_Settle` with `nextIterationFunding`.
+    --
+    -- V1 was removed per the V2-only pivot (STR-79). V1 had no
+    -- iterated-allocation primitive — per-period AllocationRequestV1
+    -- emission was a degraded fallback that doubled audit surface for
+    -- marginal value.
+
+    interface instance AR2.AllocationRequest for StreamFlow where
+      -- Real V2 interface impl signature is 2-arg: ContractId + choice record.
+      allocationRequest_acceptImpl _ _ = do
+        abort "AllocationRequest_Accept V2 not yet wired on StreamFlow — use Withdraw_Flow (lifecycle migration in STR-87; iterated Allocation_Settle target)"
+      allocationRequest_rejectImpl _ _ = do
+        abort "AllocationRequest_Reject V2 not yet wired on StreamFlow — use Stop_Flow"
+      allocationRequest_withdrawImpl _ _ = do
+        abort "AllocationRequest_Withdraw V2 not yet wired on StreamFlow — use Stop_Flow as escrow operator"
+      -- ExtraObservers: no additional disclosure needed; request
+      -- signatories (sender + recipient + escrowOperator) see everything.
+      allocationRequest_acceptExtraObservers _ = []
+      allocationRequest_rejectExtraObservers _ = []
+      allocationRequest_withdrawExtraObservers _ = []
+
+      view =
+        let claimable = flowClaimableUpperBound fundedAmount totalWithdrawn
+            authorizerAcc = Bridge.escrowOperatorAccount escrowOperator
+            recipientAcc = Bridge.streamRecipientAccount recipient
+            instrumentIdText = instrumentRef.instrumentId
+            admin = instrumentRef.issuer
+            legId = streamId <> ":flow-leg-" <> show numIterations
+            -- StreamFlow uses iterated allocation per plan §7.3:
+            -- nextIterationFunding tells V2 wallets that this is a
+            -- recurring stream; the value is keyed by instrumentId.
+            -- We use the same instrumentIdText as the funding key.
+            nextFunding = Some (TextMap.fromList [(instrumentIdText, claimable)])
+            spec = Bridge.buildSimpleSpec
+              admin
+              authorizerAcc
+              recipientAcc
+              legId
+              claimable
+              instrumentIdText
+              (Some (addRelTime startTime defaultIterationPeriod))  -- settlementDeadline
+              False                                                 -- committed (open-ended flow)
+              nextFunding
+              Bridge.emptyMeta
+            settlement = Bridge.buildSettlementInfoV2
+              [escrowOperator]
+              (streamId <> ":v2-flow-cycle-" <> show numIterations)
+              Bridge.emptyMeta
+            -- StreamFlow exposes pause / resume / topUp as ARA_Custom
+            -- actions in the availableActions map per plan §7.3.
+            customActions =
+              [ (Bridge.buildCustomAction "pause",  [[sender]])
+              , (Bridge.buildCustomAction "resume", [[sender]])
+              , (Bridge.buildCustomAction "topUp",  [[sender, escrowOperator]])
+              ]
+            actions = Map.union
+              (Bridge.streamWithdrawalActions recipient)
+              (Map.fromList customActions)
+        in Bridge.buildV2View
+            settlement
+            [spec]
+            startTime                                             -- requestedAt
+            (Some (addRelTime startTime defaultIterationPeriod))  -- settleAt
+            actions
+            (Bridge.metaFromList
+              [ ("streamId", streamId)
+              , ("streamFlowStatus", show status)
+              , ("flowRate", show flowRate)
+              , ("iterated", "true")
+              , ("numIterations", show numIterations)
+              ])
+
+------------------------------------------------------------------------
+-- FlowView — read-only snapshot
+------------------------------------------------------------------------
+
+-- | Snapshot of a StreamFlow's state at a given query time, including
+-- computed accrued, withdrawable, and any outstanding sender debt.
+data FlowView = FlowView with
+    streamId : Text
+    sender : Party
+    recipient : Party
+    flowRate : Decimal
+    startTime : Time
+    fundedAmount : Decimal
+    totalWithdrawn : Decimal
+    status : FlowStatus
+    accrued : Decimal
+    withdrawable : Decimal
+    debt : Decimal
+      -- ^ accrued - fundedAmount; positive means sender owes a top-up.
+  deriving (Eq, Show)

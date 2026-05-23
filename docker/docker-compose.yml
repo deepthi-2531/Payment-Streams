@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  # Canton sandbox participant node
+  canton:
+    build:
+      context: .
+      dockerfile: Dockerfile.canton
+    ports:
+      - "6865:6865"   # Ledger API (gRPC)
+      - "7575:7575"   # JSON API (optional, Phase 3)
+      - "10011:10011" # Admin API
+    volumes:
+      - canton-data:/canton/data
+      - ../packages/daml:/daml-packages:ro
+    environment:
+      - CANTON_LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "grpcurl", "-plaintext", "localhost:6865", "grpc.health.v1.Health/Check"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  # Dashboard web UI
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+    ports:
+      - "3000:80"
+    depends_on:
+      canton:
+        condition: service_healthy
+    environment:
+      - VITE_CANTON_HOST=canton
+      - VITE_CANTON_PORT=6865
+
+volumes:
+  canton-data:

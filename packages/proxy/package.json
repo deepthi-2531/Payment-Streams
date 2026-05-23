@@ -1,0 +1,28 @@
+{
+  "name": "@canton-streams/proxy",
+  "version": "0.2.7",
+  "private": true,
+  "description": "REST proxy bridging the browser dashboard to the Node gRPC SDK",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@canton-streams/sdk": "workspace:*",
+    "cors": "2.8.5",
+    "decimal.js": "10.6.0",
+    "express": "5.1.0",
+    "jose": "^6.2.1"
+  },
+  "devDependencies": {
+    "@types/cors": "2.8.17",
+    "@types/express": "5.0.3",
+    "@types/node": "22.14.0",
+    "tsx": "4.19.4",
+    "typescript": "5.9.3"
+  }
+}

@@ -1,0 +1,152 @@
+-- | CIP-56 Holding Adapter — production settlement via Daml Finance interfaces.
+--
+-- This module provides holding-based token operations for production
+-- settlement of Canton Payment Streams. It bridges StreamEscrow lifecycle
+-- choices to the Daml Finance Holding interfaces:
+--
+--   - Fungible.Split  — divide a holding into (withdrawn, remainder)
+--   - Fungible.Merge  — combine multiple holdings into one
+--   - Transferable.Transfer — move a holding to a different account
+--
+-- Unlike the numeric Adapter (phase 1 testing), every operation here
+-- exercises on-ledger choices and returns Update, because actual holding
+-- contracts are created, archived, and transferred.
+--
+-- Design: Direct holding manipulation for bilateral streams. We do not
+-- use the full Settlement factory pipeline — that is for multi-leg
+-- settlement scenarios which payment streams do not require.
+--
+-- Prerequisites:
+--   - Daml Finance library DARs must be on the classpath
+--   - Holding contracts must already exist (created via custody workflow)
+--   - Accounts must be provisioned in the Daml Finance account factory
+module CantonStreams.Settlement.HoldingAdapter where
+
+import Daml.Finance.Interface.Holding.Fungible qualified as Fungible
+import Daml.Finance.Interface.Holding.Transferable qualified as Transferable
+import Daml.Finance.Interface.Holding.Base qualified as Holding
+import Daml.Finance.Interface.Types.Common.Types (InstrumentKey, AccountKey)
+
+-- | Represents a token holding locked in escrow, backed by an actual
+-- Daml Finance Fungible holding contract.
+--
+-- The holdingCid references the on-ledger Fungible.I contract that
+-- custodies the escrowed tokens. The amount and owner fields mirror
+-- the holding's quantity and owner for convenience (avoiding extra
+-- fetches in accrual calculations).
+data HoldingEscrow = HoldingEscrow with
+    holdingCid : ContractId Fungible.I
+      -- ^ Reference to the on-ledger Fungible holding contract.
+    amount : Decimal
+      -- ^ Quantity of tokens in escrow (mirrors holding quantity).
+    owner : Party
+      -- ^ Current owner of the escrowed holding.
+    account : AccountKey
+      -- ^ Account where the holding is custodied.
+  deriving (Eq, Show)
+
+-- | Split a holding into two parts: (withdrawn, remainder).
+--
+-- Exercises Fungible.Split on the holding contract to produce two new
+-- holdings: one for the withdrawn amount and one for the remainder.
+-- The original holding is consumed (archived) by the Split choice.
+--
+-- Returns: Update (withdrawnEscrow, remainderEscrow)
+--
+-- Precondition: splitAmount <= escrow.amount
+-- Postcondition: withdrawn.amount + remainder.amount == original.amount
+--
+-- Fails with: "Insufficient escrow balance for split" if splitAmount
+-- exceeds the holding balance.
+splitHolding : HoldingEscrow -> Decimal -> Update (HoldingEscrow, HoldingEscrow)
+splitHolding escrow splitAmount = do
+  assertMsg "Insufficient escrow balance for split"
+    (splitAmount <= escrow.amount)
+  assertMsg "Split amount must be positive"
+    (splitAmount > 0.0)
+
+  -- Exercise Fungible.Split to divide the holding.
+  -- Split returns ([splitCids], remainderCid) where splitCids contains
+  -- holdings for the requested amounts and remainderCid is the leftover.
+  Fungible.SplitResult splitCids remainderCid <-
+    exercise escrow.holdingCid Fungible.Split with
+      amounts = [splitAmount]
+
+  -- splitCids should contain exactly one holding for the requested amount
+  let withdrawnCid = case splitCids of
+        [cid] -> cid
+        _ -> error "Unexpected split result: expected exactly one split holding"
+
+  let withdrawnEscrow = HoldingEscrow with
+        holdingCid = withdrawnCid
+        amount = splitAmount
+        owner = escrow.owner
+        account = escrow.account
+
+  let remainderEscrow = HoldingEscrow with
+        holdingCid = remainderCid
+        amount = escrow.amount - splitAmount
+        owner = escrow.owner
+        account = escrow.account
+
+  pure (withdrawnEscrow, remainderEscrow)
+
+-- | Transfer a holding to a recipient's account.
+--
+-- Exercises Transferable.Transfer on the holding contract to move it
+-- to the recipient's account. The original holding is consumed and a
+-- new holding is created in the recipient's account.
+--
+-- Returns: Update HoldingEscrow with the new holding reference and
+-- updated owner/account fields.
+--
+-- The caller must ensure the holding's Transferable interface is
+-- accessible (i.e., the holding template implements Transferable).
+settleTransfer : HoldingEscrow -> AccountKey -> Party -> Update HoldingEscrow
+settleTransfer escrow recipientAccount recipient = do
+  -- Coerce the Fungible interface reference to Transferable for transfer.
+  -- Daml Finance holdings implement both interfaces on the same contract.
+  let transferableCid = coerceInterfaceContractId @Transferable.I escrow.holdingCid
+
+  newHoldingCid <- exercise transferableCid Transferable.Transfer with
+    actors = fromList [escrow.owner, recipient]
+    newOwnerAccount = recipientAccount
+
+  -- Coerce back to Fungible for continued escrow tracking
+  let newFungibleCid = coerceInterfaceContractId @Fungible.I newHoldingCid
+
+  pure HoldingEscrow with
+    holdingCid = newFungibleCid
+    amount = escrow.amount
+    owner = recipient
+    account = recipientAccount
+
+-- | Merge two holdings into a single holding.
+--
+-- Exercises Fungible.Merge on the first holding, passing the second
+-- as the holding to merge into. Both input holdings are consumed and
+-- a single combined holding is created.
+--
+-- Returns: Update HoldingEscrow with the merged holding reference.
+--
+-- Precondition: Both holdings must be in the same account with the
+-- same owner and instrument. The Daml Finance Merge choice enforces
+-- this on-ledger.
+mergeHoldings : HoldingEscrow -> HoldingEscrow -> Update HoldingEscrow
+mergeHoldings primary other = do
+  assertMsg "Cannot merge holdings with different owners"
+    (primary.owner == other.owner)
+
+  mergedCid <- exercise primary.holdingCid Fungible.Merge with
+    fungibleCids = [other.holdingCid]
+
+  pure HoldingEscrow with
+    holdingCid = mergedCid
+    amount = primary.amount + other.amount
+    owner = primary.owner
+    account = primary.account
+
+-- | Get the amount from a holding escrow.
+-- Convenience accessor mirroring the numeric adapter's interface.
+getHoldingAmount : HoldingEscrow -> Decimal
+getHoldingAmount escrow = escrow.amount

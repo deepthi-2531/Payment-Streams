@@ -1,0 +1,212 @@
+-- | LocalAssetEscrow — active stream backed by a generic Daml Finance holding.
+--
+-- This template uses the generic HoldingAdapter (Fungible.I / Transferable.I)
+-- for custody operations, making it compatible with ANY Daml Finance-compliant
+-- holding — not just Utility Registry or AMM-specific ones.
+--
+-- Lifecycle choices (Withdraw, Cancel, MutualCancel, Renew) delegate to
+-- HoldingAdapter.splitHolding, settleTransfer, and mergeHoldings for real
+-- on-ledger token movement.
+--
+-- Prerequisites:
+--   - Daml Finance library DARs on the classpath
+--   - Holding contracts implementing Fungible.I and Transferable.I
+--   - Accounts provisioned in the Daml Finance account factory
+--
+-- This file lives in daml-finance-deferred/ because it depends on Daml
+-- Finance DARs which are not always on the classpath (e.g., in local dev
+-- without Finance DARs). Move to the main daml/ tree once Finance DARs
+-- are vendored as standard dependencies.
+module CantonStreams.Stream.LocalAssetEscrow where
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (CancelResult(..), StreamView(..), WithdrawResult(..))
+import CantonStreams.Settlement.HoldingAdapter
+import CantonStreams.Stream.Accrual
+import Daml.Finance.Interface.Types.Common.Types (AccountKey)
+
+computeAccrued : StreamConfig -> Time -> Decimal
+computeAccrued cfg now = case cfg.vestingMode of
+  Linear ->
+    linearAccrual cfg.totalDeposited cfg.startTime cfg.endTime now
+  CliffLinear cliffTime ->
+    cliffLinearAccrual cfg.totalDeposited cfg.startTime cfg.endTime cliffTime now
+  Stepped stepInterval amountPerStep ->
+    steppedAccrual cfg.totalDeposited cfg.startTime stepInterval amountPerStep now
+  RenewableTerm _ ->
+    linearAccrual cfg.totalDeposited cfg.startTime cfg.endTime now
+
+isRenewable : VestingMode -> Bool
+isRenewable (RenewableTerm _) = True
+isRenewable _ = False
+
+-- | Active local-asset escrow backed by a generic Daml Finance Fungible holding.
+template LocalAssetEscrow
+  with
+    config : StreamConfig
+    state : StreamState
+    escrow : HoldingEscrow          -- ^ From HoldingAdapter — wraps ContractId Fungible.I
+    escrowOperator : Party
+    recipientAccount : AccountKey   -- ^ Recipient's Daml Finance account
+    observers : [Party]
+  where
+    signatory config.sender, config.recipient, escrowOperator
+    observer observers
+
+    ensure config.totalDeposited > 0.0
+      && config.startTime < config.endTime
+      && state.totalWithdrawn >= 0.0
+      && state.totalWithdrawn <= config.totalDeposited
+      && escrow.amount >= 0.0
+
+    -- | Withdraw accrued tokens to the recipient's account.
+    nonconsuming choice Withdraw_LocalAsset : WithdrawResult
+      with
+        withdrawTime : Time
+      controller config.recipient
+      do
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued config withdrawTime
+            amount = withdrawable accrued state.totalWithdrawn
+
+        assertMsg "Nothing to withdraw" (amount > 0.0)
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
+        -- Split the escrow holding: (withdrawn portion, remainder)
+        (withdrawnEscrow, remainderEscrow) <- splitHolding escrow amount
+
+        -- Transfer the withdrawn portion to recipient's account
+        _ <- settleTransfer withdrawnEscrow recipientAccount config.recipient
+
+        let newTotalWithdrawn = state.totalWithdrawn + amount
+            newStatus = if newTotalWithdrawn >= config.totalDeposited
+              then Completed
+              else Active
+
+        archive self
+        create this with
+          state = state with
+            totalWithdrawn = newTotalWithdrawn
+            status = newStatus
+            lastWithdrawTime = Some withdrawTime
+          escrow = remainderEscrow
+
+        pure WithdrawResult with
+          amountWithdrawn = amount
+          newTotalWithdrawn
+          newStatus
+
+    -- | Cancel the stream. Sender-only, stream must be cancellable.
+    nonconsuming choice Cancel_LocalAsset : CancelResult
+      with
+        cancelTime : Time
+      controller config.sender
+      do
+        assertMsg "Stream not cancellable" config.cancellable
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued config cancelTime
+            recipientAmount = max 0.0 (accrued - state.totalWithdrawn)
+            senderRefundAmount = max 0.0 (config.totalDeposited - accrued)
+
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
+        -- If recipient is owed accrued tokens, split and transfer
+        if recipientAmount > 0.0 then do
+          (recipientEscrow, remainderEscrow) <- splitHolding escrow recipientAmount
+          _ <- settleTransfer recipientEscrow recipientAccount config.recipient
+          -- Return remainder to sender
+          _ <- settleTransfer remainderEscrow escrow.account config.sender
+          pure ()
+        else do
+          -- Return entire escrow to sender
+          _ <- settleTransfer escrow escrow.account config.sender
+          pure ()
+
+        archive self
+        create this with
+          state = state with
+            status = Cancelled
+            totalWithdrawn = accrued
+          escrow = escrow with amount = 0.0
+
+        pure CancelResult with
+          recipientAmount
+          senderRefund = senderRefundAmount
+
+    -- | Mutual cancellation — both parties agree. No cancellable flag needed.
+    nonconsuming choice MutualCancel_LocalAsset : CancelResult
+      with
+        cancelTime : Time
+      controller config.sender, config.recipient
+      do
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued config cancelTime
+            recipientAmount = max 0.0 (accrued - state.totalWithdrawn)
+            senderRefundAmount = max 0.0 (config.totalDeposited - accrued)
+
+        if recipientAmount > 0.0 then do
+          (recipientEscrow, remainderEscrow) <- splitHolding escrow recipientAmount
+          _ <- settleTransfer recipientEscrow recipientAccount config.recipient
+          _ <- settleTransfer remainderEscrow escrow.account config.sender
+          pure ()
+        else do
+          _ <- settleTransfer escrow escrow.account config.sender
+          pure ()
+
+        archive self
+        create this with
+          state = state with
+            status = Cancelled
+            totalWithdrawn = accrued
+          escrow = escrow with amount = 0.0
+
+        pure CancelResult with
+          recipientAmount
+          senderRefund = senderRefundAmount
+
+    -- | Renew a renewable-term stream with additional deposit.
+    nonconsuming choice Renew_LocalAsset : ContractId LocalAssetEscrow
+      with
+        additionalDeposit : Decimal
+        newEndTime : Time
+        additionalEscrow : HoldingEscrow  -- ^ Additional funding holding
+      controller config.sender
+      do
+        assertMsg "Not a renewable stream" (isRenewable config.vestingMode)
+        assertMsg "Stream must be active or completed" (state.status `elem` [Active, Completed])
+        assertMsg "Additional deposit must be positive" (additionalDeposit > 0.0)
+        assertMsg "New end time must be after current end" (newEndTime > config.endTime)
+        assertMsg "Additional holding amount is smaller than requested renewal"
+          (additionalEscrow.amount >= additionalDeposit)
+
+        -- Merge additional holding into escrow
+        mergedEscrow <- mergeHoldings escrow additionalEscrow
+
+        archive self
+        create this with
+          config = config with
+            totalDeposited = config.totalDeposited + additionalDeposit
+            endTime = newEndTime
+          state = state with
+            status = Active
+            renewalCount = state.renewalCount + 1
+          escrow = mergedEscrow
+
+    -- | Non-consuming query for current stream state.
+    nonconsuming choice GetLocalAssetStreamInfo : StreamView
+      with
+        viewer : Party
+        queryTime : Time
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == config.sender || viewer == config.recipient || viewer `elem` observers)
+        let _ = computeAccrued config queryTime
+        pure StreamView with
+          config
+          state

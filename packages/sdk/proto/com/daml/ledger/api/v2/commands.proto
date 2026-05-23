@@ -1,0 +1,91 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — Commands message definitions.
+// Field numbers match Canton 3.4.11+ server reflection.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "CommandsOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/value.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+// A composite command that groups multiple individual commands.
+// Field numbers from Canton 3.4.11+ server reflection.
+message Commands {
+  string workflow_id = 1;
+  string user_id = 2;
+  string command_id = 3;
+  repeated Command commands = 4;
+  oneof deduplication_period {
+    google.protobuf.Duration deduplication_duration = 5;
+    int64 deduplication_offset = 6;
+  }
+  google.protobuf.Timestamp min_ledger_time_abs = 7;
+  google.protobuf.Duration min_ledger_time_rel = 8;
+  repeated string act_as = 9;
+  repeated string read_as = 10;
+  string submission_id = 11;
+  repeated DisclosedContract disclosed_contracts = 12;
+  string synchronizer_id = 13;
+  repeated string package_id_selection_preference = 14;
+  repeated PrefetchContractKey prefetch_contract_keys = 15;
+}
+
+// An individual ledger command.
+// Field numbers from Canton 3.4.11+ server reflection.
+message Command {
+  oneof command {
+    CreateCommand create = 1;
+    ExerciseCommand exercise = 2;
+    CreateAndExerciseCommand create_and_exercise = 3;
+    ExerciseByKeyCommand exercise_by_key = 4;
+  }
+}
+
+// Create a new contract instance.
+message CreateCommand {
+  Identifier template_id = 1;
+  Record create_arguments = 2;
+}
+
+// Exercise a choice on an existing contract.
+message ExerciseCommand {
+  Identifier template_id = 1;
+  string contract_id = 2;
+  string choice = 3;
+  Value choice_argument = 4;
+}
+
+// Exercise a choice on a contract identified by its key.
+message ExerciseByKeyCommand {
+  Identifier template_id = 1;
+  Value contract_key = 2;
+  string choice = 3;
+  Value choice_argument = 4;
+}
+
+// Create a contract and immediately exercise a choice on it.
+message CreateAndExerciseCommand {
+  Identifier template_id = 1;
+  Record create_arguments = 2;
+  string choice = 3;
+  Value choice_argument = 4;
+}
+
+// A disclosed contract used in command interpretation.
+message DisclosedContract {
+  Identifier template_id = 1;
+  string contract_id = 2;
+  bytes created_event_blob = 3;
+}
+
+// Prefetch contract key hint.
+message PrefetchContractKey {
+  Identifier template_id = 1;
+  Value contract_key = 2;
+}

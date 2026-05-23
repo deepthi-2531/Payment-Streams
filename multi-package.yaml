@@ -1,0 +1,5 @@
+packages:
+  - packages/daml/interfaces
+  - packages/daml/main
+  - packages/daml/test
+  - packages/daml/scripts

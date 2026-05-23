@@ -1,0 +1,370 @@
+-- | Daml-script tests for DelegatedPolicy's on-ledger enforcement paths.
+--
+-- Each test exercises one specific enforcement rule from
+-- `CantonStreams.Policy.DelegatedPolicy.ExecutePolicy`. The tests
+-- collectively serve as the M3 audit-readiness evidence that the
+-- delegated-execution contract enforces what it claims to enforce
+-- entirely on-ledger (no off-chain trust required).
+--
+-- Enforcement paths exercised:
+--
+--   1. Policy must be active (rejects revoked policies)
+--   2. Policy must not be expired (rejects after expiresAt)
+--   3. Action must be in allowedActions (rejects disallowed actions)
+--   4. Target stream must match streamFilters (rejects out-of-scope)
+--   5. Amount must not exceed maxAmountPerExecution
+--   6. Cooldown must have elapsed (rejects rapid-fire executions)
+--   7. Period rate cap not exceeded
+--   8. PolicyExecutionState archive-and-recreate updates counters
+--   9. ExecutionLog emitted on successful execution
+module Test.Policy.DelegatedPolicyEnforcement where
+
+import Daml.Script
+import DA.Time (days, time, hours)
+import DA.Date (date, Month(..))
+
+import CantonStreams.Policy.Types
+import CantonStreams.Policy.DelegatedPolicy
+
+------------------------------------------------------------------------
+-- Setup helpers
+------------------------------------------------------------------------
+
+-- | Standard rate limit used across tests. Permissive defaults so each
+-- test can focus on one rule at a time. Per-test overrides where needed.
+defaultRateLimit : RateLimit
+defaultRateLimit = RateLimit with
+  maxExecutionsPerPeriod = 10
+  periodDuration = 3600000000  -- 1 hour in microseconds
+  maxAmountPerExecution = 1000.0
+  cooldownInterval = 0          -- no cooldown by default
+
+-- | Allocate the standard set of test parties.
+allocateTestParties : Script (Party, Party, Party, Party)
+allocateTestParties = do
+  sender <- allocateParty "Sender"
+  recipient <- allocateParty "Recipient"
+  executor <- allocateParty "Executor"
+  escrowOperator <- allocateParty "EscrowOperator"
+  pure (sender, recipient, executor, escrowOperator)
+
+-- | Create a fresh DelegatedPolicy + initial PolicyExecutionState.
+setupPolicy
+  : Party -> Party -> Party -> Party
+  -> Text                  -- ^ policyId
+  -> [DelegatedAction]     -- ^ allowedActions
+  -> [Text]                -- ^ streamFilters
+  -> RateLimit
+  -> Time                  -- ^ createdAt
+  -> Time                  -- ^ expiresAt
+  -> Script (ContractId DelegatedPolicy, ContractId PolicyExecutionState)
+setupPolicy sender recipient executor escrowOperator
+            policyId allowed filters rateLimit createdAt expiresAt = do
+  policyCid <- submitMulti [sender, recipient, executor] [] do
+    createCmd DelegatedPolicy with
+      policyId
+      sender
+      recipient
+      executor
+      escrowOperator
+      allowedActions = allowed
+      rateLimit
+      streamFilters = filters
+      active = True
+      expiresAt
+      createdAt
+
+  stateCid <- submitMulti [sender, executor] [] do
+    createCmd PolicyExecutionState with
+      policyId
+      sender
+      executor
+      recipient   -- [M5] state visibility for recipient as observer
+      totalExecutions = 0
+      lastExecutionTime = None
+      recentExecutions = []
+
+  pure (policyCid, stateCid)
+
+------------------------------------------------------------------------
+-- 1. active = false rejects
+------------------------------------------------------------------------
+
+testRevokedPolicyRejects : Script ()
+testRevokedPolicyRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p1" [DelegateWithdraw] [] defaultRateLimit start expires
+
+  -- Revoke the policy.
+  revokedCid <- submit sender do
+    exerciseCmd policyCid RevokePolicy
+
+  -- Attempt to execute against the revoked policy — must fail.
+  submitMustFail executor do
+    exerciseCmd revokedCid ExecutePolicy with
+      executionId = "e1"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 2. expired policy rejects
+------------------------------------------------------------------------
+
+testExpiredPolicyRejects : Script ()
+testExpiredPolicyRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Feb 1) 0 0 0
+      afterExpiry = time (date 2026 Mar 1) 0 0 0
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p2" [DelegateWithdraw] [] defaultRateLimit start expires
+
+  -- Fast-forward past expiry.
+  setTime afterExpiry
+
+  submitMustFail executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e2"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 3. action not in allowedActions rejects
+------------------------------------------------------------------------
+
+testDisallowedActionRejects : Script ()
+testDisallowedActionRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+  setTime start
+
+  -- Policy only allows DelegateCancel; we attempt DelegateWithdraw.
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p3" [DelegateCancel] [] defaultRateLimit start expires
+
+  submitMustFail executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e3"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 4. stream not in streamFilters rejects
+------------------------------------------------------------------------
+
+testStreamOutOfScopeRejects : Script ()
+testStreamOutOfScopeRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+  setTime start
+
+  -- Policy scope: ["stream-a", "stream-b"]; we attempt "stream-z".
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p4" [DelegateWithdraw] ["stream-a", "stream-b"] defaultRateLimit start expires
+
+  submitMustFail executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e4"
+      currentStateCid = stateCid
+      targetStreamId = "stream-z"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 5. amount > maxAmountPerExecution rejects
+------------------------------------------------------------------------
+
+testAmountCapRejects : Script ()
+testAmountCapRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+      tightLimit = defaultRateLimit with maxAmountPerExecution = 50.0
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p5" [DelegateWithdraw] [] tightLimit start expires
+
+  -- Amount 100 exceeds cap 50.
+  submitMustFail executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e5"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 6. cooldown not elapsed rejects
+------------------------------------------------------------------------
+
+testCooldownNotElapsedRejects : Script ()
+testCooldownNotElapsedRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+      cooldownLimit = defaultRateLimit with
+        cooldownInterval = 3600000000  -- 1 hour
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p6" [DelegateWithdraw] [] cooldownLimit start expires
+
+  -- First execution succeeds; second too soon after should fail.
+  (newStateCid, _) <- submit executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e6a"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  -- Only 30 minutes pass — cooldown is 1 hour
+  let halfHourLater = time (date 2026 Jan 1) 0 30 0
+  setTime halfHourLater
+
+  submitMustFail executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e6b"
+      currentStateCid = newStateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 7. period rate cap exceeded rejects
+------------------------------------------------------------------------
+
+testPeriodRateCapRejects : Script ()
+testPeriodRateCapRejects = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+      tightRate = defaultRateLimit with
+        maxExecutionsPerPeriod = 2
+        periodDuration = 3600000000  -- 1 hour
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p7" [DelegateWithdraw] [] tightRate start expires
+
+  -- First execution
+  (state2, _) <- submit executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e7a"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  -- Second execution
+  setTime (time (date 2026 Jan 1) 0 5 0)
+  (state3, _) <- submit executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e7b"
+      currentStateCid = state2
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  -- Third execution within the same hour exceeds the cap.
+  setTime (time (date 2026 Jan 1) 0 10 0)
+  submitMustFail executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e7c"
+      currentStateCid = state3
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  pure ()
+
+------------------------------------------------------------------------
+-- 8. successful execution updates PolicyExecutionState
+------------------------------------------------------------------------
+
+testSuccessfulExecutionUpdatesState : Script ()
+testSuccessfulExecutionUpdatesState = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p8" [DelegateWithdraw] [] defaultRateLimit start expires
+
+  (newStateCid, _logCid) <- submit executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e8"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  -- Fetch the new state and verify counters updated.
+  newState <- queryContractId executor newStateCid
+  case newState of
+    None -> assertFail "PolicyExecutionState not found after ExecutePolicy"
+    Some st -> do
+      assertMsg "totalExecutions should be 1" (st.totalExecutions == 1)
+      assertMsg "lastExecutionTime should be Some" (st.lastExecutionTime == Some start)
+      assertMsg "recentExecutions should contain the timestamp" (start `elem` st.recentExecutions)
+
+------------------------------------------------------------------------
+-- 9. ExecutionLog emitted on successful execution
+------------------------------------------------------------------------
+
+testExecutionLogEmitted : Script ()
+testExecutionLogEmitted = script do
+  (sender, recipient, executor, escrowOperator) <- allocateTestParties
+  let start = time (date 2026 Jan 1) 0 0 0
+      expires = time (date 2026 Jun 1) 0 0 0
+  setTime start
+
+  (policyCid, stateCid) <- setupPolicy sender recipient executor escrowOperator
+    "p9" [DelegateWithdraw] [] defaultRateLimit start expires
+
+  (_, logCid) <- submit executor do
+    exerciseCmd policyCid ExecutePolicy with
+      executionId = "e9"
+      currentStateCid = stateCid
+      targetStreamId = "stream-1"
+      action = DelegateWithdraw
+      amount = 100.0
+
+  -- Verify the ExecutionLog contract exists and has expected fields.
+  log <- queryContractId executor logCid
+  case log of
+    None -> assertFail "ExecutionLog not emitted after ExecutePolicy"
+    Some l -> do
+      assertMsg "log.executionId should match" (l.executionId == "e9")
+      assertMsg "log.success should be True" l.success
+      assertMsg "log.targetStreamId should match" (l.targetStreamId == "stream-1")
+      assertMsg "log.amount should match" (l.amount == 100.0)

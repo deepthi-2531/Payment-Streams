@@ -1,0 +1,242 @@
+-- | Tests for cliff+linear vesting mode.
+--
+-- Covers: withdraw before cliff (returns 0), withdraw at cliff,
+-- withdraw after cliff, cancel before cliff (full refund to sender),
+-- cancel after cliff, full vesting.
+module Test.Stream.Cliff where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import DA.List (head)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | Helper to create a cliff+linear stream via direct contract creation.
+createCliffStream : Party -> Party -> StreamId -> Time -> Time -> Time -> Decimal -> Bool -> Script (ContractId StreamEscrow)
+createCliffStream sender recipient sid start end cliffTime deposit cancellable = do
+  let cfg = StreamConfig with
+        streamId = sid
+        sender
+        recipient
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = CliffLinear with cliffTime
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable
+        settlementMode = None
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = sender
+      observers = []
+
+-- | Test: withdraw before cliff should fail (nothing accrued).
+testCliffWithdrawBeforeCliff : Script ()
+testCliffWithdrawBeforeCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+      beforeCliff = time (date 2025 Mar 1) 0 0 0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-before" start end cliffTime deposit True
+
+  -- Accrual before cliff is 0, so withdraw should fail ("Nothing to withdraw")
+  setTime beforeCliff
+  submitMustFail bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = beforeCliff
+
+  -- Verify via pure function
+  let accrued = cliffLinearAccrual deposit start end cliffTime beforeCliff
+  assertMsg "Accrued before cliff should be 0" (accrued == 0.0)
+  debug ("GOLDEN:cliff_before:accrued:" <> show accrued)
+
+-- | Test: withdraw exactly at cliff time unlocks proportional amount.
+testCliffWithdrawAtCliff : Script ()
+testCliffWithdrawAtCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-at" start end cliffTime deposit True
+
+  setTime cliffTime
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = cliffTime
+
+  -- At cliff, accrual = linearAccrual from start to end evaluated at cliffTime
+  let expectedAccrued = cliffLinearAccrual deposit start end cliffTime cliffTime
+
+  debug ("GOLDEN:cliff_at:accrued:" <> show expectedAccrued)
+  debug ("GOLDEN:cliff_at:withdrawn:" <> show result.amountWithdrawn)
+
+  assertMsg "Withdrawn matches accrued at cliff" (result.amountWithdrawn == expectedAccrued)
+  assertMsg "Status remains Active" (result.newStatus == Active)
+
+  -- Verify invariant
+  let r = refundable deposit expectedAccrued
+      w = withdrawable expectedAccrued result.newTotalWithdrawn
+  assertMsg "Invariant holds at cliff"
+    (checkInvariant deposit expectedAccrued result.newTotalWithdrawn 0.0)
+
+-- | Test: withdraw after cliff follows linear curve.
+testCliffWithdrawAfterCliff : Script ()
+testCliffWithdrawAfterCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+      afterCliff = time (date 2025 May 15) 0 0 0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-after" start end cliffTime deposit True
+
+  setTime afterCliff
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = afterCliff
+
+  let expectedAccrued = cliffLinearAccrual deposit start end cliffTime afterCliff
+
+  debug ("GOLDEN:cliff_after:accrued:" <> show expectedAccrued)
+  debug ("GOLDEN:cliff_after:withdrawn:" <> show result.amountWithdrawn)
+
+  assertMsg "Withdrawn matches accrued after cliff" (result.amountWithdrawn == expectedAccrued)
+
+-- | Test: cancel before cliff gives full refund to sender.
+testCliffCancelBeforeCliff : Script ()
+testCliffCancelBeforeCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+      cancelAt  = time (date 2025 Feb 15) 0 0 0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-cancel-pre" start end cliffTime deposit True
+
+  setTime cancelAt
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = cancelAt
+
+  -- Before cliff, accrued = 0, so recipient gets 0, sender gets full refund
+  debug ("GOLDEN:cliff_cancel_before:recipientAmount:" <> show result.recipientAmount)
+  debug ("GOLDEN:cliff_cancel_before:senderRefund:" <> show result.senderRefund)
+
+  assertMsg "Recipient gets nothing before cliff" (result.recipientAmount == 0.0)
+  assertMsg "Sender gets full refund before cliff" (result.senderRefund == deposit)
+
+-- | Test: cancel after cliff gives pro-rata split.
+testCliffCancelAfterCliff : Script ()
+testCliffCancelAfterCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+      cancelAt  = time (date 2025 May 1) 0 0 0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-cancel-post" start end cliffTime deposit True
+
+  setTime cancelAt
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = cancelAt
+
+  let expectedAccrued = cliffLinearAccrual deposit start end cliffTime cancelAt
+      expectedRefund = refundable deposit expectedAccrued
+
+  debug ("GOLDEN:cliff_cancel_after:recipientAmount:" <> show result.recipientAmount)
+  debug ("GOLDEN:cliff_cancel_after:senderRefund:" <> show result.senderRefund)
+
+  assertMsg "Recipient gets accrued amount" (result.recipientAmount == expectedAccrued)
+  assertMsg "Sender gets refund" (result.senderRefund == expectedRefund)
+  assertMsg "Amounts sum to deposit" (result.recipientAmount + result.senderRefund == deposit)
+
+-- | Test: full vesting at end time.
+testCliffFullVesting : Script ()
+testCliffFullVesting = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-full" start end cliffTime deposit True
+
+  setTime end
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = end
+
+  debug ("GOLDEN:cliff_full:withdrawn:" <> show result.amountWithdrawn)
+  debug ("GOLDEN:cliff_full:status:" <> show result.newStatus)
+
+  assertMsg "Should withdraw full deposit at end" (result.amountWithdrawn == deposit)
+  assertMsg "Status should be Completed" (result.newStatus == Completed)
+
+-- | Test: sequential withdrawals with cliff (first at cliff, second later).
+testCliffSequentialWithdraws : Script ()
+testCliffSequentialWithdraws = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+      t2        = time (date 2025 Jun 1) 0 0 0
+
+  setTime start
+  escrowCid <- createCliffStream alice bob "cliff-seq" start end cliffTime deposit True
+
+  -- First withdraw at cliff
+  setTime cliffTime
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = cliffTime
+
+  let accrued1 = cliffLinearAccrual deposit start end cliffTime cliffTime
+  assertMsg "First withdraw at cliff" (r1.amountWithdrawn == accrued1)
+
+  -- Second withdraw later
+  escrows <- query @StreamEscrow bob
+  let (cid2, _) = head escrows
+
+  setTime t2
+  r2 <- submit bob do
+    exerciseCmd cid2 Withdraw_Stream with withdrawTime = t2
+
+  let accrued2 = cliffLinearAccrual deposit start end cliffTime t2
+      expectedW2 = withdrawable accrued2 r1.newTotalWithdrawn
+
+  debug ("GOLDEN:cliff_seq_w1:withdrawn:" <> show r1.amountWithdrawn)
+  debug ("GOLDEN:cliff_seq_w2:withdrawn:" <> show r2.amountWithdrawn)
+  debug ("GOLDEN:cliff_seq_w2:totalWithdrawn:" <> show r2.newTotalWithdrawn)
+
+  assertMsg "Second withdraw correct" (r2.amountWithdrawn == expectedW2)

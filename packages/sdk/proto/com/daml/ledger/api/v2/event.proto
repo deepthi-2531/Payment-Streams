@@ -1,0 +1,82 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — Event message definitions.
+// Field numbers match Canton 3.4.11+ server reflection.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "EventOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/value.proto";
+import "google/protobuf/timestamp.proto";
+
+// An event in a flat transaction.
+message Event {
+  oneof event {
+    CreatedEvent created = 1;
+    ArchivedEvent archived = 2;
+    ExercisedEvent exercised = 3;
+  }
+}
+
+// Signals that a contract has been created.
+// Field numbers from Canton 3.4.11+ server reflection.
+message CreatedEvent {
+  int64 offset = 1;
+  int32 node_id = 2;
+  string contract_id = 3;
+  Identifier template_id = 4;
+  Value contract_key = 5;
+  Record create_arguments = 6;
+  bytes created_event_blob = 7;
+  repeated InterfaceView interface_views = 8;
+  repeated string witness_parties = 9;
+  repeated string signatories = 10;
+  repeated string observers = 11;
+  google.protobuf.Timestamp created_at = 12;
+  string package_name = 13;
+  bool acs_delta = 14;
+  string representative_package_id = 15;
+}
+
+// View of a contract through a specific interface.
+message InterfaceView {
+  Identifier interface_id = 1;
+  Record view_value = 2;
+  string view_status = 3;
+}
+
+// Signals that a contract has been archived.
+// Field numbers from Canton 3.4.11+ server reflection.
+message ArchivedEvent {
+  int64 offset = 1;
+  int32 node_id = 2;
+  string contract_id = 3;
+  Identifier template_id = 4;
+  repeated string witness_parties = 5;
+  string package_name = 6;
+  repeated Identifier implemented_interfaces = 7;
+}
+
+// Signals that a choice has been exercised on a contract.
+// Field numbers from Canton 3.4.11+ server reflection.
+message ExercisedEvent {
+  int64 offset = 1;
+  int32 node_id = 2;
+  string contract_id = 3;
+  Identifier template_id = 4;
+  Identifier interface_id = 5;
+  string choice = 6;
+  Value choice_argument = 7;
+  repeated string acting_parties = 8;
+  bool consuming = 9;
+  repeated string witness_parties = 10;
+  int32 last_descendant_node_id = 11;
+  Value exercise_result = 12;
+  string package_name = 13;
+  repeated Identifier implemented_interfaces = 14;
+  bool acs_delta = 15;
+}

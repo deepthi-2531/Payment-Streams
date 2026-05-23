@@ -1,0 +1,54 @@
+-- | CreateStream workflow — propose/accept pattern for stream creation.
+--
+-- Phase 1: Numeric escrow (no Daml Finance dependency).
+-- The sender creates a CreateStreamRequest. The recipient accepts
+-- (creating a StreamEscrow) or declines.
+--
+-- DEPRECATED: New integrations should use `CantonStreams.Workflow.UnifiedStream`,
+-- which consolidates all per-mode workflows into a single propose/accept
+-- machine parameterized over the full signatory set (Sender, Recipient,
+-- Operators, Trigger Party). This module is retained for backwards
+-- compatibility with existing on-ledger requests and is scheduled for
+-- removal once consumers have migrated.
+module CantonStreams.Workflow.CreateStream where
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.Escrow (StreamEscrow(..))
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | A pending stream creation request. Sender proposes, recipient accepts/declines.
+template CreateStreamRequest
+  with
+    config : StreamConfig
+    depositAmount : Decimal
+      -- ^ Amount to be locked in escrow by the sender.
+    observers : [Party]
+  where
+    signatory config.sender
+    observer config.recipient :: observers
+
+    ensure config.totalDeposited > 0.0
+      && config.startTime < config.endTime
+      && depositAmount == config.totalDeposited
+
+    -- | Recipient accepts the stream. Creates a StreamEscrow.
+    choice AcceptStream : ContractId StreamEscrow
+      controller config.recipient
+      do
+        create StreamEscrow with
+          config
+          state = initialStreamState
+          escrow = EscrowBalance with
+            amount = depositAmount
+            owner = config.sender
+          observers
+
+    -- | Recipient declines.
+    choice DeclineStream : ()
+      controller config.recipient
+      do pure ()
+
+    -- | Sender withdraws the request before recipient responds.
+    choice WithdrawRequest : ()
+      controller config.sender
+      do pure ()

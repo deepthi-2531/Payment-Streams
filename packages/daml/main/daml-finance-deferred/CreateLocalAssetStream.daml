@@ -1,0 +1,119 @@
+-- | Create / accept / finalize workflow for generic Daml Finance holding-backed streams.
+--
+-- Three-step creation pattern (same as utility holding):
+--   1. Sender creates CreateLocalAssetStreamRequest (signatory: sender)
+--   2. Recipient accepts → AcceptedLocalAssetRequest (sender + recipient)
+--   3. Escrow operator finalizes → LocalAssetEscrow (sender + recipient + operator)
+--
+-- Unlike the Utility Registry adapter, this uses the generic HoldingAdapter
+-- (Fungible.I / Transferable.I) so it works with ANY Daml Finance-compatible
+-- holding, not just utility registry holdings.
+--
+-- This file lives in daml-finance-deferred/ because it depends on Daml
+-- Finance DARs. Move to the main daml/ tree once Finance DARs are standard.
+module CantonStreams.Workflow.CreateLocalAssetStream where
+
+import CantonStreams.Interface.Types
+import CantonStreams.Settlement.HoldingAdapter
+import CantonStreams.Stream.LocalAssetEscrow (LocalAssetEscrow(..))
+import Daml.Finance.Interface.Holding.Fungible qualified as Fungible
+import Daml.Finance.Interface.Types.Common.Types (AccountKey)
+
+-- | Step 1: Sender proposes a local-asset-backed stream.
+--
+-- The sender specifies:
+--   - Stream business config (id, parties, amounts, times, vesting)
+--   - Funding holding CID (the Fungible.I contract to carve escrow from)
+--   - Deposit amount (how much to carve)
+--   - Recipient's Daml Finance account (for withdrawals)
+--   - Escrow operator party (service that finalizes custody)
+template CreateLocalAssetStreamRequest
+  with
+    config : StreamConfig
+    fundingHoldingCid : ContractId Fungible.I
+      -- ^ The Fungible holding to carve the escrow deposit from.
+    depositAmount : Decimal
+      -- ^ Amount to carve from the funding holding into escrow.
+    escrowOperator : Party
+      -- ^ Service party that will finalize custody.
+    recipientAccount : AccountKey
+      -- ^ Recipient's Daml Finance account for withdrawals.
+    observers : [Party]
+  where
+    signatory config.sender
+    observer config.recipient, escrowOperator, observers
+
+    ensure config.totalDeposited > 0.0
+      && config.startTime < config.endTime
+      && depositAmount == config.totalDeposited
+      && config.settlementMode == Some LocalAssetCustody
+
+    -- | Recipient accepts the request.
+    choice AcceptLocalAssetRequest : ContractId AcceptedLocalAssetRequest
+      controller config.recipient
+      do
+        create AcceptedLocalAssetRequest with
+          config
+          fundingHoldingCid
+          depositAmount
+          escrowOperator
+          recipientAccount
+          observers
+
+    -- | Sender withdraws (cancels) the request before acceptance.
+    choice WithdrawLocalAssetRequest : ()
+      controller config.sender
+      do pure ()
+
+-- | Step 2: Intermediate state after recipient accepts.
+--
+-- Both sender and recipient are now signatories. The escrow operator
+-- can finalize custody by splitting the funding holding and creating
+-- the active LocalAssetEscrow.
+template AcceptedLocalAssetRequest
+  with
+    config : StreamConfig
+    fundingHoldingCid : ContractId Fungible.I
+    depositAmount : Decimal
+    escrowOperator : Party
+    recipientAccount : AccountKey
+    observers : [Party]
+  where
+    signatory config.sender, config.recipient
+    observer escrowOperator, observers
+
+    ensure config.totalDeposited > 0.0
+      && config.startTime < config.endTime
+      && depositAmount == config.totalDeposited
+      && config.settlementMode == Some LocalAssetCustody
+
+    -- | Step 3: Escrow operator finalizes custody.
+    --
+    -- This choice:
+    --   1. Splits the funding holding into (escrow deposit, remainder)
+    --   2. Creates the active LocalAssetEscrow with the escrowed holding
+    --
+    -- The funding holding must:
+    --   - Implement Fungible.I (for Split)
+    --   - Be owned by the sender
+    --   - Have sufficient balance for the deposit amount
+    choice FinalizeLocalAssetEscrow : ContractId LocalAssetEscrow
+      controller escrowOperator
+      do
+        -- Split the funding holding: take depositAmount for escrow
+        let fundingEscrow = HoldingEscrow with
+              holdingCid = fundingHoldingCid
+              amount = depositAmount  -- Will be validated by splitHolding
+              owner = config.sender
+              account = recipientAccount  -- placeholder; split preserves original account
+
+        -- splitHolding exercises Fungible.Split on the holding
+        (escrowPortion, _remainderPortion) <- splitHolding fundingEscrow depositAmount
+
+        create LocalAssetEscrow with
+          config
+          state = initialStreamState
+          escrow = escrowPortion
+          escrowOperator
+          recipientAccount
+          observers

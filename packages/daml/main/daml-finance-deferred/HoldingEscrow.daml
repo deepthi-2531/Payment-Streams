@@ -1,0 +1,263 @@
+-- | HoldingEscrow — production payment stream backed by Daml Finance holdings.
+--
+-- This is the CIP-56 variant of StreamEscrow. It has the same lifecycle
+-- (withdraw, cancel, mutual-cancel, renew, complete) but settles via
+-- actual Daml Finance Holding operations instead of numeric tracking.
+--
+-- Each choice exercises on-ledger Fungible.Split, Fungible.Merge, or
+-- Transferable.Transfer to move real token holdings between accounts.
+--
+-- Key: (sender, streamId) — same key structure as the numeric StreamEscrow.
+-- Signatories: sender + recipient (both must consent to creation).
+--
+-- Prerequisites:
+--   - Daml Finance library DARs on the classpath
+--   - Holdings provisioned via custody workflow before stream creation
+--   - Recipient account exists in the Daml Finance account factory
+module CantonStreams.Stream.HoldingEscrow where
+
+import Daml.Finance.Interface.Types.Common.Types (AccountKey)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (StreamView(..), WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.HoldingAdapter
+
+-- | Production payment stream contract backed by Daml Finance holdings.
+--
+-- The escrow field holds a HoldingEscrow referencing an actual Fungible
+-- holding contract on the ledger. All settlement operations exercise
+-- choices on that holding.
+template StreamHoldingEscrow
+  with
+    config : StreamConfig
+    state : StreamState
+    escrow : HoldingEscrow
+    recipientAccount : AccountKey
+      -- ^ Recipient's Daml Finance account for receiving transfers.
+    observers : [Party]
+  where
+    signatory config.sender, config.recipient
+    observer observers
+
+    key (config.sender, config.streamId) : (Party, Text)
+    maintainer key._1
+
+    -- Ensure invariants on every contract creation/archival
+    ensure config.totalDeposited > 0.0
+      && config.startTime < config.endTime
+      && state.totalWithdrawn >= 0.0
+      && state.totalWithdrawn <= config.totalDeposited
+      && escrow.amount >= 0.0
+
+    -- | Compute accrued amount based on vesting mode.
+    let computeAccrued : Time -> Decimal
+        computeAccrued now = case config.vestingMode of
+          Linear ->
+            linearAccrual config.totalDeposited config.startTime config.endTime now
+          CliffLinear cliffTime ->
+            cliffLinearAccrual config.totalDeposited config.startTime config.endTime cliffTime now
+          Stepped stepInterval amountPerStep ->
+            steppedAccrual config.totalDeposited config.startTime stepInterval amountPerStep now
+          RenewableTerm _ ->
+            linearAccrual config.totalDeposited config.startTime config.endTime now
+
+    -- | Withdraw accrued tokens. Only the recipient can call this.
+    --
+    -- Settlement: Exercises Fungible.Split to separate the withdrawn
+    -- amount from the escrow holding, then Transferable.Transfer to
+    -- send the withdrawn portion to the recipient's account.
+    --
+    -- Auto-completes if all tokens have been withdrawn.
+    nonconsuming choice Withdraw_HoldingStream : WithdrawResult
+      with
+        withdrawTime : Time
+      controller config.recipient
+      do
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued withdrawTime
+            amount = withdrawable accrued state.totalWithdrawn
+
+        assertMsg "Nothing to withdraw" (amount > 0.0)
+
+        -- Verify invariant before settlement
+        let r = refundable config.totalDeposited accrued
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
+        -- Split the escrow holding: (withdrawn, remainder)
+        (withdrawnEscrow, remainderEscrow) <- splitHolding escrow amount
+
+        -- Transfer the withdrawn portion to the recipient's account
+        _transferredEscrow <- settleTransfer withdrawnEscrow recipientAccount config.recipient
+
+        let newTotalWithdrawn = state.totalWithdrawn + amount
+            newStatus = if newTotalWithdrawn >= config.totalDeposited
+                        then Completed else Active
+
+        -- Archive current and create updated with remainder escrow
+        archive self
+        create this with
+          state = state with
+            totalWithdrawn = newTotalWithdrawn
+            status = newStatus
+            lastWithdrawTime = Some withdrawTime
+          escrow = remainderEscrow
+
+        pure WithdrawResult with
+          amountWithdrawn = amount
+          newTotalWithdrawn
+          newStatus
+
+    -- | Cancel the stream. Only sender can call, and only if cancellable.
+    --
+    -- Settlement: Exercises Fungible.Split to separate the accrued
+    -- (recipient) portion from the refund (sender) portion. Then
+    -- exercises Transferable.Transfer to send the recipient's portion
+    -- to their account. The sender's refund remains in the sender's
+    -- escrow account.
+    nonconsuming choice Cancel_HoldingStream : CancelResult
+      with
+        cancelTime : Time
+      controller config.sender
+      do
+        assertMsg "Stream not cancellable" config.cancellable
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued cancelTime
+            recipientAmount = accrued - state.totalWithdrawn
+            senderRefundAmount = config.totalDeposited - accrued
+
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
+        -- Split and transfer recipient's portion if any is owed
+        if recipientAmount > 0.0 then do
+          (recipientEscrow, senderEscrow) <- splitHolding escrow recipientAmount
+          _transferredEscrow <- settleTransfer recipientEscrow recipientAccount config.recipient
+
+          -- Archive current and create cancelled state with sender's remainder
+          archive self
+          create this with
+            state = state with
+              status = Cancelled
+              totalWithdrawn = accrued
+            escrow = senderEscrow
+
+          pure CancelResult with
+            recipientAmount = max 0.0 recipientAmount
+            senderRefund = max 0.0 senderRefundAmount
+        else do
+          -- Nothing owed to recipient; full refund stays with sender
+          archive self
+          create this with
+            state = state with
+              status = Cancelled
+              totalWithdrawn = accrued
+
+          pure CancelResult with
+            recipientAmount = 0.0
+            senderRefund = max 0.0 senderRefundAmount
+
+    -- | Mutual cancellation — both parties agree. No cancellable flag needed.
+    --
+    -- Settlement logic is identical to Cancel_HoldingStream.
+    nonconsuming choice MutualCancel_HoldingStream : CancelResult
+      with
+        cancelTime : Time
+      controller config.sender, config.recipient
+      do
+        assertMsg "Stream not active" (state.status == Active)
+
+        let accrued = computeAccrued cancelTime
+            recipientAmount = accrued - state.totalWithdrawn
+            senderRefundAmount = config.totalDeposited - accrued
+
+        if recipientAmount > 0.0 then do
+          (recipientEscrow, senderEscrow) <- splitHolding escrow recipientAmount
+          _transferredEscrow <- settleTransfer recipientEscrow recipientAccount config.recipient
+
+          archive self
+          create this with
+            state = state with
+              status = Cancelled
+              totalWithdrawn = accrued
+            escrow = senderEscrow
+
+          pure CancelResult with
+            recipientAmount = max 0.0 recipientAmount
+            senderRefund = max 0.0 senderRefundAmount
+        else do
+          archive self
+          create this with
+            state = state with
+              status = Cancelled
+              totalWithdrawn = accrued
+
+          pure CancelResult with
+            recipientAmount = 0.0
+            senderRefund = max 0.0 senderRefundAmount
+
+    -- | Renew a renewable-term stream with an additional holding deposit.
+    --
+    -- Settlement: Exercises Fungible.Merge to combine the existing escrow
+    -- holding with the new deposit holding into a single holding.
+    nonconsuming choice Renew_HoldingStream : ContractId StreamHoldingEscrow
+      with
+        additionalDeposit : HoldingEscrow
+          -- ^ New holding to merge into the existing escrow.
+        newEndTime : Time
+      controller config.sender
+      do
+        assertMsg "Not a renewable stream" (isRenewable config.vestingMode)
+        assertMsg "Stream must be active or completed" (state.status `elem` [Active, Completed])
+        assertMsg "Additional deposit must be positive" (additionalDeposit.amount > 0.0)
+        assertMsg "New end time must be after current end" (newEndTime > config.endTime)
+
+        -- Merge the additional deposit holding into the existing escrow
+        mergedEscrow <- mergeHoldings escrow additionalDeposit
+
+        archive self
+        create this with
+          config = config with
+            totalDeposited = config.totalDeposited + additionalDeposit.amount
+            endTime = newEndTime
+          state = state with
+            status = Active
+            renewalCount = state.renewalCount + 1
+          escrow = mergedEscrow
+
+    -- | Mark stream as completed when fully vested and withdrawn.
+    nonconsuming choice Complete_HoldingStream : ContractId StreamHoldingEscrow
+      with
+        completeTime : Time
+      controller config.recipient
+      do
+        let accrued = computeAccrued completeTime
+        assertMsg "Stream not fully vested" (accrued >= config.totalDeposited)
+        assertMsg "Stream not active" (state.status == Active)
+
+        archive self
+        create this with
+          state = state with status = Completed
+
+    -- | Non-consuming query for current stream state.
+    nonconsuming choice GetHoldingStreamInfo : StreamView
+      with
+        viewer : Party
+        queryTime : Time
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == config.sender || viewer == config.recipient || viewer `elem` observers)
+        let accrued = computeAccrued queryTime
+        pure StreamView with
+          config
+          state = state with
+            totalWithdrawn = state.totalWithdrawn
+
+-- | Check if a vesting mode is renewable.
+isRenewable : VestingMode -> Bool
+isRenewable (RenewableTerm _) = True
+isRenewable _ = False

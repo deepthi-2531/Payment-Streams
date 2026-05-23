@@ -1,0 +1,89 @@
+-- | Mint TestTokenV2 holdings + non-linear stream demo against live TestNet.
+--
+-- ## What this script does
+--
+--   1. Resolves existing parties on the participant (admin, Swapuser) by
+--      their well-known party IDs.
+--   2. Mints a HoldingV2 (Token contract from splice-test-token-v2) for
+--      admin — 1000 units of a fresh test instrument. Joint-signed by
+--      admin (= instrument admin) + admin (= account owner) so authority
+--      is satisfied by a single party.
+--   3. Returns the (instrumentId, holdingCid) so the dashboard / proxy
+--      can reference it via settlementMode=TokenStandardCustody.
+--
+-- ## How to run
+--
+--   daml build  # in packages/daml/scripts
+--   ~/.daml/sdk/3.4.11/daml-helper/daml-helper \
+--     ledger run-script \
+--     --ledger-host localhost --ledger-port 5001 \
+--     --dar packages/daml/scripts/.daml/dist/canton-streams-scripts-0.2.7.dar \
+--     --script-name Scripts.MintV2:mintForAdmin
+--
+module Scripts.MintV2 where
+
+import Daml.Script
+
+import qualified Splice.Api.Token.HoldingV2 as V2
+import qualified Splice.Api.Token.MetadataV1 as Meta
+import Splice.Testing.Tokens.TestTokenV2.Holding (Token(..))
+
+-- | Resolve a known party from a hard-coded party id text.
+resolveParty : Text -> Script Party
+resolveParty pid = do
+  -- partyFromText returns Some when the participant knows about this party
+  case partyFromText pid of
+    None -> abort ("Could not resolve party from text: " <> pid)
+    Some p -> pure p
+
+-- | Mint a HoldingV2 for the admin party — admin is both instrument
+-- admin AND account owner so we only need to sign once.
+mintForAdmin : Script ()
+mintForAdmin = do
+  admin <- resolveParty "admin::<participant-fingerprint>"
+  debug "admin party resolved"
+  let instrumentId = V2.InstrumentId with
+        admin = admin
+        id = "v2-streams-test-token"
+      account = V2.Account with
+        owner = Some admin
+        provider = None
+        id = ""
+      holding = V2.HoldingView with
+        account = account
+        instrumentId = instrumentId
+        amount = 1000.0
+        lock = None
+        meta = Meta.emptyMetadata
+  -- Token's signatory = [accountParties + admin]. With owner=admin and
+  -- instrumentAdmin=admin, both reduce to admin, so single-party submit
+  -- is sufficient.
+  cid <- submit admin $ createCmd (Token with holding = holding)
+  debug ("minted Token cid: " <> show cid)
+  pure ()
+
+-- | Also mint a HoldingV2 for Swapuser, so the recipient can receive
+-- into a real V2 account at withdraw time. Admin still mints (it has
+-- authority to mint into accounts owned by any party as instrument admin).
+-- This requires Swapuser as authorizing signatory too.
+mintForBoth : Script ()
+mintForBoth = do
+  admin <- resolveParty "admin::<participant-fingerprint>"
+  swapuser <- resolveParty "Swapuser::<participant-fingerprint>"
+  let instrumentId = V2.InstrumentId with admin = admin; id = "v2-streams-test-token"
+      adminAccount = V2.Account with owner = Some admin; provider = None; id = ""
+      swapuserAccount = V2.Account with owner = Some swapuser; provider = None; id = ""
+      mkHolding acc amt = V2.HoldingView with
+        account = acc
+        instrumentId = instrumentId
+        amount = amt
+        lock = None
+        meta = Meta.emptyMetadata
+  -- Mint to admin (sender) — admin is sole signatory
+  adminCid <- submit admin $ createCmd (Token with holding = mkHolding adminAccount 1000.0)
+  debug ("admin holding cid: " <> show adminCid)
+  -- Mint to swapuser (recipient pre-fund, optional) — needs joint signature
+  swapuserCid <- submitMulti [admin, swapuser] [] $
+    createCmd (Token with holding = mkHolding swapuserAccount 0.0001)  -- placeholder receiving account
+  debug ("swapuser holding cid: " <> show swapuserCid)
+  pure ()

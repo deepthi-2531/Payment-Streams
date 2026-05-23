@@ -1,0 +1,8 @@
+sdk-version: 3.4.10
+name: canton-streams-interfaces
+source: daml
+version: 0.2.3
+dependencies:
+  - daml-prim
+  - daml-stdlib
+# build-options removed: SDK 3.4.x uses default LF version

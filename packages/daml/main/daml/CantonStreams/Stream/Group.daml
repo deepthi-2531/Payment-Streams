@@ -1,0 +1,49 @@
+-- | StreamGroupContract — batch management convenience for related streams.
+--
+-- Groups stream IDs for management purposes (e.g., payroll batch).
+-- Each stream in the group remains a separate StreamEscrow contract
+-- with independent withdrawal rights.
+module CantonStreams.Stream.Group where
+
+import DA.List (delete)
+
+-- | A group of related streams owned by a single party.
+-- Note: No contract key — groups are looked up via query by owner.
+template StreamGroupContract
+  with
+    owner : Party
+    label : Text
+    streamIds : [Text]
+    observers : [Party]
+  where
+    signatory owner
+    observer observers
+
+    -- | Add a stream to this group.
+    nonconsuming choice AddToGroup : ContractId StreamGroupContract
+      with
+        streamId : Text
+      controller owner
+      do
+        assertMsg "Stream already in group" (streamId `notElem` streamIds)
+        archive self
+        create this with streamIds = streamId :: streamIds
+
+    -- | Remove a stream from this group.
+    nonconsuming choice RemoveFromGroup : ContractId StreamGroupContract
+      with
+        streamId : Text
+      controller owner
+      do
+        assertMsg "Stream not in group" (streamId `elem` streamIds)
+        archive self
+        create this with streamIds = delete streamId streamIds
+
+    -- | Get group info (non-consuming).
+    nonconsuming choice GetGroupInfo : (Text, [Text])
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized" (viewer == owner || viewer `elem` observers)
+        pure (label, streamIds)

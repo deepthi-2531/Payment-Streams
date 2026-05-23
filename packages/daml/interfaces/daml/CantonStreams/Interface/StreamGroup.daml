@@ -1,0 +1,45 @@
+-- | StreamGroup interface — batch management convenience for grouping
+-- related streams (e.g., payroll, team compensation).
+--
+-- Does not replace individual StreamEscrow contracts or their settlement rules.
+-- Each stream in the group remains independently operable.
+module CantonStreams.Interface.StreamGroup where
+
+import CantonStreams.Interface.Types (StreamId)
+
+-- | View projected from any StreamGroup interface instance.
+data StreamGroupView = StreamGroupView with
+    owner : Party
+    label : Text
+    streamIds : [StreamId]
+  deriving (Eq, Show)
+
+-- | Abstract interface for stream group management.
+interface StreamGroup where
+  viewtype StreamGroupView
+
+  -- | Add a stream to this group.
+  choice AddStream : ContractId StreamGroup
+    with
+      actor : Party
+      streamId : StreamId
+    controller actor
+    do
+      let v = view this
+      assertMsg "Only owner can modify group" (actor == v.owner)
+      addStream this streamId
+
+  -- | Remove a stream from this group.
+  choice RemoveStream : ContractId StreamGroup
+    with
+      actor : Party
+      streamId : StreamId
+    controller actor
+    do
+      let v = view this
+      assertMsg "Only owner can modify group" (actor == v.owner)
+      removeStream this streamId
+
+  -- Methods that templates must implement
+  addStream : StreamId -> Update (ContractId StreamGroup)
+  removeStream : StreamId -> Update (ContractId StreamGroup)

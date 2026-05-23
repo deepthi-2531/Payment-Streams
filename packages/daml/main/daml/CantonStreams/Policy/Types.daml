@@ -1,0 +1,21 @@
+-- | Shared types for the delegated execution policy system.
+module CantonStreams.Policy.Types where
+
+-- | Allowed actions for delegated execution.
+data DelegatedAction
+  = DelegateWithdraw
+  | DelegateCancel
+  | DelegateRenew
+  deriving (Eq, Show)
+
+-- | Rate limit configuration.
+data RateLimit = RateLimit with
+    maxExecutionsPerPeriod : Int
+      -- ^ Maximum number of executions per period.
+    periodDuration : Int
+      -- ^ Period duration in microseconds.
+    maxAmountPerExecution : Decimal
+      -- ^ Maximum amount per single execution.
+    cooldownInterval : Int
+      -- ^ Minimum microseconds between executions.
+  deriving (Eq, Show)

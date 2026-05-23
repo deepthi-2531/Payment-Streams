@@ -1,0 +1,289 @@
+-- | AllocationRequestV2 interface tests (STR-73 / plan §7.11 / STR-79 V2-only).
+--
+-- Verifies that StreamEscrow, StreamFlow, and MilestoneEscrow correctly
+-- implement `AllocationRequestV2.AllocationRequest`. V1 was dropped per
+-- the V2-only architectural pivot (STR-79).
+--
+-- ## What this module tests
+--
+--   * V2 view shape: multi-leg-capable list, AccountV2 receiver, V2 instrumentId Text
+--   * Conservation invariants: `checkConservationV2` holds for fresh contracts
+--   * StreamFlow iterated semantics: `numIterations` increments per
+--     Withdraw_Flow exercise; views reflect the cycle counter
+--   * MilestoneEscrow multi-leg: V2 view has one TransferLegSide per
+--     unconfirmed milestone
+--
+-- Once STR-65 lands the real V2 DARs, swap the stub imports here for
+-- the real `Splice.Api.Token.AllocationRequestV2` module and the tests
+-- continue to pass unchanged (the view shapes are wire-compatible).
+module Test.Stream.AllocationWorkflow where
+
+import Daml.Script
+import qualified DA.Map as Map
+import qualified DA.TextMap as TextMap
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.StreamFlow
+import CantonStreams.Stream.MilestoneEscrow
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+import qualified Splice.Api.Token.AllocationRequestV2 as AR2
+import qualified CantonStreams.Settlement.AllocationBridge as Bridge
+
+------------------------------------------------------------------------
+-- Shared helpers
+------------------------------------------------------------------------
+
+-- | Build a sample V1 InstrumentRef for tests. Stable across all tests
+-- so the V1↔V2 bridging is deterministic.
+testInstrumentRef : Party -> Party -> InstrumentRef
+testInstrumentRef depositoryParty issuerParty =
+  InstrumentRef with
+    depository = depositoryParty
+    issuer = issuerParty
+    instrumentId = "TEST-COIN"
+    instrumentVersion = "1.0"
+
+-- | Standard linear-vesting StreamConfig used across the AllocationRequest tests.
+mkAllocConfig
+  : Party        -- sender
+  -> Party       -- recipient
+  -> StreamId
+  -> Time        -- start
+  -> Time        -- end
+  -> Decimal     -- totalDeposited
+  -> Optional InstrumentRef
+  -> StreamConfig
+mkAllocConfig sender recipient sid start end deposit ref =
+  StreamConfig with
+    streamId = sid
+    sender
+    recipient
+    totalDeposited = deposit
+    startTime = start
+    endTime = end
+    vestingMode = Linear
+    assetType = GlobalHolding
+    instrumentRef = ref
+    cancellable = True
+    settlementMode = None
+
+-- | Create a StreamEscrow with the given V1 InstrumentRef bound.
+createAllocStream
+  : Party -> Party -> StreamId -> Time -> Time -> Decimal -> InstrumentRef
+  -> Script (ContractId StreamEscrow)
+createAllocStream sender recipient sid start end deposit ref = do
+  let cfg = mkAllocConfig sender recipient sid start end deposit (Some ref)
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = sender
+      observers = []
+
+------------------------------------------------------------------------
+-- StreamEscrow — V2 view tests
+------------------------------------------------------------------------
+
+testStreamEscrowV2ViewShape : Script ()
+testStreamEscrowV2ViewShape = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let ref = testInstrumentRef alice alice
+      start = time (date 2026 Jan 1) 0 0 0
+      end = time (date 2026 Jul 1) 0 0 0
+      deposit = 1000.0
+  setTime start
+  cid <- createAllocStream alice bob "alloc-v2-shape" start end deposit ref
+
+  v2View <- queryInterfaceContractId @AR2.AllocationRequest bob (toInterfaceContractId @AR2.AllocationRequest cid)
+
+  case v2View of
+    Some v -> do
+      let totalLeg = Bridge.totalLegAmountV2 v
+      assertMsg ("V2 total leg amount should equal totalDeposited; got " <> show totalLeg)
+        (totalLeg == deposit)
+      -- V2 view (verified spec) has `allocations : [AllocationSpecification]`,
+      -- each with `transferLegSides : [TransferLegSide]`.
+      -- For a prefunded stream: one allocation, one leg.
+      assertMsg "V2 view should have exactly one AllocationSpecification for prefunded stream"
+        (length v.allocations == 1)
+      case v.allocations of
+        [spec] -> do
+          assertMsg "V2 spec should have exactly one transfer leg"
+            (length spec.transferLegSides == 1)
+          case spec.transferLegSides of
+            [leg] -> do
+              assertMsg "V2 leg.otherside.owner should be the recipient (sender-side leg authorized by escrow op)"
+                (leg.otherside.owner == Some bob)
+                  -- ^ Account.owner is now Optional Party per the spec author's
+                  -- CIP-0112 update (ownerless accounts represent
+                  -- registry burn/mint operations).
+              assertMsg "V2 leg.otherside.provider should be None"
+                (leg.otherside.provider == None)
+              assertMsg "V2 spec admin should match V1 ref's issuer"
+                (spec.admin == ref.issuer)
+            _ -> abort "Expected one leg per spec"
+        _ -> abort "Expected one spec in V2 view"
+      assertMsg "V2 conservation invariant holds"
+        (Bridge.checkConservationV2 (mkAllocConfig alice bob "alloc-v2-shape" start end deposit (Some ref)) initialStreamState v)
+      debug ("GOLDEN:alloc_v2_view:totalLegAmount:" <> show totalLeg)
+      debug ("GOLDEN:alloc_v2_view:allocationsCount:" <> show (length v.allocations))
+    None ->
+      abort "V2 AllocationRequest view not visible to recipient"
+
+------------------------------------------------------------------------
+-- StreamFlow — iterated allocation (numIterations counter)
+------------------------------------------------------------------------
+
+testStreamFlowIteratedV2View : Script ()
+testStreamFlowIteratedV2View = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Escrow-Operator"
+  let ref = testInstrumentRef alice alice
+      start = time (date 2026 Jan 1) 0 0 0
+  setTime start
+  -- Create a StreamFlow with initial funding via submitMulti
+  flowCid <- submitMulti [alice, bob, carol] [] do
+    createCmd StreamFlow with
+      sender = alice
+      recipient = bob
+      escrowOperator = carol
+      streamId = "flow-iter-001"
+      instrumentRef = ref
+      flowRate = 0.001  -- tokens per microsecond
+      startTime = start
+      fundedAmount = 100.0
+      totalWithdrawn = 0.0
+      status = FlowActive
+      pausedAt = None
+      cumulativePausedDuration = days 0 - days 0  -- zero RelTime
+      lastSettlementReference = None
+      numIterations = 0
+      observers = []
+
+  -- Query V2 view at iteration 0
+  v2View0 <- queryInterfaceContractId @AR2.AllocationRequest bob (toInterfaceContractId @AR2.AllocationRequest flowCid)
+  case v2View0 of
+    Some v -> do
+      -- Iterated allocation metadata should be present
+      let iterated = TextMap.lookup "iterated" v.meta.values
+      assertMsg "StreamFlow V2 view should mark iterated=true"
+        (iterated == Some "true")
+      let numIter = TextMap.lookup "numIterations" v.meta.values
+      assertMsg "StreamFlow V2 view should expose numIterations=0 initially"
+        (numIter == Some "0")
+      debug ("GOLDEN:flow_v2_iter0:numIterations:0")
+    None -> abort "StreamFlow V2 view not visible"
+
+------------------------------------------------------------------------
+-- MilestoneEscrow — multi-leg V2 view
+------------------------------------------------------------------------
+
+testMilestoneEscrowMultiLegV2View : Script ()
+testMilestoneEscrowMultiLegV2View = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Escrow-Operator"
+  let ref = testInstrumentRef alice alice
+      start = time (date 2026 Jan 1) 0 0 0
+  setTime start
+
+  let mkMilestone n desc amt = Milestone with
+        name = n
+        description = desc
+        amount = amt
+        confirmed = False
+        confirmedAt = None
+        settlementReference = None
+      milestones =
+        [ mkMilestone "m1" "milestone 1" 100.0
+        , mkMilestone "m2" "milestone 2" 200.0
+        , mkMilestone "m3" "milestone 3" 300.0
+        ]
+
+  meCid <- submitMulti [alice, bob, carol] [] do
+    createCmd MilestoneEscrow with
+      streamId = "milestone-multi-001"
+      sender = alice
+      recipient = bob
+      escrowOperator = carol
+      admin = alice
+      instrumentRef = ref
+      milestones
+      totalDeposited = 600.0
+      totalReleased = 0.0
+      escrowAmount = 600.0
+      fundingReference = "fund-001"
+      lastSettlementReference = None
+      observers = []
+
+  -- V2 view should expose unconfirmed milestones as transferLegSides on a
+  -- single multi-leg AllocationSpecification (per plan §7.3, milestone
+  -- confirmations are also surfaced as ARA_Custom actions in
+  -- availableActions — see STR-88 for the lifecycle drive).
+  v2View <- queryInterfaceContractId @AR2.AllocationRequest bob (toInterfaceContractId @AR2.AllocationRequest meCid)
+  case v2View of
+    Some v -> do
+      assertMsg "V2 view should have one AllocationSpecification for milestone batch"
+        (length v.allocations == 1)
+      case v.allocations of
+        [spec] -> do
+          assertMsg ("Spec should have 3 transferLegSides (3 unconfirmed milestones); got " <> show (length spec.transferLegSides))
+            (length spec.transferLegSides == 3)
+        _ -> abort "Expected one milestone spec"
+      let totalLeg = Bridge.totalLegAmountV2 v
+      assertMsg "V2 total leg amount should equal totalDeposited"
+        (totalLeg == 600.0)
+      let settlementShape = TextMap.lookup "settlementShape" v.meta.values
+      assertMsg "V2 view should advertise per-leg settlement shape"
+        (settlementShape == Some "per-leg")
+      debug ("GOLDEN:milestone_v2_view:totalLeg:" <> show totalLeg)
+    None -> abort "MilestoneEscrow V2 view not visible"
+
+  -- V1 fallback removed per V2-only pivot (STR-79). MilestoneEscrow only
+  -- implements V2 — V2 has native multi-leg, no need for a V1 single-leg
+  -- shim.
+
+------------------------------------------------------------------------
+-- Conservation under partial withdrawal
+------------------------------------------------------------------------
+
+testConservationAfterWithdrawal : Script ()
+testConservationAfterWithdrawal = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let ref = testInstrumentRef alice alice
+      start = time (date 2026 Jan 1) 0 0 0
+      end = time (date 2026 Jul 1) 0 0 0  -- 181 days
+      deposit = 1810.0  -- 10/day to keep math clean
+  setTime start
+  cid <- createAllocStream alice bob "alloc-cons-001" start end deposit ref
+
+  -- Advance to midpoint and withdraw
+  let midpoint = time (date 2026 Apr 2) 0 0 0  -- ~90 days in
+  setTime midpoint
+  res <- submit bob do
+    exerciseCmd cid Withdraw_Stream with withdrawTime = midpoint
+
+  -- Query the updated StreamEscrow via V2 view and verify the
+  -- remaining undrawn amount is reflected in transferLegs
+  escrows <- query @StreamEscrow bob
+  case escrows of
+    [(updatedCid, _)] -> do
+      v2View <- queryInterfaceContractId @AR2.AllocationRequest bob
+        (toInterfaceContractId @AR2.AllocationRequest updatedCid)
+      case v2View of
+        Some v -> do
+          let totalLeg = Bridge.totalLegAmountV2 v
+          let expectedUndrawn = deposit - res.newTotalWithdrawn
+          assertMsg ("V2 view total leg amount should equal remaining undrawn: expected "
+                      <> show expectedUndrawn <> "; got " <> show totalLeg)
+            (totalLeg == expectedUndrawn)
+          debug ("GOLDEN:conservation_after_withdraw:undrawn:" <> show totalLeg)
+        None -> abort "V2 view not visible after withdrawal"
+    _ -> abort "Expected exactly one StreamEscrow after withdrawal"

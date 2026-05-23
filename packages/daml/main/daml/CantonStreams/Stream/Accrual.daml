@@ -1,0 +1,102 @@
+-- | Pure accrual math functions for all vesting modes.
+--
+-- This is the critical invariant module. Linear/cliff accrual preserves the
+-- ledger's native Decimal precision so fractional-token streams vest smoothly,
+-- while still avoiding any upward rounding beyond what Daml Decimal already
+-- represents. The TypeScript SDK mirrors these functions for display only;
+-- the ledger is authoritative.
+--
+-- Core invariant (with dust tolerance):
+--   refundable(now) + withdrawable(now) + totalWithdrawn <= totalDeposited
+--   where dust = totalDeposited - (refundable + withdrawable + totalWithdrawn) >= 0
+module CantonStreams.Stream.Accrual where
+
+import DA.Time (subTime, convertRelTimeToMicroseconds, RelTime)
+
+-- | Convert a time difference to Decimal microseconds.
+timeToMicros : Time -> Time -> Decimal
+timeToMicros t1 t2 =
+  intToDecimal (convertRelTimeToMicroseconds (subTime t1 t2))
+
+-- | Compute accrued amount for linear vesting.
+--
+-- Formula: deposit * (elapsed / duration)
+-- Clamped: min(deposit, max(0, result))
+-- Preserves Decimal precision so sub-token accrual remains withdrawable.
+--
+-- Returns 0 if now <= startTime, totalDeposited if now >= endTime.
+linearAccrual : Decimal -> Time -> Time -> Time -> Decimal
+linearAccrual totalDeposited startTime endTime now
+  | now <= startTime = 0.0
+  | now >= endTime   = totalDeposited
+  | otherwise =
+      let elapsed  = timeToMicros now startTime
+          duration = timeToMicros endTime startTime
+          accrued = totalDeposited * elapsed / duration
+      in min totalDeposited (max 0.0 accrued)
+
+-- | Compute accrued amount for cliff+linear vesting.
+--
+-- [M3 fix] Comment clarified to match the actual math.
+--
+-- Semantics: the total deposit vests linearly from `startTime` to `endTime`
+-- but nothing is accessible until `cliffTime`. At the instant `cliffTime`
+-- is reached, the accrued amount jumps from 0 to the linear value at that
+-- moment — i.e. `totalDeposited * (cliffTime - startTime) / (endTime - startTime)`
+-- becomes immediately claimable. After cliff, continued linear vesting
+-- against the original `startTime` anchor (NOT against `cliffTime`).
+--
+-- This means an employee with a 4-year vest and 1-year cliff sees 25% of
+-- their total become available at the cliff instant (not 0%), and the
+-- remaining 75% vests linearly over the next 3 years.
+cliffLinearAccrual : Decimal -> Time -> Time -> Time -> Time -> Decimal
+cliffLinearAccrual totalDeposited startTime endTime cliffTime now
+  | now < cliffTime  = 0.0
+  | now >= endTime   = totalDeposited
+  | otherwise =
+      -- Linear from startTime (not cliffTime) — the cliff just gates access,
+      -- it doesn't reset the vesting curve.
+      linearAccrual totalDeposited startTime endTime now
+
+-- | Compute accrued amount for stepped vesting.
+--
+-- Formula: min(deposit, floor(elapsed / stepInterval) * amountPerStep)
+-- Each step unlocks a fixed amount at regular intervals.
+steppedAccrual : Decimal -> Time -> RelTime -> Decimal -> Time -> Decimal
+steppedAccrual totalDeposited startTime stepInterval amountPerStep now
+  | now <= startTime = 0.0
+  | otherwise =
+      let elapsed   = convertRelTimeToMicroseconds (subTime now startTime)
+          interval  = convertRelTimeToMicroseconds stepInterval
+          steps     = elapsed / interval  -- integer division
+          accrued   = intToDecimal steps * amountPerStep
+      in min totalDeposited (max 0.0 accrued)
+
+-- | Compute withdrawable amount: accrued(now) - totalWithdrawn.
+-- Always >= 0.
+withdrawable : Decimal -> Decimal -> Decimal
+withdrawable accrued totalWithdrawn =
+  max 0.0 (accrued - totalWithdrawn)
+
+-- | Compute refundable amount: totalDeposited - accrued(now).
+-- Always >= 0.
+refundable : Decimal -> Decimal -> Decimal
+refundable totalDeposited accrued =
+  max 0.0 (totalDeposited - accrued)
+
+-- | Check the core invariant (with dust tolerance).
+-- Returns True if the invariant holds.
+--
+-- refundable(now) + withdrawable(now) + totalWithdrawn <= totalDeposited
+-- AND all values are non-negative.
+checkInvariant : Decimal -> Decimal -> Decimal -> Decimal -> Bool
+checkInvariant totalDeposited accrued totalWithdrawn _now =
+  let w = withdrawable accrued totalWithdrawn
+      r = refundable totalDeposited accrued
+      total = r + w + totalWithdrawn
+  in total <= totalDeposited
+     && w >= 0.0
+     && r >= 0.0
+     && totalWithdrawn >= 0.0
+     && accrued >= 0.0
+     && accrued <= totalDeposited

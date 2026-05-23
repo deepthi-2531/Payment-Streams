@@ -1,0 +1,33 @@
+-- | RenewStream workflow — top up and extend a renewable-term stream.
+--
+-- The sender creates a RenewRequest specifying the additional deposit
+-- and new end time. This is a single-party workflow since only the
+-- sender needs to authorize renewals.
+module CantonStreams.Workflow.RenewStream where
+
+import CantonStreams.Stream.Escrow (StreamEscrow, Renew_Stream(..))
+
+-- | Request to renew a renewable-term stream.
+template RenewRequest
+  with
+    sender : Party
+    streamCid : ContractId StreamEscrow
+    additionalDeposit : Decimal
+    newEndTime : Time
+  where
+    signatory sender
+
+    ensure additionalDeposit > 0.0
+
+    -- | Execute the renewal on the target stream.
+    choice ExecuteRenewal : ContractId StreamEscrow
+      controller sender
+      do
+        -- [H2 fix] Renew_Stream now requires renewTime so it can reset
+        -- the accrual anchor when renewing a Completed stream. Use
+        -- ledger time at the moment of exercise.
+        now <- getTime
+        exercise streamCid Renew_Stream with
+          additionalDeposit
+          newEndTime
+          renewTime = now

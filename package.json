@@ -1,0 +1,38 @@
+{
+  "name": "canton-streams",
+  "version": "0.2.7",
+  "private": true,
+  "description": "Continuous payment streaming for Canton — Daml templates, TypeScript SDK, CLI, and dashboard",
+  "license": "Apache-2.0",
+  "keywords": [
+    "canton",
+    "daml",
+    "payment-streams",
+    "streaming-payments",
+    "ledger"
+  ],
+  "engines": {
+    "node": ">=22.14.0",
+    "pnpm": ">=9.15.0"
+  },
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "dev": "turbo run dev",
+    "daml:build": "dpm build --all",
+    "daml:test": "./scripts/test-all-daml.sh",
+    "daml:deps": "./packages/daml/get-dependencies.sh",
+    "fixtures": "./generate-fixtures.sh",
+    "sync-versions": "./sync-versions.sh",
+    "clean": "turbo run clean"
+  },
+  "devDependencies": {
+    "turbo": "2.8.17",
+    "typescript": "5.9.3",
+    "eslint": "9.27.0",
+    "prettier": "3.5.0",
+    "@types/node": "22.14.0"
+  }
+}

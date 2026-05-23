@@ -1,0 +1,134 @@
+-- | Tests for `CantonStreams.Stream.StreamFlowAdmin` (STR-87).
+module Test.Stream.StreamFlowAdminLifecycle where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.StreamFlowAdmin
+
+setupFlowAdmin : Script
+  (Party, Party, Party, ContractId StreamFlowAdmin)
+setupFlowAdmin = do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let start = time (date 2026 Jan 1) 0 0 0
+      ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "TEST-COIN"
+        instrumentVersion = "1.0"
+      payload = mkStreamFlowAdmin "flow-001" alice bob carol ref 0.001 start 100.0 []
+  setTime start
+  cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  pure (alice, bob, carol, cid)
+
+testFlowSyncIterationFirst : Script ()
+testFlowSyncIterationFirst = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  c1 <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "flow-alloc-002"
+  Some a <- queryContractId carol c1
+  assertMsg "totalWithdrawn" (a.totalWithdrawn == 10.0)
+  assertMsg "numIterations" (a.numIterations == 1)
+  assertMsg "originalAllocationId set first" (a.originalAllocationId == Some "flow-alloc-002")
+  assertMsg "currentAllocationCid" (a.currentAllocationCid == Some "flow-alloc-002")
+
+testFlowTopUp : Script ()
+testFlowTopUp = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  c1 <- submit carol $ exerciseCmd cid TopUp_Flow_Admin with
+    topUpAmount = 50.0
+    newAllocationCid = Some "flow-alloc-merged-002"
+  Some a <- queryContractId carol c1
+  assertMsg "fundedAmount after topup" (a.currentFundedAmount == 150.0)
+  assertMsg "totalWithdrawn unchanged on topup" (a.totalWithdrawn == 0.0)
+  assertMsg "currentAllocationCid updated" (a.currentAllocationCid == Some "flow-alloc-merged-002")
+
+testFlowPauseResume : Script ()
+testFlowPauseResume = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  -- Pause
+  c1 <- submit carol $ exerciseCmd cid Pause_Flow_Admin
+  Some a1 <- queryContractId carol c1
+  assertMsg "paused after pause" a1.paused
+  -- Sync while paused MUST fail
+  submitMustFail carol $ exerciseCmd c1 Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "x"
+  -- Resume
+  c2 <- submit carol $ exerciseCmd c1 Resume_Flow_Admin
+  Some a2 <- queryContractId carol c2
+  assertMsg "not paused after resume" (not a2.paused)
+  -- Sync now works
+  _ <- submit carol $ exerciseCmd c2 Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "flow-alloc-002"
+  pure ()
+
+testFlowPauseRejectsDoublePause : Script ()
+testFlowPauseRejectsDoublePause = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  c1 <- submit carol $ exerciseCmd cid Pause_Flow_Admin
+  submitMustFail carol $ exerciseCmd c1 Pause_Flow_Admin
+
+testFlowResumeRejectsWhenNotPaused : Script ()
+testFlowResumeRejectsWhenNotPaused = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  submitMustFail carol $ exerciseCmd cid Resume_Flow_Admin
+
+testFlowOvershootRejects : Script ()
+testFlowOvershootRejects = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  -- Funded 100, try to settle 150.
+  submitMustFail carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 150.0
+    newAllocationCid = Some "x"
+
+testFlowTopUpThenWithdrawBeyondInitial : Script ()
+testFlowTopUpThenWithdrawBeyondInitial = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  -- Top up by 50 → 150 funded.
+  c1 <- submit carol $ exerciseCmd cid TopUp_Flow_Admin with
+    topUpAmount = 50.0
+    newAllocationCid = Some "f2"
+  -- Settle 130 → leaves 20 undrawn.
+  c2 <- submit carol $ exerciseCmd c1 Sync_Iteration_Flow with
+    iterationAmount = 130.0
+    newAllocationCid = Some "f3"
+  Some a <- queryContractId carol c2
+  assertMsg "totalWithdrawn = 130" (a.totalWithdrawn == 130.0)
+  assertMsg "fundedAmount still 150" (a.currentFundedAmount == 150.0)
+  -- Another 30 would overshoot → reject.
+  submitMustFail carol $ exerciseCmd c2 Sync_Iteration_Flow with
+    iterationAmount = 30.0
+    newAllocationCid = Some "f4"
+
+testFlowMarkCancelled : Script ()
+testFlowMarkCancelled = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  c1 <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 50.0
+    newAllocationCid = Some "f2"
+  c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled_Flow_Admin with
+    cancelTime = time (date 2026 Feb 1) 0 0 0
+    finalWithdrawn = 50.0
+  Some a <- queryContractId carol c2
+  assertMsg "status Cancelled" (a.status == Cancelled)
+  assertMsg "currentAllocationCid cleared" (a.currentAllocationCid == None)
+
+testFlowGetInfo : Script ()
+testFlowGetInfo = script do
+  (_, bob, carol, cid) <- setupFlowAdmin
+  _ <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 25.0
+    newAllocationCid = Some "f2"
+  -- Need to query latest cid because Sync archives
+  [(latestCid, _)] <- query @StreamFlowAdmin bob
+  info <- submit bob $ exerciseCmd latestCid GetStreamFlowAdminInfo with viewer = bob
+  assertMsg "info.totalWithdrawn" (info.totalWithdrawn == 25.0)
+  assertMsg "info.currentFundedAmount" (info.currentFundedAmount == 100.0)
+  assertMsg "info.numIterations" (info.numIterations == 1)

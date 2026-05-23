@@ -1,0 +1,152 @@
+-- | Tests for `CantonStreams.Stream.MilestoneAdmin` (STR-88).
+module Test.Stream.MilestoneAdminLifecycle where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+import qualified DA.List as List
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.MilestoneAdmin
+
+setupMilestoneAdmin : Script
+  (Party, Party, Party, ContractId MilestoneAdmin)
+setupMilestoneAdmin = do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "TEST-COIN"
+        instrumentVersion = "1.0"
+      ms = [ mkPendingMilestone "m1" "milestone 1" 100.0
+           , mkPendingMilestone "m2" "milestone 2" 200.0
+           , mkPendingMilestone "m3" "milestone 3" 300.0
+           , mkPendingMilestone "m4" "milestone 4" 400.0
+           ]
+      payload = mkMilestoneAdmin "milestone-001" alice bob carol ref ms []
+  setTime (time (date 2026 Jan 1) 0 0 0)
+  cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  pure (alice, bob, carol, cid)
+
+-- | Create + bind allocation cid.
+testBindAllocation : Script ()
+testBindAllocation = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  c1 <- submit carol $ exerciseCmd cid Bind_Allocation with
+    cid = "milestone-alloc-001"
+  Some a <- queryContractId carol c1
+  assertMsg "allocationCid bound" (a.allocationCid == Some "milestone-alloc-001")
+
+-- | Idempotent bind allowed for same cid.
+testBindAllocationIdempotent : Script ()
+testBindAllocationIdempotent = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  c1 <- submit carol $ exerciseCmd cid Bind_Allocation with cid = "alloc-x"
+  c2 <- submit carol $ exerciseCmd c1 Bind_Allocation with cid = "alloc-x"
+  Some a <- queryContractId carol c2
+  assertMsg "still bound" (a.allocationCid == Some "alloc-x")
+
+-- | Bind to different cid rejects.
+testBindAllocationConflictRejects : Script ()
+testBindAllocationConflictRejects = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  c1 <- submit carol $ exerciseCmd cid Bind_Allocation with cid = "alloc-x"
+  submitMustFail carol $ exerciseCmd c1 Bind_Allocation with cid = "alloc-y"
+
+-- | Confirm a single milestone, advance totalReleased, status remains Active
+-- since other milestones still pending.
+testConfirmSingleMilestone : Script ()
+testConfirmSingleMilestone = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  c1 <- submit carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "m1"
+    confirmedAt = time (date 2026 Feb 1) 0 0 0
+  Some a <- queryContractId carol c1
+  assertMsg "totalReleased = 100" (a.totalReleased == 100.0)
+  assertMsg "still Active" (a.status == Active)
+  case List.find (\m -> m.name == "m1") a.milestones of
+    Some m -> assertMsg "m1 confirmed" m.confirmed
+    None -> abort "m1 missing"
+
+-- | Confirm out-of-order: 1, 3, 2, 4.
+testConfirmOutOfOrder : Script ()
+testConfirmOutOfOrder = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  let t = time (date 2026 Feb 1) 0 0 0
+  c1 <- submit carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "m1"; confirmedAt = t
+  c2 <- submit carol $ exerciseCmd c1 Confirm_Milestone with
+    milestoneName = "m3"; confirmedAt = t
+  c3 <- submit carol $ exerciseCmd c2 Confirm_Milestone with
+    milestoneName = "m2"; confirmedAt = t
+  c4 <- submit carol $ exerciseCmd c3 Confirm_Milestone with
+    milestoneName = "m4"; confirmedAt = t
+  Some a <- queryContractId carol c4
+  assertMsg "totalReleased = 1000" (a.totalReleased == 1000.0)
+  assertMsg "auto-Completed after all confirmed" (a.status == Completed)
+
+-- | Double-confirm rejects.
+testDoubleConfirmRejects : Script ()
+testDoubleConfirmRejects = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  let t = time (date 2026 Feb 1) 0 0 0
+  c1 <- submit carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "m1"; confirmedAt = t
+  submitMustFail carol $ exerciseCmd c1 Confirm_Milestone with
+    milestoneName = "m1"; confirmedAt = t
+
+-- | Unknown milestone rejects.
+testConfirmUnknownRejects : Script ()
+testConfirmUnknownRejects = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  let t = time (date 2026 Feb 1) 0 0 0
+  submitMustFail carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "milestone-does-not-exist"; confirmedAt = t
+
+-- | Batch confirm: ["m1","m3"].
+testBatchConfirm : Script ()
+testBatchConfirm = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  let t = time (date 2026 Feb 1) 0 0 0
+  c1 <- submit carol $ exerciseCmd cid Confirm_Milestone_Batch with
+    milestoneNames = ["m1", "m3"]
+    confirmedAt = t
+  Some a <- queryContractId carol c1
+  assertMsg "totalReleased = 100 + 300 = 400" (a.totalReleased == 400.0)
+  assertMsg "still Active (m2, m4 pending)" (a.status == Active)
+
+-- | Batch including already-confirmed rejects.
+testBatchPartiallyConfirmedRejects : Script ()
+testBatchPartiallyConfirmedRejects = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  let t = time (date 2026 Feb 1) 0 0 0
+  c1 <- submit carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "m1"; confirmedAt = t
+  submitMustFail carol $ exerciseCmd c1 Confirm_Milestone_Batch with
+    milestoneNames = ["m1", "m2"]; confirmedAt = t
+
+-- | Mark cancelled before all milestones confirmed.
+testMilestoneMarkCancelled : Script ()
+testMilestoneMarkCancelled = script do
+  (_, _, carol, cid) <- setupMilestoneAdmin
+  let t = time (date 2026 Feb 1) 0 0 0
+  c1 <- submit carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "m1"; confirmedAt = t
+  c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled_Milestone_Admin with
+    cancelTime = time (date 2026 Apr 1) 0 0 0
+  Some a <- queryContractId carol c2
+  assertMsg "status Cancelled" (a.status == Cancelled)
+  assertMsg "allocationCid cleared" (a.allocationCid == None)
+
+-- | GetMilestoneAdminInfo returns the projection for authorized viewer.
+testGetMilestoneAdminInfo : Script ()
+testGetMilestoneAdminInfo = script do
+  (_, bob, carol, cid) <- setupMilestoneAdmin
+  _ <- submit carol $ exerciseCmd cid Confirm_Milestone with
+    milestoneName = "m1"; confirmedAt = time (date 2026 Feb 1) 0 0 0
+  [(latest, _)] <- query @MilestoneAdmin bob
+  info <- submit bob $ exerciseCmd latest GetMilestoneAdminInfo with viewer = bob
+  assertMsg "info.totalReleased" (info.totalReleased == 100.0)
+  assertMsg "info has 4 milestones" (length info.milestones == 4)

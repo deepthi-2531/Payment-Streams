@@ -1,0 +1,309 @@
+-- | Tests for linear vesting mode.
+--
+-- Covers: create via numeric escrow, partial withdraw, full withdraw, completion,
+-- cancel with pro-rata refund, boundary conditions (t=0, t=end).
+-- Golden values tagged with "GOLDEN:" prefix for SDK parity tests.
+--
+-- NOTE: These tests use the numeric StreamEscrow path (LocalToken asset mode)
+-- to test accrual logic without requiring Daml Finance holdings. The accrual
+-- module is shared between StreamEscrow and StreamHoldingEscrow, so the golden
+-- values are valid for both paths.
+module Test.Stream.Linear where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+import DA.List (head)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | Helper to create a standard linear stream config.
+mkLinearConfig : Party -> Party -> StreamId -> Time -> Time -> Decimal -> Bool -> StreamConfig
+mkLinearConfig sender recipient sid start end deposit cancellable =
+  StreamConfig with
+    streamId = sid
+    sender
+    recipient
+    totalDeposited = deposit
+    startTime = start
+    endTime = end
+    vestingMode = Linear
+    assetType = LocalToken
+    instrumentRef = None
+    cancellable
+    settlementMode = None
+
+-- | Helper: create stream by direct contract creation (numeric escrow path).
+-- Uses submitMulti since StreamEscrow requires both sender and recipient as signatories.
+-- This bypasses the workflow to test accrual logic independently of Daml Finance holdings.
+createLinearStream : Party -> Party -> StreamId -> Time -> Time -> Decimal -> Bool -> Script (ContractId StreamEscrow)
+createLinearStream sender recipient sid start end deposit cancellable = do
+  let cfg = mkLinearConfig sender recipient sid start end deposit cancellable
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = sender
+      observers = []
+
+-- | Test: create a linear stream via the propose/accept workflow.
+testLinearCreate : Script ()
+testLinearCreate = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+
+  setTime start
+
+  escrowCid <- createLinearStream alice bob "linear-001" start end deposit True
+
+  -- Verify escrow exists and is queryable
+  escrows <- query @StreamEscrow bob
+  assertMsg "Should find one escrow" (length escrows == 1)
+  let (_, escrow) = head escrows
+  assertMsg "Status should be Active" (escrow.state.status == Active)
+  assertMsg "TotalWithdrawn should be 0" (escrow.state.totalWithdrawn == 0.0)
+  assertMsg "Deposit matches" (escrow.config.totalDeposited == deposit)
+
+  debug ("GOLDEN:linear_create:totalDeposited:" <> show deposit)
+  debug ("GOLDEN:linear_create:status:" <> show Active)
+
+-- | Test: withdraw at t=0 should fail (nothing accrued yet).
+testLinearWithdrawAtStart : Script ()
+testLinearWithdrawAtStart = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-t0" start end deposit True
+
+  -- Withdraw at exactly t=0 should fail: linearAccrual returns 0
+  submitMustFail bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = start
+
+-- | Test: partial withdraw at midpoint of a linear stream.
+testLinearPartialWithdraw : Script ()
+testLinearPartialWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      -- Midpoint: ~90 days into 181-day stream
+      midpoint = time (date 2025 Apr 1) 0 0 0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-partial" start end deposit True
+
+  setTime midpoint
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = midpoint
+
+  -- Compute expected accrual
+  let expectedAccrued = linearAccrual deposit start end midpoint
+      expectedWithdrawable = withdrawable expectedAccrued 0.0
+
+  debug ("GOLDEN:linear_partial_withdraw:accrued:" <> show expectedAccrued)
+  debug ("GOLDEN:linear_partial_withdraw:withdrawn:" <> show result.amountWithdrawn)
+  debug ("GOLDEN:linear_partial_withdraw:newTotalWithdrawn:" <> show result.newTotalWithdrawn)
+  debug ("GOLDEN:linear_partial_withdraw:status:" <> show result.newStatus)
+
+  assertMsg "Withdrawn amount matches accrued" (result.amountWithdrawn == expectedWithdrawable)
+  assertMsg "Status should remain Active" (result.newStatus == Active)
+
+  -- Verify invariant holds
+  let r = refundable deposit expectedAccrued
+      w = withdrawable expectedAccrued result.newTotalWithdrawn
+  assertMsg "Invariant: r + w + totalWithdrawn <= deposit"
+    (r + w + result.newTotalWithdrawn <= deposit)
+
+-- | Test: full withdraw at end time completes the stream.
+testLinearFullWithdraw : Script ()
+testLinearFullWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-full" start end deposit True
+
+  setTime end
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = end
+
+  debug ("GOLDEN:linear_full_withdraw:withdrawn:" <> show result.amountWithdrawn)
+  debug ("GOLDEN:linear_full_withdraw:newTotalWithdrawn:" <> show result.newTotalWithdrawn)
+  debug ("GOLDEN:linear_full_withdraw:status:" <> show result.newStatus)
+
+  assertMsg "Should withdraw full deposit" (result.amountWithdrawn == deposit)
+  assertMsg "Status should be Completed" (result.newStatus == Completed)
+
+-- | Test: withdraw past end time returns full deposit.
+testLinearWithdrawPastEnd : Script ()
+testLinearWithdrawPastEnd = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      pastEnd = time (date 2025 Aug 1) 0 0 0
+      deposit = 36000.0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-past" start end deposit True
+
+  setTime pastEnd
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = pastEnd
+
+  assertMsg "Should withdraw full deposit past end" (result.amountWithdrawn == deposit)
+  assertMsg "Status should be Completed" (result.newStatus == Completed)
+
+  debug ("GOLDEN:linear_past_end_withdraw:withdrawn:" <> show result.amountWithdrawn)
+
+-- | Test: cancel with pro-rata refund at midpoint.
+testLinearCancel : Script ()
+testLinearCancel = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      cancelAt = time (date 2025 Apr 1) 0 0 0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-cancel" start end deposit True
+
+  setTime cancelAt
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = cancelAt
+
+  let expectedAccrued = linearAccrual deposit start end cancelAt
+      expectedRefund = refundable deposit expectedAccrued
+
+  debug ("GOLDEN:linear_cancel:recipientAmount:" <> show result.recipientAmount)
+  debug ("GOLDEN:linear_cancel:senderRefund:" <> show result.senderRefund)
+
+  assertMsg "Recipient gets accrued minus withdrawn (none withdrawn)"
+    (result.recipientAmount == expectedAccrued)
+  assertMsg "Sender gets refund"
+    (result.senderRefund == expectedRefund)
+  assertMsg "recipientAmount + senderRefund == deposit"
+    (result.recipientAmount + result.senderRefund == deposit)
+
+-- | Test: cancel after partial withdraw.
+testLinearCancelAfterPartialWithdraw : Script ()
+testLinearCancelAfterPartialWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      withdrawAt = time (date 2025 Feb 1) 0 0 0
+      cancelAt = time (date 2025 Apr 1) 0 0 0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-cancel-pw" start end deposit True
+
+  -- Partial withdraw first
+  setTime withdrawAt
+  wResult <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = withdrawAt
+
+  -- Now find the updated escrow (new contract after archive+create)
+  escrows <- query @StreamEscrow bob
+  let (updatedCid, _) = head escrows
+
+  -- Cancel
+  setTime cancelAt
+  cResult <- submit alice do
+    exerciseCmd updatedCid Cancel_Stream with cancelTime = cancelAt
+
+  let accruedAtCancel = linearAccrual deposit start end cancelAt
+      expectedRecipientAmount = accruedAtCancel - wResult.newTotalWithdrawn
+      expectedRefund = deposit - accruedAtCancel
+
+  debug ("GOLDEN:linear_cancel_after_pw:recipientAmount:" <> show cResult.recipientAmount)
+  debug ("GOLDEN:linear_cancel_after_pw:senderRefund:" <> show cResult.senderRefund)
+  debug ("GOLDEN:linear_cancel_after_pw:previouslyWithdrawn:" <> show wResult.newTotalWithdrawn)
+
+  assertMsg "Recipient gets remaining accrued"
+    (cResult.recipientAmount == max 0.0 expectedRecipientAmount)
+  assertMsg "Sender refund correct"
+    (cResult.senderRefund == max 0.0 expectedRefund)
+
+-- | Test: non-cancellable stream cannot be cancelled by sender.
+testLinearNonCancellable : Script ()
+testLinearNonCancellable = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-nocancel" start end deposit False
+
+  setTime (time (date 2025 Apr 1) 0 0 0)
+  submitMustFail alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = time (date 2025 Apr 1) 0 0 0
+
+-- | Test: two sequential withdrawals.
+testLinearSequentialWithdraws : Script ()
+testLinearSequentialWithdraws = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      t1 = time (date 2025 Feb 1) 0 0 0
+      t2 = time (date 2025 May 1) 0 0 0
+
+  setTime start
+  escrowCid <- createLinearStream alice bob "linear-seq" start end deposit True
+
+  -- First withdraw
+  setTime t1
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = t1
+
+  let accrued1 = linearAccrual deposit start end t1
+  assertMsg "First withdraw matches accrual" (r1.amountWithdrawn == accrued1)
+
+  debug ("GOLDEN:linear_seq_w1:withdrawn:" <> show r1.amountWithdrawn)
+
+  -- Second withdraw
+  escrows <- query @StreamEscrow bob
+  let (cid2, _) = head escrows
+
+  setTime t2
+  r2 <- submit bob do
+    exerciseCmd cid2 Withdraw_Stream with withdrawTime = t2
+
+  let accrued2 = linearAccrual deposit start end t2
+      expectedW2 = withdrawable accrued2 r1.newTotalWithdrawn
+
+  debug ("GOLDEN:linear_seq_w2:withdrawn:" <> show r2.amountWithdrawn)
+  debug ("GOLDEN:linear_seq_w2:newTotalWithdrawn:" <> show r2.newTotalWithdrawn)
+
+  assertMsg "Second withdraw correct" (r2.amountWithdrawn == expectedW2)
+  assertMsg "Total withdrawn correct" (r2.newTotalWithdrawn == accrued2)

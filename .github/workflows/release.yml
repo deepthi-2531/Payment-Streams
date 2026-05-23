@@ -1,0 +1,91 @@
+name: Release Packages
+
+on:
+  push:
+    tags:
+      - "sdk-v*.*.*"
+      - "cli-v*.*.*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish npm package
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Resolve release target
+        id: target
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          package="${tag%%-v*}"
+          version="${tag#*-v}"
+
+          case "$package" in
+            sdk)
+              package_name='@canton-streams/sdk'
+              package_dir='packages/sdk'
+              release_name='@canton-streams/sdk'
+              ;;
+            cli)
+              package_name='@canton-streams/cli'
+              package_dir='packages/cli'
+              release_name='@canton-streams/cli'
+              ;;
+            *)
+              echo "Unsupported release tag: $tag"
+              exit 1
+              ;;
+          esac
+
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "package_name=$package_name" >> "$GITHUB_OUTPUT"
+          echo "package_dir=$package_dir" >> "$GITHUB_OUTPUT"
+          echo "release_name=$release_name v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package version
+        run: |
+          manifest_version=$(node -p "require('./${{ steps.target.outputs.package_dir }}/package.json').version")
+          if [ "$manifest_version" != "${{ steps.target.outputs.version }}" ]; then
+            echo "Tag version ${{ steps.target.outputs.version }} does not match package.json version $manifest_version"
+            exit 1
+          fi
+
+      - name: Build SDK
+        run: pnpm --filter @canton-streams/sdk build
+
+      - name: Test SDK
+        run: pnpm --filter @canton-streams/sdk test
+
+      - name: Build CLI
+        if: steps.target.outputs.package == 'cli'
+        run: pnpm --filter @canton-streams/cli build
+
+      - name: Publish package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: pnpm --filter "${{ steps.target.outputs.package_name }}" publish --access public --no-git-checks --provenance
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ steps.target.outputs.release_name }}
+          generate_release_notes: true

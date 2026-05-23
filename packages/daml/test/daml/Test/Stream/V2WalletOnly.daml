@@ -1,0 +1,247 @@
+-- | V2 Token-Standard wallet-only interop acceptance test (STR-89).
+--
+-- ## What this test proves
+--
+-- A wallet that knows ONLY the V2 `Splice.Api.Token.AllocationV2` and
+-- `Splice.Api.Token.AllocationRequestV2` vocabulary (no
+-- `CantonStreams.*` imports) can complete the full stream lifecycle
+-- through the V2-only admin/observability contracts (STR-86/87/88).
+--
+-- ## Two-actor split (per STR-89 spec)
+--
+--   * **Wallet** signs standard V2 interface exercises only —
+--     `AllocationFactory_Allocate`, `Allocation_Cancel`,
+--     `AllocationRequest_*`.
+--   * **Executor** (= operator running the SDK) drives
+--     `Allocation_Settle` / `SettlementFactory_SettleBatch` with
+--     `nextIterationFunding` per accrual period — never touches a wallet.
+--
+-- ## Scope of THIS test
+--
+-- This test exercises the **admin contract surface** of all three
+-- stream templates against the V2 vocabulary, demonstrating:
+--
+--   1. The admin contracts (StreamAdmin / StreamFlowAdmin /
+--      MilestoneAdmin) only need V2 vocabulary to advance state.
+--   2. The recipient + sender wallet exercises that drive the
+--      lifecycle (AllocationFactory_Allocate, Allocation_Cancel) live
+--      OUTSIDE the admin contracts — the wallet operates against
+--      `Splice.Api.Token.*` exclusively.
+--   3. The operator's executor calls `Sync_Iteration*` / `Confirm_*`
+--      to record the V2 wallet's actions; these are operator-only.
+--
+-- The full real-V2-Allocation-create-and-settle flow lives in the
+-- `splice-token-standard-test` infrastructure (STR-101) — these tests
+-- exercise the admin contract semantics against synthetic V2 cids.
+-- When the test infrastructure is wired through STR-101 follow-ons,
+-- swap the synthetic cids for real ones; the admin contract semantics
+-- don't change.
+module Test.Stream.V2WalletOnly where
+
+import Daml.Script
+import DA.Time (time, days, addRelTime)
+import DA.Date (date, Month(..))
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.StreamAdmin
+import CantonStreams.Stream.StreamFlowAdmin
+import CantonStreams.Stream.MilestoneAdmin
+
+-- | Wallet-only StreamAdmin acceptance: 6 iterations driven by the
+-- operator's executor, with the wallet supplying the underlying V2
+-- Allocation cids (here synthetic). Verifies:
+--
+--   - sender wallet signs exactly 1 `AllocationFactory_Allocate`-shaped
+--     interaction at create (modeled here as the initial admin record)
+--   - operator pumps 6 `Sync_Iteration` calls, each recording the
+--     previous V2 settle's new allocation cid
+--   - the iteration chain has 6 distinct allocations sharing one
+--     `originalAllocationId` (the first allocation cid)
+--   - final iteration auto-transitions to Completed
+testWalletOnlyStreamAdmin_SixIterations : Script ()
+testWalletOnlyStreamAdmin_SixIterations = script do
+  alice <- allocateParty "Alice-Sender"  -- Wallet party
+  bob <- allocateParty "Bob-Recipient"   -- Wallet party
+  carol <- allocateParty "Carol-Operator" -- Executor
+  let start = time (date 2026 Jan 1) 0 0 0
+      end = time (date 2026 Jul 1) 0 0 0
+      ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "CC"   -- canonical Canton Coin
+        instrumentVersion = "1.0"
+      -- Sender wallet conceptually signed AllocationFactory_Allocate
+      -- for 1200 CC with nextIterationFunding=Some(1200). The
+      -- resulting V2 Allocation has cid "alloc-iter-1".
+      adminPayload = mkStreamAdmin "v2-stream-001" alice bob carol ref 1200.0 Linear start end True []
+  setTime start
+  adminCid <- submitMulti [alice, bob, carol] [] $ createCmd adminPayload
+
+  -- Iterate 6 times, 200 CC each = 1200 CC total. Each iteration
+  -- represents the operator exercising V2 Allocation_Settle, which
+  -- atomically creates the next iteration's allocation. Final
+  -- iteration's newAllocationCid = None (nextIterationFunding=None).
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-1"
+  c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-2"
+  c3 <- submit carol $ exerciseCmd c2 Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-3"
+  c4 <- submit carol $ exerciseCmd c3 Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-4"
+  c5 <- submit carol $ exerciseCmd c4 Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-5"
+  c6 <- submit carol $ exerciseCmd c5 Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = None  -- final iteration
+
+  Some admin <- queryContractId carol c6
+  assertMsg "6 iterations recorded" (admin.numIterations == 6)
+  assertMsg "totalWithdrawn = 1200" (admin.totalWithdrawn == 1200.0)
+  assertMsg "auto-Completed" (admin.status == Completed)
+  assertMsg "currentAllocationCid is None on final" (admin.currentAllocationCid == None)
+  -- originalAllocationId is the FIRST allocation in the chain.
+  assertMsg "originalAllocationId is iter-1"
+    (admin.originalAllocationId == Some "alloc-iter-1")
+  debug "GOLDEN:v2_wallet_only:stream_admin:6_iters:total_1200:original_alloc-iter-1"
+
+-- | Wallet-only StreamFlowAdmin acceptance: rolling top-up + pause + resume.
+--
+-- Verifies the operator can drive a fluid-flow stream against the V2
+-- vocabulary without the wallet ever exercising a CantonStreams-specific
+-- choice — only AllocationFactory_Allocate (initial + top-up) and
+-- Allocation_Cancel (terminal).
+testWalletOnlyStreamFlow_TopUpPauseResume : Script ()
+testWalletOnlyStreamFlow_TopUpPauseResume = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let start = time (date 2026 Jan 1) 0 0 0
+      ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "USDCx"
+        instrumentVersion = "1.0"
+      payload = mkStreamFlowAdmin "v2-flow-001" alice bob carol ref 0.001 start 100.0 []
+  setTime start
+  flowCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+
+  -- Wallet exercised AllocationFactory_Allocate for initial 100 USDCx.
+  -- Operator records iteration 1: settle 30 USDCx.
+  c1 <- submit carol $ exerciseCmd flowCid Sync_Iteration_Flow with
+    iterationAmount = 30.0; newAllocationCid = Some "flow-alloc-iter-1"
+  -- Operator pauses (e.g. customer dispute).
+  c2 <- submit carol $ exerciseCmd c1 Pause_Flow_Admin
+  -- Wallet exercises AllocationFactory_Allocate for 50 USDCx top-up.
+  -- Operator merges via SettlementFactory_SettleBatch self-transfer +
+  -- records via TopUp_Flow_Admin.
+  c3 <- submit carol $ exerciseCmd c2 TopUp_Flow_Admin with
+    topUpAmount = 50.0; newAllocationCid = Some "flow-alloc-merged"
+  -- Resume.
+  c4 <- submit carol $ exerciseCmd c3 Resume_Flow_Admin
+  -- Settle 80 more USDCx (cumulative recipient draw = 110, funded = 150).
+  c5 <- submit carol $ exerciseCmd c4 Sync_Iteration_Flow with
+    iterationAmount = 80.0; newAllocationCid = Some "flow-alloc-iter-2"
+
+  Some flow <- queryContractId carol c5
+  assertMsg "currentFundedAmount = 150 after topup"
+    (flow.currentFundedAmount == 150.0)
+  assertMsg "totalWithdrawn = 110" (flow.totalWithdrawn == 110.0)
+  assertMsg "numIterations = 2 (top-up doesn't increment iter counter)"
+    (flow.numIterations == 2)
+  assertMsg "not paused after resume" (not flow.paused)
+  assertMsg "originalAllocationId preserved from iter-1"
+    (flow.originalAllocationId == Some "flow-alloc-iter-1")
+  debug "GOLDEN:v2_wallet_only:stream_flow:topup_pause_resume:funded_150:withdrawn_110"
+
+-- | Wallet-only MilestoneAdmin acceptance: 4-milestone stream
+-- confirmed out-of-order via batch + per-leg settles.
+--
+-- Verifies the operator can drive a milestone stream against the V2
+-- vocabulary's multi-leg `Allocation_Settle` (per-leg via `extraArgs.legId`)
+-- and `SettlementFactory_SettleBatch` (multi-leg atomic) without the
+-- wallet seeing N separate prompts — just one initial
+-- `AllocationFactory_Allocate` with N TransferLegSides.
+testWalletOnlyMilestoneAdmin_FourMilestonesOutOfOrder : Script ()
+testWalletOnlyMilestoneAdmin_FourMilestonesOutOfOrder = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "CC"
+        instrumentVersion = "1.0"
+      ms = [ mkPendingMilestone "design" "Design phase" 100.0
+           , mkPendingMilestone "alpha"  "Alpha build" 250.0
+           , mkPendingMilestone "beta"   "Beta release" 400.0
+           , mkPendingMilestone "ga"     "GA launch" 250.0
+           ]
+      payload = mkMilestoneAdmin "v2-milestone-001" alice bob carol ref ms []
+  setTime (time (date 2026 Jan 1) 0 0 0)
+  mileCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+
+  -- Wallet exercised AllocationFactory_Allocate ONCE with 4
+  -- TransferLegSides totalling 1000 CC. Operator binds the resulting
+  -- multi-leg V2 Allocation cid.
+  c1 <- submit carol $ exerciseCmd mileCid Bind_Allocation with
+    cid = "milestone-multi-alloc-001"
+
+  -- Confirm design (single).
+  let t1 = time (date 2026 Feb 1) 0 0 0
+  c2 <- submit carol $ exerciseCmd c1 Confirm_Milestone with
+    milestoneName = "design"; confirmedAt = t1
+
+  -- Confirm alpha + ga via batch (out of order — ga before beta!).
+  -- This models the V2 SettlementFactory_SettleBatch atomic two-leg
+  -- settle.
+  let t2 = addRelTime t1 (days 30)
+  c3 <- submit carol $ exerciseCmd c2 Confirm_Milestone_Batch with
+    milestoneNames = ["alpha", "ga"]; confirmedAt = t2
+
+  -- Confirm beta (final).
+  let t3 = addRelTime t2 (days 30)
+  c4 <- submit carol $ exerciseCmd c3 Confirm_Milestone with
+    milestoneName = "beta"; confirmedAt = t3
+
+  Some m <- queryContractId carol c4
+  assertMsg "totalReleased = 1000" (m.totalReleased == 1000.0)
+  assertMsg "auto-Completed after all 4 confirmed" (m.status == Completed)
+  debug "GOLDEN:v2_wallet_only:milestone_admin:4_legs_out_of_order:total_1000"
+
+-- | Wallet-only cancellation flow (StreamAdmin).
+--
+-- Verifies cancellation works against V2 vocabulary:
+--   - sender or recipient exercises V2 Allocation_Cancel (modeled here)
+--   - operator records terminal state via Mark_Cancelled
+testWalletOnlyStreamAdmin_Cancel : Script ()
+testWalletOnlyStreamAdmin_Cancel = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let start = time (date 2026 Jan 1) 0 0 0
+      end = time (date 2026 Jul 1) 0 0 0
+      ref = InstrumentRef with
+        depository = alice
+        issuer = alice
+        instrumentId = "CC"
+        instrumentVersion = "1.0"
+      payload = mkStreamAdmin "v2-cancel-001" alice bob carol ref 1000.0 Linear start end True []
+  setTime start
+  adminCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+
+  -- Operator settles 2 iterations (400 CC).
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-i1"
+  c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-i2"
+
+  -- Wallet exercised V2 Allocation_Cancel on alloc-i2 (or alice/bob
+  -- co-sign for mutual cancel). Operator records via Mark_Cancelled.
+  c3 <- submit carol $ exerciseCmd c2 Mark_Cancelled with
+    cancelTime = time (date 2026 Apr 1) 0 0 0
+    finalWithdrawn = 400.0
+
+  Some admin <- queryContractId carol c3
+  assertMsg "status = Cancelled" (admin.status == Cancelled)
+  assertMsg "finalWithdrawn = 400" (admin.totalWithdrawn == 400.0)
+  assertMsg "currentAllocationCid cleared" (admin.currentAllocationCid == None)

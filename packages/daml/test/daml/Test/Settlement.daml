@@ -1,0 +1,152 @@
+-- | Tests for the Settlement Adapter module.
+--
+-- Covers: splitEscrow, settleCancel, mergeEscrow pure functions.
+module Test.Settlement where
+
+import Daml.Script
+import CantonStreams.Settlement.Adapter
+
+-- | Test: splitEscrow splits balance into withdrawn and remainder.
+testSplitEscrow : Script ()
+testSplitEscrow = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let balance = EscrowBalance with amount = 10000.0; owner = alice
+      splitAmount = 3000.0
+      (withdrawn, remainder) = splitEscrow balance splitAmount bob
+
+  assertMsg "Withdrawn amount correct" (withdrawn.amount == 3000.0)
+  assertMsg "Withdrawn owner is recipient" (withdrawn.owner == bob)
+  assertMsg "Remainder amount correct" (remainder.amount == 7000.0)
+  assertMsg "Remainder owner is original" (remainder.owner == alice)
+
+  -- Postcondition: amounts sum to original
+  assertMsg "Split preserves total" (withdrawn.amount + remainder.amount == balance.amount)
+
+  debug ("GOLDEN:split:withdrawn:" <> show withdrawn.amount)
+  debug ("GOLDEN:split:remainder:" <> show remainder.amount)
+
+-- | Test: splitEscrow with zero split.
+testSplitEscrowZero : Script ()
+testSplitEscrowZero = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let balance = EscrowBalance with amount = 5000.0; owner = alice
+      (withdrawn, remainder) = splitEscrow balance 0.0 bob
+
+  assertMsg "Zero withdrawn" (withdrawn.amount == 0.0)
+  assertMsg "Full remainder" (remainder.amount == 5000.0)
+
+-- | Test: splitEscrow with full split.
+testSplitEscrowFull : Script ()
+testSplitEscrowFull = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let balance = EscrowBalance with amount = 5000.0; owner = alice
+      (withdrawn, remainder) = splitEscrow balance 5000.0 bob
+
+  assertMsg "Full withdrawn" (withdrawn.amount == 5000.0)
+  assertMsg "Zero remainder" (remainder.amount == 0.0)
+
+  debug ("GOLDEN:split_full:withdrawn:" <> show withdrawn.amount)
+  debug ("GOLDEN:split_full:remainder:" <> show remainder.amount)
+
+-- | Test: settleCancel splits escrow into recipient and sender portions.
+testSettleCancel : Script ()
+testSettleCancel = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let escrow = EscrowBalance with amount = 10000.0; owner = alice
+      recipientAmount = 4000.0
+      senderRefund = 6000.0
+      (recipientBalance, senderBalance) = settleCancel escrow recipientAmount senderRefund bob alice
+
+  assertMsg "Recipient balance correct" (recipientBalance.amount == 4000.0)
+  assertMsg "Recipient owner correct" (recipientBalance.owner == bob)
+  assertMsg "Sender refund correct" (senderBalance.amount == 6000.0)
+  assertMsg "Sender owner correct" (senderBalance.owner == alice)
+
+  -- Sum check
+  assertMsg "Settlement preserves total"
+    (recipientBalance.amount + senderBalance.amount == escrow.amount)
+
+  debug ("GOLDEN:settle_cancel:recipient:" <> show recipientBalance.amount)
+  debug ("GOLDEN:settle_cancel:sender:" <> show senderBalance.amount)
+
+-- | Test: settleCancel with zero recipient (cancel at t=0).
+testSettleCancelZeroRecipient : Script ()
+testSettleCancelZeroRecipient = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let escrow = EscrowBalance with amount = 10000.0; owner = alice
+      (recipientBalance, senderBalance) = settleCancel escrow 0.0 10000.0 bob alice
+
+  assertMsg "Recipient gets nothing" (recipientBalance.amount == 0.0)
+  assertMsg "Sender gets full refund" (senderBalance.amount == 10000.0)
+
+-- | Test: settleCancel with full recipient (cancel at t=end).
+testSettleCancelFullRecipient : Script ()
+testSettleCancelFullRecipient = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let escrow = EscrowBalance with amount = 10000.0; owner = alice
+      (recipientBalance, senderBalance) = settleCancel escrow 10000.0 0.0 bob alice
+
+  assertMsg "Recipient gets full amount" (recipientBalance.amount == 10000.0)
+  assertMsg "Sender gets nothing" (senderBalance.amount == 0.0)
+
+-- | Test: mergeEscrow combines two balances with same owner.
+testMergeEscrow : Script ()
+testMergeEscrow = script do
+  alice <- allocateParty "Alice"
+
+  let a = EscrowBalance with amount = 5000.0; owner = alice
+      b = EscrowBalance with amount = 3000.0; owner = alice
+      merged = mergeEscrow a b
+
+  assertMsg "Merged amount correct" (merged.amount == 8000.0)
+  assertMsg "Owner preserved" (merged.owner == alice)
+
+  debug ("GOLDEN:merge:amount:" <> show merged.amount)
+
+-- | Test: mergeEscrow with zero balance.
+testMergeEscrowWithZero : Script ()
+testMergeEscrowWithZero = script do
+  alice <- allocateParty "Alice"
+
+  let a = EscrowBalance with amount = 5000.0; owner = alice
+      b = EscrowBalance with amount = 0.0; owner = alice
+      merged = mergeEscrow a b
+
+  assertMsg "Merged with zero" (merged.amount == 5000.0)
+
+-- | Test: getEscrowAmount accessor.
+testGetEscrowAmount : Script ()
+testGetEscrowAmount = script do
+  alice <- allocateParty "Alice"
+
+  let balance = EscrowBalance with amount = 7500.0; owner = alice
+  assertMsg "getEscrowAmount correct" (getEscrowAmount balance == 7500.0)
+
+-- | Test: splitEscrow with fractional amounts.
+testSplitEscrowFractional : Script ()
+testSplitEscrowFractional = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let balance = EscrowBalance with amount = 10000.0; owner = alice
+      splitAmount = 3333.0
+      (withdrawn, remainder) = splitEscrow balance splitAmount bob
+
+  assertMsg "Fractional withdrawn correct" (withdrawn.amount == 3333.0)
+  assertMsg "Fractional remainder correct" (remainder.amount == 6667.0)
+  assertMsg "Fractional split preserves total" (withdrawn.amount + remainder.amount == balance.amount)
+
+  debug ("GOLDEN:split_frac:withdrawn:" <> show withdrawn.amount)
+  debug ("GOLDEN:split_frac:remainder:" <> show remainder.amount)

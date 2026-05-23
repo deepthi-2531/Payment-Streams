@@ -1,0 +1,306 @@
+-- | Invariant verification tests.
+--
+-- At every state transition, verify:
+--   refundable + withdrawable + totalWithdrawn <= totalDeposited
+--   all values >= 0
+--
+-- Tests cover all four vesting modes with multiple transitions.
+module Test.Invariants where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+import DA.List (head)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | Assert the core invariant for a given stream state at a point in time.
+-- refundable(now) + withdrawable(now) + totalWithdrawn <= totalDeposited
+-- AND all values >= 0.
+assertInvariant : Text -> Decimal -> Decimal -> Decimal -> Script ()
+assertInvariant label totalDeposited accrued totalWithdrawn = do
+  let w = withdrawable accrued totalWithdrawn
+      r = refundable totalDeposited accrued
+      total = r + w + totalWithdrawn
+      ok = checkInvariant totalDeposited accrued totalWithdrawn 0.0
+  assertMsg (label <> ": invariant violated (r=" <> show r <> " w=" <> show w <> " tw=" <> show totalWithdrawn <> " total=" <> show total <> " deposit=" <> show totalDeposited <> ")") ok
+  debug ("GOLDEN:invariant:" <> label <> ":r=" <> show r <> ",w=" <> show w <> ",tw=" <> show totalWithdrawn <> ",ok=" <> show ok)
+
+-- | Helper: create a stream via direct contract creation.
+mkStream : Party -> Party -> StreamId -> StreamConfig -> Script (ContractId StreamEscrow)
+mkStream sender recipient sid cfg = do
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = cfg.totalDeposited; owner = sender
+      observers = []
+
+-- | Test: linear invariant at creation, partial withdraw, full withdraw.
+testInvariantLinear : Script ()
+testInvariantLinear = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      cfg = StreamConfig with
+        streamId = "inv-linear"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = Linear
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+
+  setTime start
+  escrowCid <- mkStream alice bob "inv-linear" cfg
+
+  -- At creation (t=start)
+  let accrued0 = linearAccrual deposit start end start
+  assertInvariant "linear-t0" deposit accrued0 0.0
+
+  -- At midpoint
+  let t1 = time (date 2025 Apr 1) 0 0 0
+      accrued1 = linearAccrual deposit start end t1
+  assertInvariant "linear-mid" deposit accrued1 0.0
+
+  -- Withdraw at midpoint
+  setTime t1
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = t1
+  assertInvariant "linear-after-w1" deposit accrued1 r1.newTotalWithdrawn
+
+  -- At 5/6 through
+  let t2 = time (date 2025 Jun 1) 0 0 0
+      accrued2 = linearAccrual deposit start end t2
+  assertInvariant "linear-5/6" deposit accrued2 r1.newTotalWithdrawn
+
+  -- Second withdraw
+  escrows <- query @StreamEscrow bob
+  let (cid2, _) = head escrows
+  setTime t2
+  r2 <- submit bob do
+    exerciseCmd cid2 Withdraw_Stream with withdrawTime = t2
+  assertInvariant "linear-after-w2" deposit accrued2 r2.newTotalWithdrawn
+
+  -- At end
+  let accruedEnd = linearAccrual deposit start end end
+  assertInvariant "linear-end" deposit accruedEnd r2.newTotalWithdrawn
+
+-- | Test: cliff invariant at each transition.
+testInvariantCliff : Script ()
+testInvariantCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start     = time (date 2025 Jan 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      end       = time (date 2025 Jul 1) 0 0 0
+      deposit   = 36000.0
+      cfg = StreamConfig with
+        streamId = "inv-cliff"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = CliffLinear with cliffTime
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+
+  setTime start
+  escrowCid <- mkStream alice bob "inv-cliff" cfg
+
+  -- Before cliff
+  let tBefore = time (date 2025 Mar 1) 0 0 0
+      accruedBefore = cliffLinearAccrual deposit start end cliffTime tBefore
+  assertInvariant "cliff-before" deposit accruedBefore 0.0
+
+  -- At cliff
+  let accruedCliff = cliffLinearAccrual deposit start end cliffTime cliffTime
+  assertInvariant "cliff-at" deposit accruedCliff 0.0
+
+  -- Withdraw at cliff
+  setTime cliffTime
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = cliffTime
+  assertInvariant "cliff-after-w1" deposit accruedCliff r1.newTotalWithdrawn
+
+  -- After cliff
+  let tAfter = time (date 2025 May 15) 0 0 0
+      accruedAfter = cliffLinearAccrual deposit start end cliffTime tAfter
+  assertInvariant "cliff-post" deposit accruedAfter r1.newTotalWithdrawn
+
+  -- At end
+  let accruedEnd = cliffLinearAccrual deposit start end cliffTime end
+  assertInvariant "cliff-end" deposit accruedEnd r1.newTotalWithdrawn
+
+-- | Test: stepped invariant at each transition.
+testInvariantStepped : Script ()
+testInvariantStepped = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Nov 1) 0 0 0
+      deposit = 10000.0
+      stepInt = days 30
+      amtPerStep = 1000.0
+      cfg = StreamConfig with
+        streamId = "inv-stepped"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = Stepped with
+          stepInterval = stepInt
+          amountPerStep = amtPerStep
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+
+  setTime start
+  escrowCid <- mkStream alice bob "inv-stepped" cfg
+
+  -- At creation
+  let accrued0 = steppedAccrual deposit start stepInt amtPerStep start
+  assertInvariant "stepped-t0" deposit accrued0 0.0
+
+  -- Between steps (day 15)
+  let t1 = time (date 2025 Jan 16) 0 0 0
+      accrued1 = steppedAccrual deposit start stepInt amtPerStep t1
+  assertInvariant "stepped-day15" deposit accrued1 0.0
+
+  -- At step 1 boundary
+  let t2 = time (date 2025 Jan 31) 0 0 0
+      accrued2 = steppedAccrual deposit start stepInt amtPerStep t2
+  assertInvariant "stepped-step1" deposit accrued2 0.0
+
+  -- Withdraw at step 3
+  let t3 = time (date 2025 Apr 1) 0 0 0
+      accrued3 = steppedAccrual deposit start stepInt amtPerStep t3
+  setTime t3
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = t3
+  assertInvariant "stepped-after-w1" deposit accrued3 r1.newTotalWithdrawn
+
+  -- At step 7
+  let t4 = time (date 2025 Aug 1) 0 0 0
+      accrued4 = steppedAccrual deposit start stepInt amtPerStep t4
+  assertInvariant "stepped-step7" deposit accrued4 r1.newTotalWithdrawn
+
+-- | Test: renewable invariant through withdraw and renewal.
+testInvariantRenewable : Script ()
+testInvariantRenewable = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end1  = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+      cfg = StreamConfig with
+        streamId = "inv-renew"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end1
+        vestingMode = RenewableTerm with termDuration = days 90
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+
+  setTime start
+  escrowCid <- mkStream alice bob "inv-renew" cfg
+
+  -- At creation
+  let accrued0 = linearAccrual deposit start end1 start
+  assertInvariant "renew-t0" deposit accrued0 0.0
+
+  -- Midpoint
+  let t1 = time (date 2025 Feb 15) 0 0 0
+      accrued1 = linearAccrual deposit start end1 t1
+  assertInvariant "renew-mid" deposit accrued1 0.0
+
+  -- Withdraw
+  setTime t1
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = t1
+  assertInvariant "renew-after-w1" deposit accrued1 r1.newTotalWithdrawn
+
+  -- Renew
+  escrows <- query @StreamEscrow bob
+  let (cid2, _) = head escrows
+  let newEnd = time (date 2025 Jul 1) 0 0 0
+      addDeposit = 6000.0
+  submit alice do
+    exerciseCmd cid2 Renew_Stream with
+      additionalDeposit = addDeposit
+      newEndTime = newEnd
+      renewTime = newEnd  -- [H2] anchor accrual; <= newEnd satisfies the bound
+
+  -- After renewal, new total deposit
+  let newDeposit = deposit + addDeposit
+      t2 = time (date 2025 May 1) 0 0 0
+      accrued2 = linearAccrual newDeposit start newEnd t2
+  assertInvariant "renew-post-renewal" newDeposit accrued2 r1.newTotalWithdrawn
+
+-- | Test: invariant holds at cancellation boundaries.
+testInvariantCancelBoundary : Script ()
+testInvariantCancelBoundary = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      cfg = StreamConfig with
+        streamId = "inv-cancel"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = Linear
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+
+  setTime start
+  escrowCid <- mkStream alice bob "inv-cancel" cfg
+
+  -- Cancel at 1/3 point
+  let cancelAt = time (date 2025 Mar 1) 0 0 0
+      accruedAtCancel = linearAccrual deposit start end cancelAt
+  assertInvariant "cancel-pre" deposit accruedAtCancel 0.0
+
+  setTime cancelAt
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = cancelAt
+
+  -- After cancel: recipient gets accrued, sender gets refund
+  let postCancelTotal = result.recipientAmount + result.senderRefund
+  assertMsg "Cancel settlement sums correctly"
+    (postCancelTotal <= deposit)
+  assertMsg "Recipient amount non-negative" (result.recipientAmount >= 0.0)
+  assertMsg "Sender refund non-negative" (result.senderRefund >= 0.0)
+
+  debug ("GOLDEN:invariant_cancel:recipientAmount:" <> show result.recipientAmount)
+  debug ("GOLDEN:invariant_cancel:senderRefund:" <> show result.senderRefund)
+  debug ("GOLDEN:invariant_cancel:sum:" <> show postCancelTotal)

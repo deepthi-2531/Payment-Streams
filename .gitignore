@@ -1,0 +1,46 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+*.tsbuildinfo
+
+# Daml
+.daml/
+.lib/
+packages/daml/**/dar/
+
+# Generated
+packages/sdk/generated/
+packages/sdk/test/fixtures/accrual-golden.json
+
+# IDE / per-developer tooling (may contain absolute paths)
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+config/local*.json
+!config/local.testnet.example.json
+
+# Turbo
+.turbo/
+
+# Test coverage
+coverage/
+
+# Docker
+docker/data/
+
+# Logs
+*.log

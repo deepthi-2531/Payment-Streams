@@ -1,0 +1,20 @@
+sdk-version: 3.4.10
+name: canton-streams-test
+source: daml
+version: 0.2.7
+dependencies:
+  - daml-prim
+  - daml-stdlib
+  - daml-script-lts
+data-dependencies:
+  - ../interfaces/.daml/dist/canton-streams-interfaces-0.2.3.dar
+  - ../main/.daml/dist/canton-streams-0.2.8.dar
+  # Real V2 DARs (STR-65 fetch + STR-102 Phase 2 binding). Required for
+  # tests that exercise the V2 AllocationRequest interface directly.
+  # Only the four directly referenced by Test.Stream.AllocationWorkflow
+  # are listed; the others are pulled in transitively via the main DAR.
+  - ../main/.lib/splice-api-token-metadata-v1-1.0.0.dar
+  - ../main/.lib/splice-api-token-holding-v2-1.0.0.dar
+  - ../main/.lib/splice-api-token-allocation-v2-1.0.0.dar
+  - ../main/.lib/splice-api-token-allocation-request-v2-1.0.0.dar
+start-navigator: no

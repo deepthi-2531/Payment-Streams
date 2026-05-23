@@ -1,0 +1,67 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — UpdateService definition.
+// Updated to match Canton 3.4.11+ server API.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "UpdateServiceOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/offset_checkpoint.proto";
+import "com/daml/ledger/api/v2/reassignment.proto";
+import "com/daml/ledger/api/v2/transaction.proto";
+import "com/daml/ledger/api/v2/transaction_filter.proto";
+
+// Service for streaming historical and live updates from the ledger.
+service UpdateService {
+  // Stream updates from a given begin offset.
+  rpc GetUpdates(GetUpdatesRequest) returns (stream GetUpdatesResponse);
+
+  // Get a single update by its ID.
+  rpc GetUpdateById(GetUpdateByIdRequest) returns (GetUpdateResponse);
+
+  // Get a single update by its offset.
+  rpc GetUpdateByOffset(GetUpdateByOffsetRequest) returns (GetUpdateResponse);
+}
+
+message UpdateFormat {
+  TransactionFormat include_transactions = 1;
+  EventFormat include_reassignments = 2;
+}
+
+message GetUpdatesRequest {
+  int64 begin_exclusive = 1;
+  optional int64 end_inclusive = 2;
+  UpdateFormat update_format = 5;
+  reserved 3, 4;
+  reserved "filter", "verbose";
+}
+
+message GetUpdatesResponse {
+  oneof update {
+    Transaction transaction = 1;
+    Reassignment reassignment = 2;
+    OffsetCheckpoint offset_checkpoint = 3;
+  }
+}
+
+message GetUpdateByIdRequest {
+  string update_id = 1;
+  EventFormat event_format = 2;
+}
+
+message GetUpdateByOffsetRequest {
+  int64 update_offset = 1;
+  EventFormat event_format = 2;
+}
+
+message GetUpdateResponse {
+  oneof update {
+    Transaction transaction = 1;
+    Reassignment reassignment = 2;
+    OffsetCheckpoint offset_checkpoint = 3;
+  }
+}

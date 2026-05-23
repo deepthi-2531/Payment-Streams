@@ -1,0 +1,237 @@
+-- | Tests for batch stream creation (numeric escrow path).
+--
+-- Covers: batch creation of 10+ streams, verification that all are queryable,
+-- batch with mixed vesting modes, duplicate streamId rejection.
+module Test.BatchCreate where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+import DA.List (head)
+import DA.Foldable (forA_)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.Escrow
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | Helper: create a stream via direct contract creation (numeric escrow path).
+createStream : Party -> Party -> StreamConfig -> Decimal -> Script (ContractId StreamEscrow)
+createStream sender recipient cfg deposit = do
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = sender
+      observers = []
+
+-- | Test: batch create 12 streams and verify all are queryable.
+testBatchCreate12 : Script ()
+testBatchCreate12 = script do
+  alice <- allocateParty "Alice"
+
+  -- Allocate 12 recipients
+  recipients <- forA [1..12] $ \i -> allocateParty ("Employee" <> show i)
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 6000.0
+
+  setTime start
+
+  -- Create 12 streams directly
+  forA_ (zip recipients [1 .. length recipients]) $ \(recip, i) -> do
+    let cfg = StreamConfig with
+          streamId = "batch-" <> show i
+          sender = alice
+          recipient = recip
+          totalDeposited = deposit
+          startTime = start
+          endTime = end
+          vestingMode = Linear
+          assetType = LocalToken
+          instrumentRef = None
+          cancellable = True
+          settlementMode = None
+    createStream alice recip cfg deposit
+
+  -- Verify all 12 escrows exist (query from Alice who is sender on all)
+  escrows <- query @StreamEscrow alice
+  assertMsg "Should have 12 escrows" (length escrows == 12)
+
+  debug ("GOLDEN:batch_create:count:12")
+  debug ("GOLDEN:batch_create:escrows_created:" <> show (length escrows))
+
+-- | Test: batch with mixed vesting modes.
+testBatchMixedModes : Script ()
+testBatchMixedModes = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+  diana <- allocateParty "Diana"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      cliffTime = time (date 2025 Apr 1) 0 0 0
+      deposit = 6000.0
+
+  setTime start
+
+  -- Linear stream
+  createStream alice bob
+    (StreamConfig with
+      streamId = "batch-linear"
+      sender = alice
+      recipient = bob
+      totalDeposited = deposit
+      startTime = start
+      endTime = end
+      vestingMode = Linear
+      assetType = LocalToken
+      instrumentRef = None
+      cancellable = True
+      settlementMode = None)
+    deposit
+
+  -- Cliff stream
+  createStream alice charlie
+    (StreamConfig with
+      streamId = "batch-cliff"
+      sender = alice
+      recipient = charlie
+      totalDeposited = deposit
+      startTime = start
+      endTime = end
+      vestingMode = CliffLinear with cliffTime
+      assetType = LocalToken
+      instrumentRef = None
+      cancellable = True
+      settlementMode = None)
+    deposit
+
+  -- Stepped stream
+  createStream alice diana
+    (StreamConfig with
+      streamId = "batch-stepped"
+      sender = alice
+      recipient = diana
+      totalDeposited = deposit
+      startTime = start
+      endTime = end
+      vestingMode = Stepped with
+        stepInterval = days 30
+        amountPerStep = 1000.0
+      assetType = LocalToken
+      instrumentRef = None
+      cancellable = False
+      settlementMode = None)
+    deposit
+
+  -- Verify all exist
+  escrows <- query @StreamEscrow alice
+  assertMsg "Should have 3 escrows" (length escrows == 3)
+
+  debug ("GOLDEN:batch_mixed:escrows:" <> show (length escrows))
+
+-- | Test: duplicate streamId for same sender is rejected (key uniqueness).
+testBatchDuplicateIdRejected : Script ()
+testBatchDuplicateIdRejected = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 5000.0
+
+  setTime start
+
+  -- Create first stream
+  createStream alice bob
+    (StreamConfig with
+      streamId = "batch-dup"
+      sender = alice
+      recipient = bob
+      totalDeposited = deposit
+      startTime = start
+      endTime = end
+      vestingMode = Linear
+      assetType = LocalToken
+      instrumentRef = None
+      cancellable = True
+      settlementMode = None)
+    deposit
+
+  -- Attempt to create second stream with same ID from same sender should fail
+  submitMultiMustFail [alice, charlie] [] do
+    createCmd StreamEscrow with
+      config = StreamConfig with
+        streamId = "batch-dup"
+        sender = alice
+        recipient = charlie
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = Linear
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = alice
+      observers = []
+
+-- | Test: batch create with two streams and verify independent lifecycle.
+testBatchPartialLifecycle : Script ()
+testBatchPartialLifecycle = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  charlie <- allocateParty "Charlie"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 5000.0
+
+  setTime start
+
+  cid1 <- createStream alice bob
+    (StreamConfig with
+      streamId = "batch-accept"
+      sender = alice
+      recipient = bob
+      totalDeposited = deposit
+      startTime = start
+      endTime = end
+      vestingMode = Linear
+      assetType = LocalToken
+      instrumentRef = None
+      cancellable = True
+      settlementMode = None)
+    deposit
+
+  cid2 <- createStream alice charlie
+    (StreamConfig with
+      streamId = "batch-decline"
+      sender = alice
+      recipient = charlie
+      totalDeposited = deposit
+      startTime = start
+      endTime = end
+      vestingMode = Linear
+      assetType = LocalToken
+      instrumentRef = None
+      cancellable = True
+      settlementMode = None)
+    deposit
+
+  -- Cancel one stream, keep the other
+  let cancelAt = time (date 2025 Apr 1) 0 0 0
+  setTime cancelAt
+  submit alice do
+    exerciseCmd cid2 Cancel_Stream with cancelTime = cancelAt
+
+  -- Only one active escrow should remain
+  escrows <- query @StreamEscrow alice
+  let activeEscrows = filter (\(_, e) -> e.state.status == Active) escrows
+  assertMsg "Only 1 active escrow" (length activeEscrows == 1)
+
+  debug ("GOLDEN:batch_partial:accepted:" <> show (length activeEscrows))

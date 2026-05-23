@@ -1,0 +1,305 @@
+-- | Tests for renewable-term vesting mode.
+--
+-- Covers: create, withdraw, complete, renew with top-up,
+-- verify new accrual works after renewal, multiple renewals.
+module Test.Stream.Renewable where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+import DA.List (head)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+-- | Helper: create a renewable-term stream via direct contract creation.
+createRenewableStream : Party -> Party -> StreamId -> Time -> Time -> Int -> Decimal -> Bool -> Script (ContractId StreamEscrow)
+createRenewableStream sender recipient sid start end termDays deposit cancellable = do
+  let cfg = StreamConfig with
+        streamId = sid
+        sender
+        recipient
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = RenewableTerm with termDuration = days termDays
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable
+        settlementMode = None
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = sender
+      observers = []
+
+-- | Test: create a renewable-term stream and verify initial state.
+testRenewableCreate : Script ()
+testRenewableCreate = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-001" start end 90 deposit True
+
+  escrows <- query @StreamEscrow bob
+  assertMsg "One escrow exists" (length escrows == 1)
+  let (_, esc) = head escrows
+  assertMsg "Status Active" (esc.state.status == Active)
+  assertMsg "RenewalCount 0" (esc.state.renewalCount == 0)
+
+  debug ("GOLDEN:renewable_create:totalDeposited:" <> show deposit)
+  debug ("GOLDEN:renewable_create:renewalCount:0")
+
+-- | Test: partial withdraw from a renewable stream.
+testRenewablePartialWithdraw : Script ()
+testRenewablePartialWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+      midpoint = time (date 2025 Feb 15) 0 0 0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-pw" start end 90 deposit True
+
+  setTime midpoint
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = midpoint
+
+  -- Renewable-term uses linear accrual within the term
+  let expectedAccrued = linearAccrual deposit start end midpoint
+
+  debug ("GOLDEN:renewable_partial:accrued:" <> show expectedAccrued)
+  debug ("GOLDEN:renewable_partial:withdrawn:" <> show result.amountWithdrawn)
+
+  assertMsg "Withdraw matches linear accrual" (result.amountWithdrawn == expectedAccrued)
+  assertMsg "Status Active" (result.newStatus == Active)
+
+-- | Test: complete a renewable stream by withdrawing at end.
+testRenewableComplete : Script ()
+testRenewableComplete = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-complete" start end 90 deposit True
+
+  setTime end
+  result <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = end
+
+  debug ("GOLDEN:renewable_complete:withdrawn:" <> show result.amountWithdrawn)
+  debug ("GOLDEN:renewable_complete:status:" <> show result.newStatus)
+
+  assertMsg "Full deposit withdrawn" (result.amountWithdrawn == deposit)
+  assertMsg "Status Completed" (result.newStatus == Completed)
+
+-- | Test: renew a renewable stream with top-up and verify new accrual.
+testRenewableRenewWithTopUp : Script ()
+testRenewableRenewWithTopUp = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+      midpoint = time (date 2025 Feb 15) 0 0 0
+      additionalDeposit = 6000.0
+      newEnd = time (date 2025 Jul 1) 0 0 0
+      postRenewalWithdraw = time (date 2025 May 1) 0 0 0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-topup" start end 90 deposit True
+
+  -- Partial withdraw first
+  setTime midpoint
+  r1 <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = midpoint
+
+  debug ("GOLDEN:renewable_topup:w1_withdrawn:" <> show r1.amountWithdrawn)
+
+  -- Get updated escrow
+  escrows <- query @StreamEscrow bob
+  let (updatedCid, _) = head escrows
+
+  -- Renew with top-up
+  newCid <- submit alice do
+    exerciseCmd updatedCid Renew_Stream with
+      additionalDeposit
+      newEndTime = newEnd
+      renewTime = newEnd
+
+  -- Verify renewed state
+  renewedEscrows <- query @StreamEscrow bob
+  let (_, renewed) = head renewedEscrows
+  assertMsg "Total deposit increased" (renewed.config.totalDeposited == deposit + additionalDeposit)
+  assertMsg "End time extended" (renewed.config.endTime == newEnd)
+  assertMsg "Renewal count is 1" (renewed.state.renewalCount == 1)
+  assertMsg "Status Active" (renewed.state.status == Active)
+
+  debug ("GOLDEN:renewable_topup:newTotalDeposited:" <> show renewed.config.totalDeposited)
+  debug ("GOLDEN:renewable_topup:renewalCount:" <> show renewed.state.renewalCount)
+
+  -- Withdraw after renewal to verify new accrual works
+  let renewedCid = fst (head renewedEscrows)
+  setTime postRenewalWithdraw
+  r2 <- submit bob do
+    exerciseCmd renewedCid Withdraw_Stream with withdrawTime = postRenewalWithdraw
+
+  let newTotalDeposited = deposit + additionalDeposit
+      expectedAccrued = linearAccrual newTotalDeposited start newEnd postRenewalWithdraw
+      expectedWithdrawable = withdrawable expectedAccrued r1.newTotalWithdrawn
+
+  debug ("GOLDEN:renewable_topup:w2_withdrawn:" <> show r2.amountWithdrawn)
+  debug ("GOLDEN:renewable_topup:w2_totalWithdrawn:" <> show r2.newTotalWithdrawn)
+
+  assertMsg "Post-renewal withdraw correct" (r2.amountWithdrawn == expectedWithdrawable)
+
+-- | Test: multiple sequential renewals.
+testRenewableMultipleRenewals : Script ()
+testRenewableMultipleRenewals = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end1  = time (date 2025 Apr 1) 0 0 0
+      deposit = 3000.0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-multi" start end1 90 deposit True
+
+  -- First renewal
+  let end2 = time (date 2025 Jul 1) 0 0 0
+  cid1 <- submit alice do
+    exerciseCmd escrowCid Renew_Stream with
+      additionalDeposit = 3000.0
+      newEndTime = end2
+      renewTime = end2
+
+  -- Second renewal
+  escrows1 <- query @StreamEscrow bob
+  let (cid1', esc1) = head escrows1
+  assertMsg "Renewal count 1" (esc1.state.renewalCount == 1)
+
+  let end3 = time (date 2025 Oct 1) 0 0 0
+  cid2 <- submit alice do
+    exerciseCmd cid1' Renew_Stream with
+      additionalDeposit = 3000.0
+      newEndTime = end3
+      renewTime = end3
+
+  -- Third renewal
+  escrows2 <- query @StreamEscrow bob
+  let (cid2', esc2) = head escrows2
+  assertMsg "Renewal count 2" (esc2.state.renewalCount == 2)
+
+  let end4 = time (date 2026 Jan 1) 0 0 0
+  submit alice do
+    exerciseCmd cid2' Renew_Stream with
+      additionalDeposit = 3000.0
+      newEndTime = end4
+      renewTime = end4
+
+  -- Verify final state
+  escrows3 <- query @StreamEscrow bob
+  let (_, esc3) = head escrows3
+
+  debug ("GOLDEN:renewable_multi:finalTotalDeposited:" <> show esc3.config.totalDeposited)
+  debug ("GOLDEN:renewable_multi:renewalCount:" <> show esc3.state.renewalCount)
+
+  assertMsg "Total deposit is 12000" (esc3.config.totalDeposited == 12000.0)
+  assertMsg "Renewal count is 3" (esc3.state.renewalCount == 3)
+  assertMsg "End time is final" (esc3.config.endTime == end4)
+
+-- | Test: non-renewable stream cannot be renewed.
+testRenewableRejectNonRenewable : Script ()
+testRenewableRejectNonRenewable = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Jul 1) 0 0 0
+      deposit = 10000.0
+
+  setTime start
+  -- Create a LINEAR stream (not renewable)
+  let cfg = StreamConfig with
+        streamId = "not-renewable"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = Linear
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+  escrowCid <- submitMulti [alice, bob] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = alice
+      observers = []
+
+  -- Renew should fail
+  submitMustFail alice do
+    exerciseCmd escrowCid Renew_Stream with
+      additionalDeposit = 5000.0
+      newEndTime = time (date 2026 Jan 1) 0 0 0
+      renewTime = time (date 2026 Jan 1) 0 0 0
+
+-- | Test: renew a completed stream (should work per Escrow allowing Active or Completed).
+testRenewableRenewCompleted : Script ()
+testRenewableRenewCompleted = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-completed" start end 90 deposit True
+
+  -- Fully withdraw to complete
+  setTime end
+  submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = end
+
+  -- Get completed escrow
+  escrows <- query @StreamEscrow bob
+  let (completedCid, esc) = head escrows
+  assertMsg "Should be Completed" (esc.state.status == Completed)
+
+  -- Renew the completed stream
+  let newEnd = time (date 2025 Jul 1) 0 0 0
+  submit alice do
+    exerciseCmd completedCid Renew_Stream with
+      additionalDeposit = 6000.0
+      newEndTime = newEnd
+      renewTime = newEnd
+
+  -- Verify state is Active again
+  escrows2 <- query @StreamEscrow bob
+  let (_, renewed) = head escrows2
+  assertMsg "Status back to Active" (renewed.state.status == Active)
+  assertMsg "Total deposit updated" (renewed.config.totalDeposited == 15000.0)
+
+  debug ("GOLDEN:renewable_renew_completed:totalDeposited:" <> show renewed.config.totalDeposited)
+  debug ("GOLDEN:renewable_renew_completed:status:" <> show renewed.state.status)

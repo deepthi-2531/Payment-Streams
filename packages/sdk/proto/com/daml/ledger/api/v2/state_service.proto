@@ -1,0 +1,68 @@
+// Copyright (c) 2024 Digital Asset (Switzerland) GmbH and/or its affiliates.
+// SPDX-License-Identifier: Apache-2.0
+// Canton Ledger API v2 — StateService definition.
+// Updated to match Canton 3.4.11+ server API.
+
+syntax = "proto3";
+
+package com.daml.ledger.api.v2;
+
+option java_outer_classname = "StateServiceOuterClass";
+option java_package = "com.daml.ledger.api.v2";
+
+import "com/daml/ledger/api/v2/event.proto";
+import "com/daml/ledger/api/v2/reassignment.proto";
+import "com/daml/ledger/api/v2/transaction_filter.proto";
+
+// Service for querying the current active contract set.
+service StateService {
+  rpc GetActiveContracts(GetActiveContractsRequest) returns (stream GetActiveContractsResponse);
+  rpc GetLedgerEnd(GetLedgerEndRequest) returns (GetLedgerEndResponse);
+  rpc GetLatestPrunedOffsets(GetLatestPrunedOffsetsRequest) returns (GetLatestPrunedOffsetsResponse);
+}
+
+message GetActiveContractsRequest {
+  // Fields 1 (filter) and 2 (verbose) are reserved — replaced by event_format
+  // in Canton 3.4.11+.
+  reserved 1, 2;
+  reserved "filter", "verbose";
+  int64 active_at_offset = 3;
+  EventFormat event_format = 4;
+}
+
+message ActiveContract {
+  CreatedEvent created_event = 1;
+  string synchronizer_id = 2;
+  uint64 reassignment_counter = 3;
+}
+
+message GetActiveContractsResponse {
+  string workflow_id = 1;
+  oneof contract_entry {
+    ActiveContract active_contract = 2;
+    IncompleteUnassigned incomplete_unassigned = 3;
+    IncompleteAssigned incomplete_assigned = 4;
+  }
+}
+
+message IncompleteUnassigned {
+  CreatedEvent created_event = 1;
+  UnassignedEvent unassigned_event = 2;
+}
+
+message IncompleteAssigned {
+  AssignedEvent assigned_event = 1;
+}
+
+message GetLedgerEndRequest {}
+
+message GetLedgerEndResponse {
+  int64 offset = 1;
+}
+
+message GetLatestPrunedOffsetsRequest {}
+
+message GetLatestPrunedOffsetsResponse {
+  int64 participant_pruned_up_to_inclusive = 1;
+  int64 all_divulged_contracts_pruned_up_to_inclusive = 2;
+}

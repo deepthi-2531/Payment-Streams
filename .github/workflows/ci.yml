@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Daml build & test ───
+  daml:
+    name: Daml Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dpm
+        run: |
+          curl -sSL https://get.daml.com/ | sh -s -- 3.4.10
+          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+
+      - name: Build Daml packages
+        run: dpm build --all
+
+      - name: Run Daml tests
+        run: bash scripts/test-all-daml.sh
+
+  # ─── TypeScript lint, build, test ───
+  typescript:
+    name: TypeScript Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Build SDK
+        run: pnpm --filter @canton-streams/sdk build
+
+      - name: Build CLI
+        run: pnpm --filter @canton-streams/cli build
+
+      - name: Build Dashboard
+        run: pnpm --filter @canton-streams/dashboard build
+
+      - name: Test SDK
+        run: pnpm --filter @canton-streams/sdk test
+
+      - name: Test Dashboard
+        run: pnpm --filter @canton-streams/dashboard test
+
+  # ─── Docker build ───
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: [typescript]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build dashboard image
+        run: |
+          docker build -f docker/Dockerfile.dashboard -t canton-streams-dashboard:latest .

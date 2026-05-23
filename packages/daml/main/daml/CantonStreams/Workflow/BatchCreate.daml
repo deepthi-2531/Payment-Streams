@@ -1,0 +1,36 @@
+-- | BatchCreate workflow — create multiple stream requests in a single transaction.
+--
+-- Phase 1: Numeric escrow (no Daml Finance dependency).
+module CantonStreams.Workflow.BatchCreate where
+
+import CantonStreams.Interface.Types (StreamConfig(..))
+import CantonStreams.Workflow.CreateStream (CreateStreamRequest(..))
+
+-- | A single entry in a batch stream creation.
+data BatchEntry = BatchEntry with
+    config : StreamConfig
+    depositAmount : Decimal
+      -- ^ Amount to be locked in escrow for this stream.
+  deriving (Eq, Show)
+
+-- | Batch stream creation request. Creates multiple CreateStreamRequests.
+template BatchCreateRequest
+  with
+    sender : Party
+    entries : [BatchEntry]
+    observers : [Party]
+  where
+    signatory sender
+
+    ensure length entries > 0
+
+    -- | Execute the batch: create one CreateStreamRequest per entry.
+    choice ExecuteBatch : [ContractId CreateStreamRequest]
+      controller sender
+      do
+        forA entries $ \entry -> do
+          assertMsg "Sender mismatch in batch entry" (entry.config.sender == sender)
+          create CreateStreamRequest with
+            config = entry.config
+            depositAmount = entry.depositAmount
+            observers

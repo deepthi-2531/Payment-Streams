@@ -1,0 +1,6 @@
+packages:
+  - "packages/sdk"
+  - "packages/cli"
+  - "packages/proxy"
+  - "packages/dashboard"
+  - "packages/executor"
