@@ -12,7 +12,7 @@ This page is now a thin pointer to where the real V2 documentation lives.
 
 **Pick this for:** any CIP-56-compliant asset — Canton Coin, USDCx, future V2-native instruments.
 
-**How it works:** The dApp builds a V2 `AllocationRequest` (V1/V2 dual-interface per CIP-0112 §5). The recipient's wallet accepts; this atomically locks the sender's funding against the escrow operator via `AllocationFactory_Allocate(committed=True)`. Per accrual interval, `Allocation_ExecuteTransfer` settles the next leg.
+**How it works:** The dApp builds a V2 `AllocationRequest` (V1/V2 dual-interface per CIP-0112 §5). The recipient's wallet accepts; this atomically locks the sender's funding against the escrow operator via `AllocationFactory_Allocate(committed=True)`. Per accrual interval, `Allocation_Settle` settles the next leg.
 
 **Capability negotiation:** the SDK reads `config/asset-registry.json` for the target asset and uses `getAssetCapabilities(instrumentRef)` to pick the right adapter:
 

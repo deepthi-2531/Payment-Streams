@@ -9,7 +9,7 @@
 >
 > When this reference disagrees with upstream, upstream wins. Re-verify before any release.
 >
-> **V1 ≠ V2 vocabulary** — the same logical operation has different choice names in V1 and V2 (e.g. settle = V1 `Allocation_ExecuteTransfer` / V2 `Allocation_Settle`). See STR-89 for the full V1-vs-V2 contrast table.
+> **V1 ≠ V2 vocabulary** — the same logical operation has different choice names in V1 and V2 (e.g. settle = V1 `Allocation_Settle` / V2 `Allocation_Settle`). See STR-89 for the full V1-vs-V2 contrast table.
 
 ## Why this matters
 

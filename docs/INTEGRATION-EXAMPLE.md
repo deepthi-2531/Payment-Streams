@@ -202,7 +202,7 @@ On accept, the funding `AllocationFactory_Allocate(committed=True)` settles atom
 
 ## Step 6 — Watch the stream advance
 
-The proxy's `TransferEventsV2` subscriber exercises `Allocation_ExecuteTransfer` automatically as funds accrue (configurable cadence; default: per accrual minute).
+The proxy's `TransferEventsV2` subscriber exercises `Allocation_Settle` automatically as funds accrue (configurable cadence; default: per accrual minute).
 
 Employees see their balance tick up in real time in AcmeCo's dashboard. They can withdraw to their main wallet at any time:
 

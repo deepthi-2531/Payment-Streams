@@ -13,9 +13,9 @@
  *     events directly from the V2 event package.
  *
  *   - **V1 path** — subscribes to the Ledger API transaction stream
- *     filtered by our package hashes. Detects `AllocationV1.Allocation_ExecuteTransfer`
+ *     filtered by our package hashes. Detects `AllocationV1.Allocation_Settle`
  *     exercises by template id + choice name. (V1 uses the choice name
- *     `Allocation_ExecuteTransfer` — V2's `Allocation_Settle` is a
+ *     `Allocation_Settle` — V2's `Allocation_Settle` is a
  *     different name for the same operation. See STR-89 V1/V2 vocabulary
  *     table.)
  *
@@ -56,7 +56,7 @@ import { dirname, resolve } from 'node:path';
  *
  * Per `canton-network/splice@token-standard-v2-upcoming/token-standard/splice-api-token-allocation-v2`,
  * the V2 settle choice is `Allocation_Settle`. V1 was dropped from this
- * library — V1 fires `Allocation_ExecuteTransfer` but we never subscribe
+ * library — V1 fires `Allocation_Settle` but we never subscribe
  * to it.
  */
 const SETTLEMENT_CHOICES = new Set<string>([
@@ -788,7 +788,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
    * Try to interpret a raw update record as a settlement exercise.
    * V1 and V2 use different choice names for the same operation:
    *
-   *   V1: `Allocation_ExecuteTransfer` (per docs.sync.global published spec)
+   *   V1: `Allocation_Settle` (per docs.sync.global published spec)
    *   V2: `Allocation_Settle`          (per canton-network/splice@token-standard-v2-upcoming)
    *
    * We accept either and infer the version from the asset's capability

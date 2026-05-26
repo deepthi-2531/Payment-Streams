@@ -47,7 +47,7 @@ Compiled to DARs and uploaded to the participant.
 | `MilestoneAdmin` | `CantonStreams.Stream.MilestoneAdmin` | Multi-leg AllocationSpec gated on `ConfirmMilestone` (KPI / grant unlocks) |
 | `AllocationBridge` | `CantonStreams.Settlement.AllocationBridge` | Shared V1/V2 view-builder helpers + conservation invariants |
 | `DelegatedPolicy` + `PolicyExecutionState` + `ExecutionLog` | `CantonStreams.Policy.*` | Bounded executor authority (rate limit, expiry, scope, action allow-list) |
-| `FeaturedAppActivity` | `CantonStreams.FeaturedApp.Activity` | CIP-0047 marker emission for featured-app rewards |
+| `FeaturedAppActivity` | `CantonStreams.FeaturedApp.Activity` | Opt-in CIP-0047 `FeaturedAppActivityMarker` emission helper (CIP-0047 is scheduled to be replaced by CIP-0104 around end of July; treat as transitional) |
 | `UnifiedStreamRequest` | `CantonStreams.Workflow.UnifiedStream` | Propose / accept / counter-propose state machine |
 | `BatchCreateRequest` | `CantonStreams.Workflow.BatchCreate` | Sender-side bulk stream creation |
 | `RenewRequest` | `CantonStreams.Workflow.RenewStream` | Per-period renewal for `RenewableTerm` vesting |
@@ -155,13 +155,13 @@ The same SDK call shape works for CC, USDCx, and any future CIP-56 asset. Adopte
      -> AllocationRequest archived
 
 5. Per accrual interval, proxy executes the next leg
-   Proxy auto-withdraw worker -> exercise Allocation_ExecuteTransfer
+   Proxy auto-withdraw worker -> exercise Allocation_Settle
      -> funds flow sender -> recipient for that leg
      -> Allocation rolls forward with nextIterationFunding
      -> TransferEventsV2 emitted, subscriber advances stream state
 
 6. After final iteration, stream completes
-   Allocation_ExecuteTransfer with no nextIterationFunding
+   Allocation_Settle with no nextIterationFunding
      -> Allocation archived, stream marked Completed
 ```
 

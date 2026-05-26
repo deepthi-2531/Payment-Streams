@@ -84,7 +84,7 @@ Dashboard moves the stream to **Active**.
 
 ### Phase 3 — Settle (per accrual interval)
 
-The proxy's `TransferEventsV2` subscriber wakes up every minute. For each `Active` stream, it computes the accrued amount since the last settle and exercises `Allocation_ExecuteTransfer`.
+The proxy's `TransferEventsV2` subscriber wakes up every minute. For each `Active` stream, it computes the accrued amount since the last settle and exercises `Allocation_Settle`.
 
 After 1 day:
 
@@ -98,7 +98,7 @@ linearAccrual = totalAmount × elapsed / duration
 The proxy submits:
 
 ```
-exercise Allocation_ExecuteTransfer with
+exercise Allocation_Settle with
   amount = 6.6666666667
   side   = SenderSide
 ```
@@ -150,7 +150,7 @@ On-ledger creates a `StreamFlow` with an iterated allocation: `nextIterationFund
 At the end of the month, the proxy settles for the actual usage (say $47.23):
 
 ```
-exercise Allocation_ExecuteTransfer with
+exercise Allocation_Settle with
   amount               = 47.23
   nextIterationFunding = Some 52.00     -- next month's expected bill
 ```
@@ -171,7 +171,7 @@ await dappSDK.prepareExecuteAndWait({
 When Bob cancels his subscription:
 
 ```
-exercise Allocation_ExecuteTransfer with
+exercise Allocation_Settle with
   amount               = <final period accrual>
   nextIterationFunding = None             -- terminate the chain
 ```
@@ -215,7 +215,7 @@ await dappSDK.prepareExecuteAndWait({
 });
 ```
 
-Triggers `Allocation_ExecuteTransfer` for that leg. Grantee receives 25,000 USDCx.
+Triggers `Allocation_Settle` for that leg. Grantee receives 25,000 USDCx.
 
 ### Phase 3 — Optional: claim residual
 

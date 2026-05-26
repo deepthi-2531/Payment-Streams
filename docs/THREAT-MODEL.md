@@ -242,7 +242,7 @@ reference.
 - **Mechanism:** The dApp constructs a V2 `AllocationRequest`; the
   recipient accepts via `AllocationFactory_Allocate(committed=True)`,
   which **atomically** locks the sender's funding against the escrow
-  operator. Per accrual interval, `Allocation_ExecuteTransfer` moves
+  operator. Per accrual interval, `Allocation_Settle` moves
   funds from lock to recipient.
 - **Trust assumption:** Daml authority — the `Allocation` template's
   signatory set includes the sender, the recipient, and the asset

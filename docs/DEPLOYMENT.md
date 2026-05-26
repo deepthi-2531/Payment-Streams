@@ -123,7 +123,7 @@ The proxy subscribes to `TransferEventsV2` and advances stream state on settleme
 | Variable | Description |
 |---|---|
 | `PROXY_TRANSFER_EVENTS_ENABLED=1` | Turn on the V2 events subscriber |
-| `PROXY_SERVICE_USER_ID` | Ledger user id used for interactive submission of `Allocation_ExecuteTransfer` |
+| `PROXY_SERVICE_USER_ID` | Ledger user id used for interactive submission of `Allocation_Settle` |
 
 Falls back to interactive submission when a participant cannot stream the event directly.
 

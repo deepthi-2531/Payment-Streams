@@ -21,7 +21,7 @@ All measurements are wall-clock from SDK call → on-ledger commit visible via `
 |---|---|---|
 | `AllocationRequest` create | 100–300ms | 1–3s |
 | Recipient accept + atomic funding | 200–500ms | 2–6s |
-| `Allocation_ExecuteTransfer` (one leg) | 100–300ms | 1–3s |
+| `Allocation_Settle` (one leg) | 100–300ms | 1–3s |
 | Cancel / mutual cancel (atomic settle) | 200–400ms | 1–3s |
 | Batch create (250 streams) | ~5s | 30–60s (one signature, fan-out create) |
 
@@ -33,7 +33,7 @@ Testnet ranges assume normal synchronizer load. Under congestion, latencies can 
 |---|---|---|
 | Stream creates (sequential) | ~20/s | Limited by gRPC round-trip per submission |
 | Stream creates (batched via `BatchCreateRequest`) | ~250/single submission | One signature, fan-out on-ledger |
-| `Allocation_ExecuteTransfer` settles | ~30/s | Limited by interactive-submission throughput |
+| `Allocation_Settle` settles | ~30/s | Limited by interactive-submission throughput |
 | Read queries (`GET /api/streams`) | ~500/s | TanStack Query + 10s `refetchInterval` keeps proxy load minimal |
 
 Testnet throughput is bounded by the synchronizer's consensus throughput and the wallet-gateway prepare/execute round-trip.
@@ -59,7 +59,7 @@ Per the Canton Network fee schedule (as of writing), each stream-lifecycle event
 |---|---|
 | `AllocationRequest` create | ~$0.05–$0.10 |
 | Accept + atomic funding | ~$0.10–$0.20 |
-| Per-leg `Allocation_ExecuteTransfer` | ~$0.05–$0.10 |
+| Per-leg `Allocation_Settle` | ~$0.05–$0.10 |
 | Cancel / mutual cancel | ~$0.05–$0.10 |
 
 For a typical Linear vesting stream with daily settles for a month, expected total burn:
@@ -68,7 +68,7 @@ For a typical Linear vesting stream with daily settles for a month, expected tot
 create + accept + 30 settles + complete ≈ $1.50 – $3.50
 ```
 
-Per CIP-0047, FeaturedAppActivity markers can offset this. With FeaturedApp registration, each lifecycle event qualifies for up to $1.50 in featured-app rewards from the validator rewards pool — so a marketed stream lifecycle can be **net economically positive** for the adopter.
+CIP-0047 featured-app rewards exist on some Canton networks today, but they're scheduled to be **phased out around end of July** when CIP-0104 goes live, and the reward economics will change. Don't bake any specific reward-per-event number into a budget; verify the active reward regime with the Canton Foundation for your target network before sizing fee assumptions. The library ships an opt-in `FeaturedAppActivityMarker` emission helper for the CIP-0047 window — see [`integration-guide/featured-app-rewards.md`](integration-guide/featured-app-rewards.md) — but makes no claims about the net economics.
 
 ## Hot-path bottlenecks
 

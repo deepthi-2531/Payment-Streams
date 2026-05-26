@@ -1,80 +1,45 @@
-# Featured-App Rewards (CIP-0047)
+# Featured-App Rewards (CIP-0047) — emission helper
 
-How to claim Canton Foundation featured-app rewards for stream
-lifecycle events your dApp drives.
+> **Status:** CIP-0047 featured-app rewards are scheduled to be **phased out around end of July** once **CIP-0104** goes live. The reward economics will change with CIP-0104. Treat any specific reward-per-event number you see in older Canton docs as fragile — confirm with the Canton Foundation what's actually in force on your target network before you bake reward assumptions into a budget.
+>
+> This library provides a thin **emission helper** so adopters who opt in can mark stream lifecycle events with `FeaturedAppActivityMarker` contracts during the CIP-0047 window. It does not pay rewards itself, and it does not promise any particular reward amount.
 
-CIP-0047 introduces `FeaturedAppActivityMarker` contracts that
-applications emit to signal that a transaction added value to the
-network. The Canton Foundation reward pool allocates ~62% of validator
-rewards to featured-app activity (capped at $1.50 per transaction).
+## What the library does
 
-For Canton Payment Streams, this means **every stream lifecycle event**
-(Create, Accept, Withdraw, Cancel, Renew, TopUp, Complete) can earn
-the operator featured-app credit if you opt in.
+The `FeaturedAppActivity` Daml template
+(`packages/daml/main/daml/CantonStreams/FeaturedApp/Activity.daml`)
+emits a `FeaturedAppActivityMarker` on a per-stream basis when the
+stream config sets the relevant flags.
 
----
+## What the library does not do
 
-## Why this matters economically
-
-Stream lifecycle events incur ~$0.50 USD in CC fees (burned). Featured-
-app rewards can credit ~$1.50 per event back from the validator
-rewards pool. Net: **economically positive for the operator** at scale.
-
-That's the lever that makes the M5 adoption-bonus mechanics work:
-high-frequency events (e.g. weekly LP claims, daily infrastructure
-withdrawals) are net-positive for adopters even before considering
-the underlying business value.
-
----
+- Register your dApp as a featured-app provider with the Canton Foundation.
+- Claim or distribute rewards.
+- Guarantee any reward amount, eligibility, or schedule.
+- Track CIP-0104 transition state (you must do this yourself).
 
 ## Opting in
 
-The `FeaturedAppActivityMarker` emission is a per-stream config flag.
-Add the flag when creating the stream:
+Per-stream config flag at create time:
 
 ```ts
 const params = buildIncentiveStream({
   // ... other fields ...
   meta: {
     emitFeaturedAppMarker: true,
-    featuredAppKey: 'canton-streams',  // or your dApp's CIP-0047 key
+    featuredAppKey: 'your-cip-0047-key', // from your Foundation registration
   },
 });
 ```
 
-The corresponding Daml field is set on `StreamConfig` (via the
-proposal's choice payload) so the marker is created automatically on
-each lifecycle event.
+The flag is opt-in. Default behaviour emits no markers.
 
----
+## Where to verify the current state
 
-## Registering your dApp
+- [CIP-0047 spec](https://github.com/canton-foundation/cips/blob/main/cip-0047/cip-0047.md)
+- [CIP-0104 spec](https://github.com/canton-foundation/cips/blob/main/cip-0104/cip-0104.md)
+- Canton Foundation announcements for the active reward regime and any transition window
 
-To earn rewards, your dApp must be registered as a featured-app
-provider with the Canton Foundation. The registration flow is outside
-the scope of this library — see CIP-0047 documentation on the Canton
-Foundation site for the current process.
+## Migration to CIP-0104
 
-Once registered, you receive a featured-app key that you pass into
-the stream config via the `featuredAppKey` field.
-
----
-
-## Verifying rewards
-
-Featured-app rewards are credited to your party identifier as part of
-the Canton Foundation's reward distribution cycle. The library does
-not handle the reward claim itself — only the marker emission.
-
-To audit which of your streams earned featured-app credit, query the
-Scan endpoint for `FeaturedAppActivityMarker` contracts where the
-provider party matches your dApp's registered key.
-
----
-
-## Opting out
-
-Featured-app marker emission is opt-in. If you do not want to claim
-rewards (e.g. for privacy reasons), simply omit the
-`emitFeaturedAppMarker` flag — no markers will be emitted, no rewards
-will be claimed, and the stream operates identically otherwise.
+When CIP-0104 lands, this emission helper will need to be updated to the new mechanism, the per-stream flag may be renamed, and any code that assumed CIP-0047 economics should be revisited. We will track this in the changelog under the release that adds CIP-0104 support.
