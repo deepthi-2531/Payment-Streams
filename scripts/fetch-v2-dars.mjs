@@ -96,6 +96,33 @@ export const SPLICE_PINNED_COMMIT = '2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea';
 export const SPLICE_PINNED_AS_OF = '2026-06-02';
 
 /**
+ * Opt-in preview pin: the Splice Amulet wallet's frontend support for
+ * V2 committed-iterated allocations (the wallet half of our V2 stream
+ * E2E) lives on PR canton-network/splice#5697 — branch
+ * `oriol/initialted-settlement-fe`, head sha
+ * `73c68d16ba93346a80418662f94a7877e3938f91`. Base branch is the same
+ * `token-standard-v2-upcoming` ref the main `SPLICE_PINNED_COMMIT` is
+ * cut from, so building LocalNet from this commit gives us the same
+ * V2 token-standard interface DARs plus the wallet UI that creates /
+ * accepts committed allocations with `nextIterationFunding`.
+ *
+ * Until #5697 merges, we do NOT bump `SPLICE_PINNED_COMMIT` to this
+ * sha — the main pin stays on a merged ref so a clean checkout always
+ * builds against stable upstream. Operators running the wallet-backed
+ * E2E harness opt in explicitly by either:
+ *
+ *   - exporting `SPLICE_PINNED_COMMIT=<this sha>` before
+ *     `scripts/start-localnet-e2e.sh`; or
+ *   - passing `splice_pinned_commit: <this sha>` as a workflow_dispatch
+ *     input on `.github/workflows/e2e.yml`.
+ *
+ * On merge, replace `SPLICE_PINNED_COMMIT` above with the merge sha
+ * and delete this preview constant.
+ */
+export const SPLICE_PR5697_PREVIEW_COMMIT = '73c68d16ba93346a80418662f94a7877e3938f91';
+export const SPLICE_PR5697_PREVIEW_BRANCH = 'oriol/initialted-settlement-fe';
+
+/**
  * Per the CIP-0112 update (May 2026), V2 packages are versioned
  * 1.0.0 (consistent with splice-api-featured-app-v2). We pin to that
  * version. If Splice ships a later 1.x revision, bump here and re-run.

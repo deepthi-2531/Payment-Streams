@@ -80,6 +80,16 @@ resolve_pinned_commit() {
   [[ -n "$SPLICE_PINNED_COMMIT" ]] || fail "could not resolve SPLICE_PINNED_COMMIT from scripts/fetch-v2-dars.mjs"
 }
 
+# Read the PR-5697 preview commit (Amulet wallet V2 iterated-settlement
+# UI) so the announce path can detect whether the operator opted into
+# it. Empty string is fine — that just suppresses the matched-preview
+# annotation.
+resolve_pr5697_preview_commit() {
+  SPLICE_PR5697_PREVIEW_COMMIT="$(grep -m1 -E "^export const SPLICE_PR5697_PREVIEW_COMMIT" \
+    "$ROOT_DIR/scripts/fetch-v2-dars.mjs" 2>/dev/null \
+    | sed -E "s/.*'([0-9a-f]+)'.*/\1/")"
+}
+
 clone_or_update_splice() {
   if [[ ! -d "$SPLICE_CHECKOUT_DIR/.git" ]]; then
     run_step "Cloning Splice into $SPLICE_CHECKOUT_DIR" \
@@ -282,7 +292,20 @@ main() {
   need curl
 
   resolve_pinned_commit
+  resolve_pr5697_preview_commit
   echo "Pinned Splice commit: $SPLICE_PINNED_COMMIT"
+  if [[ -n "$SPLICE_PR5697_PREVIEW_COMMIT" \
+      && "$SPLICE_PINNED_COMMIT" == "$SPLICE_PR5697_PREVIEW_COMMIT" ]]; then
+    echo "    (canton-network/splice#5697 preview — Amulet wallet V2"
+    echo "     iterated-settlement frontend; opt-in branch"
+    echo "     oriol/initialted-settlement-fe)"
+  elif [[ -n "$SPLICE_PR5697_PREVIEW_COMMIT" ]]; then
+    echo "Preview commit:       $SPLICE_PR5697_PREVIEW_COMMIT"
+    echo "    (export SPLICE_PINNED_COMMIT=$SPLICE_PR5697_PREVIEW_COMMIT to opt"
+    echo "     into the canton-network/splice#5697 preview — Amulet wallet V2"
+    echo "     iterated-settlement frontend, branch"
+    echo "     oriol/initialted-settlement-fe)"
+  fi
   echo "Wallet gateway URL:   $WALLET_GATEWAY_URL"
   echo "Streams checkout:     $ROOT_DIR"
   echo "Splice checkout:      $SPLICE_CHECKOUT_DIR"

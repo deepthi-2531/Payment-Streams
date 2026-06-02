@@ -49,6 +49,18 @@
  * recipient completes the acceptance in the wallet's own UI, and the
  * dashboard records the local intent so the inbox badge stays
  * truthful across reloads.
+ *
+ * Upstream wallet target for the future swap: the Amulet wallet UI
+ * that creates + accepts committed V2 allocations with
+ * `nextIterationFunding` lives on canton-network/splice#5697
+ * (branch `oriol/initialted-settlement-fe`, head sha
+ * `73c68d16ba93346a80418662f94a7877e3938f91`). That sha is exported
+ * from `scripts/fetch-v2-dars.mjs` as `SPLICE_PR5697_PREVIEW_COMMIT`;
+ * `scripts/start-localnet-e2e.sh` recognises it. The E2E harness
+ * runbook `docs/E2E-HARNESS.md` documents the opt-in path. A
+ * contributor wiring `walletSdk.prepareExecuteAndWait(...)` should
+ * develop against a LocalNet built from that commit (or its
+ * successor merge sha) so the wallet renders the right shape.
  */
 
 import type { Stream } from '@canton-streams/sdk/browser';
