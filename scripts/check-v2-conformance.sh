@@ -33,6 +33,7 @@ ALLOWED_FILES=(
   'scripts/check-v2-conformance.sh'        # this file references the forbidden names by definition
   'CHANGELOG.md'                           # may legitimately log a rename
   'docs/integration-guide/cip-56-v2-types-reference.md'  # may show "V1 had X; V2 has Y" comparison
+  'docs/E2E-HARNESS.md'                    # documents why V1 names are rejected and what the CI guard does
   # Daml templates may carry "don't invent this; V2 uses X" warning comments
   # that explicitly steer contributors away from forbidden V1 names.
   'packages/daml/main/daml/CantonStreams/Stream/MilestoneAdmin.daml'
