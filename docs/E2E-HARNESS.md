@@ -94,31 +94,47 @@ the participant JSON-Ledger-API on the `x975` ports
 > `canton-network/splice` at any commit — `build-tools/` only contains
 > `splice-localnet-compose.sh` and `splice-compose.sh`.
 
-To get a working `:3030` CIP-103 endpoint, after LocalNet is up, follow
-the verified upstream steps from the `canton-network/wallet` README:
+To get a working `:3030` CIP-103 endpoint, after LocalNet is up, the
+fastest path is the npm-published wallet-gateway-remote daemon — no
+clone/build needed:
 
-1. Clone and start the Splice Wallet Kernel:
+1. Generate a config skeleton, edit it to point at the LocalNet
+   `app-user` JSON Ledger API and to allowlist this dashboard's
+   origin, then start the gateway:
 
    ```bash
-   git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
-   cd .splice-wallet-kernel
-   yarn install
-   yarn build:all
-   yarn start:all
+   npx @canton-network/wallet-gateway-remote@1.4.0 --config-example > wallet-gateway.localnet.json
+   # Edit wallet-gateway.localnet.json:
+   #   ledgerApi.baseUrl    = http://127.0.0.1:2975         # LocalNet app-user JSON API
+   #   allowedOrigins       += http://localhost:3000        # Streams dashboard
+   #   allowedOrigins       += http://127.0.0.1:3000        # same, IP form
+   npx @canton-network/wallet-gateway-remote@1.4.0 -c wallet-gateway.localnet.json -p 3030
    ```
 
-   Point its `CANTON_NODE_URL` at the LocalNet `app-user` validator
-   (`http://localhost:2975`) or `app-provider` (`http://localhost:3975`).
-2. Add the dashboard's origin (default `http://localhost:3000` — note
-   this collides with the upstream `app-provider` wallet UI port; either
-   change `STREAMS_DASHBOARD_PORT` for the Streams stack in Step 2 or
-   leave the upstream UI down) to the wallet kernel's `allowedOrigins`.
-3. Confirm the gateway is up with a CIP-103 status probe. Port `3030` is
-   the documented default repeatedly used by this repo's runbooks; the
-   upstream quickstart does not pin a port number, so probe to confirm:
+   The app-user JSON Ledger API is exposed on `:2975` by the LocalNet
+   compose stack (`PARTICIPANT_JSON_API_PORT_SUFFIX=975`); use
+   `:3975` instead to bind the gateway to the app-provider validator.
+
+   If you would rather build the gateway from source (e.g. testing an
+   unreleased branch), clone
+   [`canton-network/wallet`](https://github.com/canton-network/wallet)
+   and run `yarn install && yarn build:all && yarn start:all` — same
+   endpoint, same configuration shape.
+
+2. The dashboard runs on `:3000` by default, which collides with the
+   upstream `app-provider` wallet UI. Either change
+   `STREAMS_DASHBOARD_PORT` when bringing up the Streams stack in
+   Step 2 or leave the upstream UI down before starting the dashboard
+   container. Whichever origin the dashboard ends up on, make sure it
+   is in `allowedOrigins`.
+
+3. Probe the gateway. Port `3030` is the documented default this
+   repo's runbooks use; the upstream quickstart does not pin it, so
+   confirm:
 
 ```bash
 curl -fsS -X POST http://localhost:3030/api/v0/dapp \
+  -H 'Origin: http://localhost:3000' \
   -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":"probe","method":"status","params":{}}'
 ```
@@ -126,6 +142,16 @@ curl -fsS -X POST http://localhost:3030/api/v0/dapp \
 If your environment provides an Amulet wallet gateway at a different
 URL, export `VITE_WALLET_GATEWAY_URL=<your-url>` before Step 2 and the
 dashboard image will pick it up (see the env note in Step 2).
+
+> **V2 token support in the Amulet wallet.** The Splice Amulet wallet
+> that ships on every validator node supports the CIP-56 V2 token
+> standard on the `token-standard-v2-upcoming` branch this repo pins
+> against, so the full preapproval / iterated-settlement flow can be
+> exercised end-to-end against a LocalNet built from that branch. Full
+> iterated-settlement support in the wallet is tracked upstream in
+> [canton-network/splice#5498](https://github.com/canton-network/splice/issues/5498)
+> — read it before assuming a specific UX flow lands in a given
+> wallet build.
 
 ## Step 2 — Bring up the Streams stack on top of the running wallet
 
