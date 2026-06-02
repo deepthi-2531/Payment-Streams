@@ -9,25 +9,15 @@
  * status row-by-row. When that endpoint lands, swap the per-row call
  * for a single batched mutation — the UI doesn't need to change.
  *
- * Defaults that aren't in the CSV (settlementMode, holdingCid, escrow
- * operator, account refs) come from a small page-level config the user
- * fills in before signing. We default to NumericLegacy because it's the
- * only mode that requires zero extra columns; production callers will
- * switch to UtilityHoldingCustody and pin a holding+operator+accounts.
+ * Every row is V2 token-standard explicit: the CSV must carry the
+ * funding reference, Amulet account refs, escrow operator, and V2
+ * instrument admin. We do not fall back to legacy/sandbox settlement.
  */
 
 import { useMemo, useRef, useState, type CSSProperties } from 'react';
 import Papa from 'papaparse';
 import Decimal from 'decimal.js';
-import {
-  AlertTriangle,
-  Check,
-  CheckCircle2,
-  FileText,
-  Loader2,
-  Upload,
-  X,
-} from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, FileText, Loader2, Upload, X } from 'lucide-react';
 import {
   AssetType,
   SettlementMode,
@@ -51,10 +41,10 @@ interface SubmitResult {
   readonly streamId?: string;
 }
 
-const SAMPLE_CSV = `recipient,amount,asset,start,end,vesting,cancellable
-bob::1220abcd,8000,USDCx,2026-01-01T00:00,2026-12-31T00:00,Linear,true
-carol::1220beef,120000,CC,2026-01-01T00:00,2030-01-01T00:00,CliffLinear,false
-erin::1220cafe,12,USDCx,2026-01-01T00:00,2026-04-01T00:00,Stepped,true
+const SAMPLE_CSV = `recipient,amount,asset,instrumentAdmin,fundingReference,senderAccount,recipientAccount,escrowOperator,start,end,vesting,cancellable
+bob::1220abcd,8000,CC,amulet::1220admin,allocation-bob-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""bob::1220abcd"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-12-31T00:00,Linear,true
+carol::1220beef,120000,CC,amulet::1220admin,allocation-carol-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""carol::1220beef"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2030-01-01T00:00,CliffLinear,false
+erin::1220cafe,12,CC,amulet::1220admin,allocation-erin-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""erin::1220cafe"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-04-01T00:00,Stepped,true
 `;
 
 const MAX_ROWS = 500;
@@ -71,10 +61,7 @@ export function BatchUpload() {
 
   const stats = useMemo(() => {
     const valid = rows.filter((r) => r.value !== null);
-    const totalAmount = valid.reduce(
-      (sum, r) => sum + Number(r.value?.amount ?? 0),
-      0,
-    );
+    const totalAmount = valid.reduce((sum, r) => sum + Number(r.value?.amount ?? 0), 0);
     const assets = new Set(valid.map((r) => r.value!.asset));
     const recipients = new Set(valid.map((r) => r.value!.recipient));
     return {
@@ -88,8 +75,7 @@ export function BatchUpload() {
   }, [rows]);
 
   const submittedCount = useMemo(
-    () =>
-      Object.values(results).filter((r) => r.status !== 'pending').length,
+    () => Object.values(results).filter((r) => r.status !== 'pending').length,
     [results],
   );
 
@@ -102,9 +88,7 @@ export function BatchUpload() {
       header: true,
       skipEmptyLines: 'greedy',
       complete: (parsed) => {
-        const incoming = parsed.data
-          .slice(0, MAX_ROWS)
-          .map((raw, i) => validateRow(raw, i));
+        const incoming = parsed.data.slice(0, MAX_ROWS).map((raw, i) => validateRow(raw, i));
         setRows(incoming);
         setResults({});
         setStep('preview');
@@ -162,8 +146,7 @@ export function BatchUpload() {
                 ...prev,
                 [row.index]: {
                   status: 'error',
-                  message:
-                    err instanceof Error ? err.message : 'Failed to create',
+                  message: err instanceof Error ? err.message : 'Failed to create',
                 },
               }));
             }
@@ -188,13 +171,7 @@ export function BatchUpload() {
   // ------------------------------------------------------------------
 
   if (step === 'upload') {
-    return (
-      <UploadStep
-        onFile={handleFile}
-        onSample={loadSample}
-        fileInputRef={fileInputRef}
-      />
-    );
+    return <UploadStep onFile={handleFile} onSample={loadSample} fileInputRef={fileInputRef} />;
   }
 
   if (step === 'preview') {
@@ -237,13 +214,11 @@ function UploadStep({
             'var(--accent-line, var(--line-2))';
         }}
         onDragLeave={(e) => {
-          (e.currentTarget as HTMLDivElement).style.borderColor =
-            'var(--line-2)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--line-2)';
         }}
         onDrop={(e) => {
           e.preventDefault();
-          (e.currentTarget as HTMLDivElement).style.borderColor =
-            'var(--line-2)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = 'var(--line-2)';
           if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]);
         }}
         style={dropZoneStyle}
@@ -251,9 +226,7 @@ function UploadStep({
         <div style={dropIconStyle}>
           <Upload size={22} />
         </div>
-        <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 4 }}>
-          Drop your CSV here
-        </div>
+        <div style={{ fontSize: 16, fontWeight: 500, marginBottom: 4 }}>Drop your CSV here</div>
         <div style={{ fontSize: 12.5, color: 'var(--fg-3)', marginBottom: 18 }}>
           or click below to browse · max {MAX_ROWS} rows per batch
         </div>
@@ -272,11 +245,7 @@ function UploadStep({
           >
             <Upload size={13} /> Choose CSV
           </button>
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={onSample}
-          >
+          <button type="button" className="btn btn-secondary" onClick={onSample}>
             Try sample data
           </button>
         </div>
@@ -336,7 +305,29 @@ function UploadStep({
             <span className="mono" style={{ color: 'var(--fg-2)' }}>
               asset
             </span>{' '}
-            — symbol (CC / USDCx / …)
+            — V2 instrument id (CC / USDCx / …)
+          </span>
+          <span>
+            <span className="mono" style={{ color: 'var(--fg-2)' }}>
+              instrumentAdmin
+            </span>{' '}
+            — V2 instrument admin party
+          </span>
+          <span>
+            <span className="mono" style={{ color: 'var(--fg-2)' }}>
+              fundingReference
+            </span>{' '}
+            — Amulet allocation/funding reference
+          </span>
+          <span>
+            <span className="mono" style={{ color: 'var(--fg-2)' }}>
+              senderAccount
+            </span>{' '}
+            /{' '}
+            <span className="mono" style={{ color: 'var(--fg-2)' }}>
+              recipientAccount
+            </span>{' '}
+            — JSON account refs
           </span>
           <span>
             <span className="mono" style={{ color: 'var(--fg-2)' }}>
@@ -366,8 +357,7 @@ function UploadStep({
             marginTop: 18,
             padding: 12,
             background: 'color-mix(in oklab, var(--warn) 6%, var(--bg-elev))',
-            border:
-              '1px solid color-mix(in oklab, var(--warn) 25%, var(--line))',
+            border: '1px solid color-mix(in oklab, var(--warn) 25%, var(--line))',
             borderRadius: 8,
             fontSize: 11.5,
             color: 'var(--fg-2)',
@@ -376,15 +366,11 @@ function UploadStep({
             alignItems: 'flex-start',
           }}
         >
-          <AlertTriangle
-            size={14}
-            style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }}
-          />
+          <AlertTriangle size={14} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
           <span>
-            Batch uploads currently default to <code>NumericLegacy</code>{' '}
-            settlement (dev only, no real assets move). UtilityHoldingCustody
-            batch flow lands with the proxy <code>/streams/batch</code> endpoint
-            — tracked separately.
+            Batch uploads are V2-only. Prepare funding/allocation refs with the Amulet wallet first;
+            rows missing token-standard account or funding fields are rejected instead of falling
+            back to legacy settlement.
           </span>
         </div>
       </div>
@@ -511,11 +497,8 @@ function PreviewStep({
           >
             {submitting ? (
               <>
-                <Loader2
-                  size={13}
-                  style={{ animation: 'spin 800ms linear infinite' }}
-                />{' '}
-                Signing {submittedCount}/{stats.valid}…
+                <Loader2 size={13} style={{ animation: 'spin 800ms linear infinite' }} /> Signing{' '}
+                {submittedCount}/{stats.valid}…
               </>
             ) : (
               <>
@@ -563,9 +546,7 @@ function PreviewRow({
     <tr
       style={{
         background:
-          row.error !== null
-            ? 'color-mix(in oklab, var(--danger) 4%, transparent)'
-            : 'transparent',
+          row.error !== null ? 'color-mix(in oklab, var(--danger) 4%, transparent)' : 'transparent',
       }}
     >
       <td className="mono" style={{ fontSize: 11.5, color: 'var(--fg-4)' }}>
@@ -600,7 +581,7 @@ function PreviewRow({
         </span>
       </td>
       <td style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-        {r ? (r.cancellable ? 'Yes' : 'No') : row.raw.cancellable ?? '—'}
+        {r ? (r.cancellable ? 'Yes' : 'No') : (row.raw.cancellable ?? '—')}
       </td>
       <td style={{ textAlign: 'right', fontSize: 11.5 }}>
         <StatusCell error={row.error} result={result} />
@@ -655,11 +636,7 @@ function StatusCell({
           color: 'var(--fg-3)',
         }}
       >
-        <Loader2
-          size={11}
-          style={{ animation: 'spin 800ms linear infinite' }}
-        />{' '}
-        Signing
+        <Loader2 size={11} style={{ animation: 'spin 800ms linear infinite' }} /> Signing
       </span>
     );
   }
@@ -705,12 +682,8 @@ function DoneStep({
   readonly results: Record<number, SubmitResult>;
   readonly onAnother: () => void;
 }) {
-  const success = Object.values(results).filter(
-    (r) => r.status === 'success',
-  ).length;
-  const failed = Object.values(results).filter(
-    (r) => r.status === 'error',
-  ).length;
+  const success = Object.values(results).filter((r) => r.status === 'success').length;
+  const failed = Object.values(results).filter((r) => r.status === 'error').length;
 
   return (
     <div
@@ -724,9 +697,7 @@ function DoneStep({
             height: 48,
             borderRadius: '50%',
             background:
-              failed > 0
-                ? 'color-mix(in oklab, var(--warn) 30%, var(--card))'
-                : 'var(--accent)',
+              failed > 0 ? 'color-mix(in oklab, var(--warn) 30%, var(--card))' : 'var(--accent)',
             color: '#06090d',
             display: 'flex',
             alignItems: 'center',
@@ -796,12 +767,8 @@ function DoneStep({
                   }}
                 />
                 <div style={{ minWidth: 0 }}>
-                  <div
-                    className="mono"
-                    style={{ color: 'var(--fg)', fontWeight: 500 }}
-                  >
-                    Row {r.index + 1}:{' '}
-                    {shortenParty(r.value?.recipient ?? r.raw.recipient ?? '—')}
+                  <div className="mono" style={{ color: 'var(--fg)', fontWeight: 500 }}>
+                    Row {r.index + 1}: {shortenParty(r.value?.recipient ?? r.raw.recipient ?? '—')}
                   </div>
                   <div style={{ color: 'var(--danger)', marginTop: 2 }}>
                     {results[r.index]?.message}
@@ -834,9 +801,7 @@ function validateRow(raw: Record<string, string>, index: number): ParsedRow {
   if (!firstError) {
     return { index, raw, value: null, error: 'Invalid row' };
   }
-  const path = firstError.path.length
-    ? firstError.path.join('.') + ': '
-    : '';
+  const path = firstError.path.length ? firstError.path.join('.') + ': ' : '';
   return {
     index,
     raw,
@@ -846,31 +811,27 @@ function validateRow(raw: Record<string, string>, index: number): ParsedRow {
 }
 
 function buildCreateParams(party: string, row: BatchRow): CreateStreamParams {
-  // We default batch rows to NumericLegacy because the CSV doesn't carry
-  // custody-specific fields. When the proxy ships a real `/streams/batch`
-  // endpoint, this builder swaps to UtilityHoldingCustody params.
   const vestingConfig =
     row.vesting === VestingMode.Linear
       ? { mode: VestingMode.Linear as const }
       : row.vesting === VestingMode.CliffLinear
-      ? {
-          mode: VestingMode.CliffLinear as const,
-          cliffTime: new Date(
-            new Date(row.start).getTime() +
-              (new Date(row.end).getTime() - new Date(row.start).getTime()) *
-                0.25,
-          ),
-        }
-      : row.vesting === VestingMode.Stepped
-      ? {
-          mode: VestingMode.Stepped as const,
-          stepInterval: 86_400_000_000, // 1 day in μs as a default
-          amountPerStep: new Decimal(row.amount).div(30),
-        }
-      : {
-          mode: VestingMode.RenewableTerm as const,
-          termDuration: 30 * 86_400_000_000, // 30 days
-        };
+        ? {
+            mode: VestingMode.CliffLinear as const,
+            cliffTime: new Date(
+              new Date(row.start).getTime() +
+                (new Date(row.end).getTime() - new Date(row.start).getTime()) * 0.25,
+            ),
+          }
+        : row.vesting === VestingMode.Stepped
+          ? {
+              mode: VestingMode.Stepped as const,
+              stepInterval: 86_400_000_000, // 1 day in μs as a default
+              amountPerStep: new Decimal(row.amount).div(30),
+            }
+          : {
+              mode: VestingMode.RenewableTerm as const,
+              termDuration: 30 * 86_400_000_000, // 30 days
+            };
 
   return {
     streamId: crypto.randomUUID(),
@@ -880,7 +841,17 @@ function buildCreateParams(party: string, row: BatchRow): CreateStreamParams {
     startTime: new Date(row.start),
     endTime: new Date(row.end),
     assetType: AssetType.GlobalCip56,
-    settlementMode: SettlementMode.NumericLegacy,
+    settlementMode: SettlementMode.TokenStandardCustody,
+    instrumentRef: {
+      depository: row.instrumentAdmin,
+      issuer: row.instrumentAdmin,
+      instrumentId: row.asset,
+      instrumentVersion: 'v2',
+    },
+    fundingReference: row.fundingReference,
+    escrowOperator: row.escrowOperator,
+    senderAccount: row.senderAccount,
+    recipientAccount: row.recipientAccount,
     cancellable: row.cancellable,
     vestingMode: vestingConfig,
   } as CreateStreamParams;

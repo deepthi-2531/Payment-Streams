@@ -5,19 +5,18 @@
  * pattern (STR-77 / plan §7.6).
  *
  * Replaces the poll-based `auto-withdraw.ts` worker for assets that
- * advertise V2 capabilities (or implement AllocationRequestV1). For
- * each asset in the registry, opens a subscription:
+ * advertise V2 capabilities. For each asset in the registry, opens a
+ * subscription:
  *
  *   - **V2 path** — subscribes to `TransferEventsV2` from the
  *     `splice-api-token-transfer-events-v2` DAR. Receives `Allocation_Settle`
  *     events directly from the V2 event package.
  *
- *   - **V1 path** — subscribes to the Ledger API transaction stream
- *     filtered by our package hashes. Detects `AllocationV1.Allocation_Settle`
- *     exercises by template id + choice name. (V1 uses the choice name
- *     `Allocation_Settle` — V2's `Allocation_Settle` is a
- *     different name for the same operation. See STR-89 V1/V2 vocabulary
- *     table.)
+ *   - **Raw Ledger API fallback** — subscribes to the Ledger API
+ *     transaction stream filtered by our package hashes. Detects V2
+ *     `Allocation_Settle` exercises by template id + choice name when
+ *     the asset has V2 allocations but has not yet exposed
+ *     TransferEventsV2.
  *
  * On each settlement event, the subscriber exercises the corresponding
  * stream-state-advancing choice on the affected escrow contract
@@ -41,10 +40,9 @@
  *
  * ## Bypass for V2 DARs not yet present
  *
- * Until STR-65 lands the real V2 DARs, the V2 path is a clearly-marked
- * stub that logs a warning and falls back to the V1 path (or pure no-op
- * for V2-only assets). The structure is in place; the wire calls
- * activate when `TransferEventsV2` is importable.
+ * Until STR-100 lands the dedicated TransferEventsV2 consumer, the raw
+ * Ledger API fallback remains as a scoped V2 backstop. The wire
+ * event-log calls activate when `TransferEventsV2` is importable.
  */
 
 import { EventEmitter } from 'node:events';
@@ -95,7 +93,7 @@ export interface SubscriberAsset {
 }
 
 export interface SubscriberConfig {
-  /** Ledger API base URL (for V1 transaction-stream subscriptions). */
+  /** Ledger API base URL (for raw V2 transaction-stream fallback). */
   readonly ledgerApiUrl: string;
   /** Bearer token for Ledger API auth. */
   readonly ledgerApiToken?: string | undefined;
@@ -180,7 +178,8 @@ export function defaultOffsetFilePath(): string {
 }
 
 /**
- * Settlement event payload, normalized across V1 and V2 sources.
+ * Settlement event payload from the V2 TransferEvents path or raw
+ * Ledger API V2 fallback.
  *
  * `originalAllocationId` correlates iterations across a committed-iterated
  * allocation chain — per the CIP-0112 May 2026 update, every
@@ -193,7 +192,7 @@ export function defaultOffsetFilePath(): string {
  * `allocationCid`.
  */
 export interface SettlementEvent {
-  readonly version: 'v1' | 'v2';
+  readonly version: 'v2';
   readonly assetKey: string;
   /** Contract id of the Allocation that was settled. */
   readonly allocationCid: string;
@@ -473,10 +472,10 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
    *     already extracted, avoiding our heuristic argument-shape probing
    *   - Single event stream covers all V2 holding kinds (not just allocations)
    *
-   * V1 raw-tx fallback is retained for assets that advertise V2
-   * allocations but have not yet published `transferEventsV2` (e.g.
-   * USDCx pre-upgrade). Per CIP-0112 § 5, this is expected to be
-   * temporary as V1 assets dual-publish V2 interfaces.
+   * Raw transaction fallback is retained for assets that advertise V2
+   * allocations but have not yet published `transferEventsV2`. Per
+   * CIP-0112 § 5, this should be temporary as assets publish V2 event
+   * interfaces alongside their V2 allocation support.
    */
   private startV2Subscription(asset: SubscriberAsset): void {
     if (!asset.transferEventsV2) {
@@ -668,8 +667,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     const loop = async (): Promise<void> => {
       if (cancelled || !this.running) return;
       try {
-        this.emit('subscription:opened', { assetKey: asset.key, version: 'v1' });
-        this.config.logger.info({ assetKey: asset.key }, 'Opening V1 ledger-api subscription');
+        this.emit('subscription:opened', { assetKey: asset.key, version: 'v2' });
+        this.config.logger.info({ assetKey: asset.key }, 'Opening raw V2 ledger-api subscription');
 
         // Poll the updates stream and filter for Allocation_Settle.
         await this.pollLedgerApiUpdates(asset);
@@ -677,11 +676,11 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
         // If the poll loop returns (e.g. EOF, server-side close), reset
         // backoff and try again.
         backoffMs = this.config.initialBackoffMs;
-        this.emit('subscription:closed', { assetKey: asset.key, version: 'v1' });
+        this.emit('subscription:closed', { assetKey: asset.key, version: 'v2' });
       } catch (err) {
         this.config.logger.error(
           { err, assetKey: asset.key, backoffMs },
-          'V1 subscription error; will reconnect with backoff',
+          'Raw V2 subscription error; will reconnect with backoff',
         );
         this.emit('subscription:error', { assetKey: asset.key, error: err });
         backoffMs = Math.min(backoffMs * 2, this.config.maxBackoffMs);
@@ -703,9 +702,9 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
    *
    * Returns when the stream cleanly ends; throws on error.
    *
-   * NOTE: this is the V1 path. The V2 path is structurally identical
-   * but uses TransferEventsV2's `getEvents` endpoint instead, which
-   * returns parsed semantic events rather than raw exercise records.
+   * NOTE: this is the raw V2 fallback. The preferred path uses
+   * TransferEventsV2's event endpoint, which returns parsed semantic
+   * events rather than raw exercise records.
    */
   private async pollLedgerApiUpdates(asset: SubscriberAsset): Promise<void> {
     const url = `${this.config.ledgerApiUrl}/v2/updates/flats`;
@@ -778,7 +777,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       } catch (err) {
         this.config.logger.warn(
           { assetKey: asset.key, err },
-          'Failed to persist V1 offset checkpoint',
+          'Failed to persist raw V2 offset checkpoint',
         );
       }
     }
@@ -786,13 +785,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
 
   /**
    * Try to interpret a raw update record as a settlement exercise.
-   * V1 and V2 use different choice names for the same operation:
-   *
-   *   V1: `Allocation_Settle` (per docs.sync.global published spec)
-   *   V2: `Allocation_Settle`          (per canton-network/splice@token-standard-v2-upcoming)
-   *
-   * We accept either and infer the version from the asset's capability
-   * flag (see SETTLEMENT_CHOICES). See STR-89 V1/V2 vocabulary table.
+   * V2 settlement uses `Allocation_Settle` per
+   * `canton-network/splice@token-standard-v2-upcoming`.
    *
    * Returns undefined if the update doesn't match our filter.
    */
@@ -807,13 +801,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     const inScope = this.config.packageHashes.some((h) => tid.startsWith(`${h}:`));
     if (!inScope) return undefined;
 
-    // Heuristic v1/v2 split by package hash; the real implementation
-    // would consult the manifest. For the scaffold, infer V2 from
-    // asset capability flag.
-    const version: 'v1' | 'v2' = asset.transferEventsV2 ? 'v2' : 'v1';
-
     return {
-      version,
+      version: 'v2',
       assetKey: asset.key,
       allocationCid: update.exercise.contractId,
       settlementRefId: update.exercise.argument?.settlementRefId ?? '',

@@ -25,15 +25,17 @@ export const acceptSchema = z.discriminatedUnion('settlementMode', [
     contractId: z.string().min(1),
     recipientAccount: z.string().min(1),
   }),
-  z.object({
-    settlementMode: z.literal(SettlementMode.TokenStandardCustody),
-    contractId: z.string().min(1),
-    recipientAccount: z.string().min(1),
-  }).refine(() => false, {
-    message:
-      'TokenStandardCustody accept not available — Daml template missing ' +
-      '(STR-103). Track lifecycle migration in STR-86.',
-  }),
+  z
+    .object({
+      settlementMode: z.literal(SettlementMode.TokenStandardCustody),
+      contractId: z.string().min(1),
+      recipientAccount: z.string().min(1),
+    })
+    .refine(() => false, {
+      message:
+        'Legacy TokenStandardEscrow accept is not part of the V2-only flow. ' +
+        'Use the Amulet AllocationRequest + StreamAdmin path.',
+    }),
   z.object({
     settlementMode: z.literal(SettlementMode.Delegated),
     contractId: z.string().min(1),

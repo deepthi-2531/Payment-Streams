@@ -276,10 +276,7 @@ function utilityExtraPartiesFromInstrument(
 
 function utilityMutationParties(stream: Awaited<ReturnType<typeof getStreamOrThrow>>): string[] {
   if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
-    return [
-      stream.config.recipient,
-      stream.escrowRef?.escrowOperator ?? '',
-    ].filter(Boolean);
+    return [stream.config.recipient, stream.escrowRef?.escrowOperator ?? ''].filter(Boolean);
   }
 
   if (stream.config.settlementMode !== SettlementMode.UtilityHoldingCustody) {
@@ -305,7 +302,11 @@ async function getPendingRequestOrThrow(
   );
 
   if (!request) {
-    throw new AuthError(404, 'request_not_found', `Pending request not found: sender=${sender}, streamId=${streamId}`);
+    throw new AuthError(
+      404,
+      'request_not_found',
+      `Pending request not found: sender=${sender}, streamId=${streamId}`,
+    );
   }
 
   return request;
@@ -357,15 +358,15 @@ async function getAcceptedTokenStandardRequestOrThrow(
   };
 }
 
-async function getStreamOrThrow(
-  client: CantonStreamsClient,
-  sender: string,
-  streamId: string,
-) {
+async function getStreamOrThrow(client: CantonStreamsClient, sender: string, streamId: string) {
   try {
     return await client.getStream(sender, streamId);
   } catch {
-    throw new AuthError(404, 'stream_not_found', `Stream not found: sender=${sender}, streamId=${streamId}`);
+    throw new AuthError(
+      404,
+      'stream_not_found',
+      `Stream not found: sender=${sender}, streamId=${streamId}`,
+    );
   }
 }
 
@@ -394,8 +395,13 @@ function serializeForJson(obj: unknown): unknown {
  * Parse CreateStreamParams from a JSON request body.
  * Converts string amounts back to Decimal instances.
  */
-function parseCreateParams(body: Record<string, unknown>, callerParty?: string): CreateStreamParams {
-  const rawRef = body['instrumentRef'] as { depository: string; issuer: string; instrumentId: string; instrumentVersion: string } | undefined;
+function parseCreateParams(
+  body: Record<string, unknown>,
+  callerParty?: string,
+): CreateStreamParams {
+  const rawRef = body['instrumentRef'] as
+    | { depository: string; issuer: string; instrumentId: string; instrumentVersion: string }
+    | undefined;
   return {
     streamId: (body['streamId'] as string | undefined) ?? crypto.randomUUID(),
     sender: (body['sender'] as string | undefined) ?? callerParty ?? '',
@@ -405,18 +411,21 @@ function parseCreateParams(body: Record<string, unknown>, callerParty?: string):
     endTime: new Date(body['endTime'] as string),
     vestingMode: parseVestingMode(body['vestingMode'] as Record<string, unknown>),
     assetType: (body['assetType'] as AssetType) ?? AssetType.GlobalCip56,
-    instrumentRef: rawRef ? {
-      depository: rawRef.depository,
-      issuer: rawRef.issuer,
-      instrumentId: rawRef.instrumentId,
-      instrumentVersion: rawRef.instrumentVersion,
-    } : undefined,
+    instrumentRef: rawRef
+      ? {
+          depository: rawRef.depository,
+          issuer: rawRef.issuer,
+          instrumentId: rawRef.instrumentId,
+          instrumentVersion: rawRef.instrumentVersion,
+        }
+      : undefined,
     holdingCid: body['holdingCid'] as string,
     fundingReference: body['fundingReference'] as string,
     senderAccount: body['senderAccount'] as CreateStreamParams['senderAccount'],
     recipientAccount: body['recipientAccount'] as CreateStreamParams['recipientAccount'],
     cancellable: body['cancellable'] as boolean,
-    settlementMode: (body['settlementMode'] as SettlementMode) ?? SettlementMode.UtilityHoldingCustody,
+    settlementMode:
+      (body['settlementMode'] as SettlementMode) ?? SettlementMode.TokenStandardCustody,
     escrowOperator: body['escrowOperator'] as string | undefined,
     escrowAccount: body['escrowAccount'] as CreateStreamParams['escrowAccount'],
   };
@@ -450,7 +459,8 @@ function parseRenewParams(body: Record<string, unknown>): RenewParams {
     fundingReference: body['fundingReference'] as string | undefined,
     settlementReference: body['settlementReference'] as string | undefined,
     confirmedAdditionalAmount:
-      typeof body['confirmedAdditionalAmount'] === 'string' || typeof body['confirmedAdditionalAmount'] === 'number'
+      typeof body['confirmedAdditionalAmount'] === 'string' ||
+      typeof body['confirmedAdditionalAmount'] === 'number'
         ? new Decimal(body['confirmedAdditionalAmount'] as string | number)
         : undefined,
   };
@@ -472,7 +482,8 @@ app.get('/api/stream-requests', async (req, res) => {
     } = {};
     if (req.query['sender']) filter.sender = req.query['sender'] as string;
     if (req.query['recipient']) filter.recipient = req.query['recipient'] as string;
-    if (req.query['assetType']) filter.assetType = req.query['assetType'] as PendingStreamRequestFilter['assetType'];
+    if (req.query['assetType'])
+      filter.assetType = req.query['assetType'] as PendingStreamRequestFilter['assetType'];
 
     const requests = await client.listPendingStreamRequests(
       Object.keys(filter).length > 0 ? filter : undefined,
@@ -500,10 +511,14 @@ app.get('/api/streams', async (req, res) => {
     if (req.query['sender']) filter.sender = req.query['sender'] as string;
     if (req.query['recipient']) filter.recipient = req.query['recipient'] as string;
     if (req.query['status']) filter.status = req.query['status'] as StreamFilter['status'];
-    if (req.query['vestingMode']) filter.vestingMode = req.query['vestingMode'] as StreamFilter['vestingMode'];
-    if (req.query['settlementMode']) filter.settlementMode = req.query['settlementMode'] as StreamFilter['settlementMode'];
+    if (req.query['vestingMode'])
+      filter.vestingMode = req.query['vestingMode'] as StreamFilter['vestingMode'];
+    if (req.query['settlementMode'])
+      filter.settlementMode = req.query['settlementMode'] as StreamFilter['settlementMode'];
 
-    const streams = await client.listStreams(Object.keys(filter).length > 0 ? filter as StreamFilter : undefined);
+    const streams = await client.listStreams(
+      Object.keys(filter).length > 0 ? (filter as StreamFilter) : undefined,
+    );
     res.json(serializeForJson(streams));
   } catch (err) {
     handleError(res, err, 'listStreams');
@@ -551,11 +566,6 @@ app.post('/api/streams', async (req, res) => {
     enforceRole(auth.party, getRequiredRole('create'), bodySender);
 
     const params = parseCreateParams(req.body, auth.party);
-    // NumericLegacy temporarily re-enabled for testing
-    // if (params.settlementMode === SettlementMode.NumericLegacy) {
-    //   throw new AuthError(400, 'numeric_legacy_creation_disabled', 'New numeric streams are disabled. Use a holding-backed settlement mode.');
-    // }
-
     client = createClientForAuth(auth);
     const result = await client.createStream(params);
     res.status(201).json(result);
@@ -575,7 +585,12 @@ app.post('/api/streams/:sender/:streamId/accept', async (req, res) => {
     const sender = req.params['sender']!;
     client = createClientForAuth(auth);
     const request = await getPendingRequestOrThrow(client, sender, req.params['streamId']!);
-    enforceRole(auth.party, getRequiredRole('accept'), request.config.sender, request.config.recipient);
+    enforceRole(
+      auth.party,
+      getRequiredRole('accept'),
+      request.config.sender,
+      request.config.recipient,
+    );
     const accepted = await client.acceptStream(sender, req.params['streamId']!);
 
     if (
@@ -589,9 +604,10 @@ app.post('/api/streams/:sender/:streamId/accept', async (req, res) => {
         ...utilityExtraPartiesFromInstrument(request.config.instrumentRef),
       ];
 
-      serviceClient = authConfig.mode === 'dev'
-        ? createClientForAuthWithParties(auth, additionalParties)
-        : createInternalServiceClient(additionalParties);
+      serviceClient =
+        authConfig.mode === 'dev'
+          ? createClientForAuthWithParties(auth, additionalParties)
+          : createInternalServiceClient(additionalParties);
       const finalized = await serviceClient.finalizeEscrow(
         sender,
         req.params['streamId']!,
@@ -622,14 +638,20 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
     const streamId = req.params['streamId']!;
     lookupClient = createClientForAuth(auth);
     const stream = await getStreamOrThrow(lookupClient, sender, streamId);
-    enforceRole(auth.party, getRequiredRole('withdraw'), stream.config.sender, stream.config.recipient);
+    enforceRole(
+      auth.party,
+      getRequiredRole('withdraw'),
+      stream.config.sender,
+      stream.config.recipient,
+    );
     client = createClientForAuthWithParties(auth, utilityMutationParties(stream));
 
     // TokenStandardCustody: auto-orchestrate if no settlement reference supplied
     if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
-      const manualRef = typeof req.body?.['settlementReference'] === 'string'
-        ? req.body['settlementReference']
-        : undefined;
+      const manualRef =
+        typeof req.body?.['settlementReference'] === 'string'
+          ? req.body['settlementReference']
+          : undefined;
       serviceClient = createTokenStandardExecutionClient(auth);
 
       if (manualRef) {
@@ -643,14 +665,22 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
         // threaded through to the SDK so Daml sees consistent values.
         const withdrawTime = new Date();
         let settledAmount: Decimal;
-        if (typeof req.body?.['settledAmount'] === 'string' || typeof req.body?.['settledAmount'] === 'number') {
+        if (
+          typeof req.body?.['settledAmount'] === 'string' ||
+          typeof req.body?.['settledAmount'] === 'number'
+        ) {
           settledAmount = new Decimal(req.body['settledAmount'] as string | number);
         } else {
           // Auto-compute: linearAccrual(totalDeposited, start, end, withdrawTime) − totalWithdrawn
           const nowMicros = BigInt(withdrawTime.getTime()) * 1000n;
           const startMicros = BigInt(stream.config.startTime.getTime()) * 1000n;
           const endMicros = BigInt(stream.config.endTime.getTime()) * 1000n;
-          const elapsed = nowMicros <= startMicros ? 0n : (nowMicros >= endMicros ? endMicros - startMicros : nowMicros - startMicros);
+          const elapsed =
+            nowMicros <= startMicros
+              ? 0n
+              : nowMicros >= endMicros
+                ? endMicros - startMicros
+                : nowMicros - startMicros;
           const duration = endMicros - startMicros;
           // Replicate Daml's Numeric 10 arithmetic (mul FIRST, then div — matches
           // Daml left-to-right evaluation of `totalDeposited * elapsed / duration`).
@@ -660,18 +690,23 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
             .times(new Decimal(elapsed.toString()))
             .dividedBy(new Decimal(duration.toString()))
             .toDecimalPlaces(10, Decimal.ROUND_HALF_EVEN);
-          settledAmount = Decimal.max(0, accrued.sub(stream.state.totalWithdrawn))
-            .toDecimalPlaces(10, Decimal.ROUND_DOWN);
-          logger.info({
-            withdrawTimeMs: withdrawTime.getTime(),
-            nowMicros: nowMicros.toString(),
-            startMicros: startMicros.toString(),
-            elapsed: elapsed.toString(),
-            duration: duration.toString(),
-            accrued: accrued.toString(),
-            totalWithdrawn: stream.state.totalWithdrawn.toString(),
-            settledAmount: settledAmount.toString(),
-          }, '[TokenStandard withdraw] auto-computed settledAmount');
+          settledAmount = Decimal.max(0, accrued.sub(stream.state.totalWithdrawn)).toDecimalPlaces(
+            10,
+            Decimal.ROUND_DOWN,
+          );
+          logger.info(
+            {
+              withdrawTimeMs: withdrawTime.getTime(),
+              nowMicros: nowMicros.toString(),
+              startMicros: startMicros.toString(),
+              elapsed: elapsed.toString(),
+              duration: duration.toString(),
+              accrued: accrued.toString(),
+              totalWithdrawn: stream.state.totalWithdrawn.toString(),
+              settledAmount: settledAmount.toString(),
+            },
+            '[TokenStandard withdraw] auto-computed settledAmount',
+          );
         }
         const result = await serviceClient.withdraw(sender, streamId, {
           settlementReference: manualRef,
@@ -682,7 +717,10 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
       } else {
         // Orchestrated mode: the proxy service executes the payout and updates the stream.
         const result = await orchestrator.withdraw(
-          serviceClient._transport, sender, streamId, [authConfig.escrowOperator!],
+          serviceClient._transport,
+          sender,
+          streamId,
+          [authConfig.escrowOperator!],
           logger,
         );
         res.json(serializeForJson(result));
@@ -723,7 +761,9 @@ app.post('/api/streams/:sender/:streamId/cancel', async (req, res) => {
       if (hasManualRefs) {
         // Manual mode: caller supplies settlement refs for both legs
         const tokenStandardParams = {
-          recipientSettlementReference: req.body['recipientSettlementReference'] as string | undefined,
+          recipientSettlementReference: req.body['recipientSettlementReference'] as
+            | string
+            | undefined,
           senderRefundReference: req.body['senderRefundReference'] as string | undefined,
           recipientAmountSettled: new Decimal(req.body?.['recipientAmountSettled'] as string),
           senderRefundSettled: new Decimal(req.body?.['senderRefundSettled'] as string),
@@ -734,7 +774,12 @@ app.post('/api/streams/:sender/:streamId/cancel', async (req, res) => {
         // Orchestrated mode: compute amounts and execute transfers automatically
         const actAs = utilityMutationParties(stream).concat([auth.party]);
         const result = await orchestrator.cancel(
-          client._transport, sender, streamId, actAs, logger, false,
+          client._transport,
+          sender,
+          streamId,
+          actAs,
+          logger,
+          false,
         );
         res.json(serializeForJson(result));
       }
@@ -785,7 +830,9 @@ app.post('/api/streams/:sender/:streamId/mutual-cancel', async (req, res) => {
       if (hasManualRefs) {
         // Manual mode: caller supplies settlement refs for both legs
         const tokenStandardParams = {
-          recipientSettlementReference: req.body['recipientSettlementReference'] as string | undefined,
+          recipientSettlementReference: req.body['recipientSettlementReference'] as
+            | string
+            | undefined,
           senderRefundReference: req.body['senderRefundReference'] as string | undefined,
           recipientAmountSettled: new Decimal(req.body?.['recipientAmountSettled'] as string),
           senderRefundSettled: new Decimal(req.body?.['senderRefundSettled'] as string),
@@ -796,7 +843,12 @@ app.post('/api/streams/:sender/:streamId/mutual-cancel', async (req, res) => {
         // Orchestrated mode: compute amounts and execute both transfer legs automatically
         const actAs = [...mutualParties, auth.party].filter(Boolean);
         const result = await orchestrator.cancel(
-          client._transport, sender, streamId, actAs, logger, true,
+          client._transport,
+          sender,
+          streamId,
+          actAs,
+          logger,
+          true,
         );
         res.json(serializeForJson(result));
       }
@@ -828,9 +880,10 @@ app.post('/api/streams/:sender/:streamId/renew', async (req, res) => {
     client = createClientForAuthWithParties(auth, utilityMutationParties(stream));
 
     if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
-      const manualRef = typeof req.body?.['settlementReference'] === 'string'
-        ? req.body['settlementReference']
-        : undefined;
+      const manualRef =
+        typeof req.body?.['settlementReference'] === 'string'
+          ? req.body['settlementReference']
+          : undefined;
 
       const params = parseRenewParams(req.body);
 
@@ -842,7 +895,12 @@ app.post('/api/streams/:sender/:streamId/renew', async (req, res) => {
         // Orchestrated mode: execute sender → escrow transfer, then renew on-ledger
         const actAs = utilityMutationParties(stream).concat([auth.party]);
         const result = await orchestrator.renew(
-          client._transport, sender, streamId, params, actAs, logger,
+          client._transport,
+          sender,
+          streamId,
+          params,
+          actAs,
+          logger,
         );
         res.json(serializeForJson(result));
       }
@@ -881,7 +939,7 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
         : undefined;
     const settlementMode =
       typeof req.body?.['settlementMode'] === 'string'
-        ? req.body['settlementMode'] as SettlementMode
+        ? (req.body['settlementMode'] as SettlementMode)
         : undefined;
 
     if (settlementMode === SettlementMode.TokenStandardCustody) {
@@ -915,9 +973,10 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
       const actAs = [escrowOperator];
       client = await createServiceClient(req, []);
 
-      const manualRef = typeof req.body?.['settlementReference'] === 'string'
-        ? req.body['settlementReference']
-        : undefined;
+      const manualRef =
+        typeof req.body?.['settlementReference'] === 'string'
+          ? req.body['settlementReference']
+          : undefined;
 
       if (!manualRef) {
         const result = await orchestrator.finalize(
@@ -943,10 +1002,17 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
     const finalizeParams =
       settlementMode === SettlementMode.TokenStandardCustody
         ? {
-            escrowReference: typeof req.body?.['escrowReference'] === 'string' ? req.body['escrowReference'] : undefined,
-            settlementReference: typeof req.body?.['settlementReference'] === 'string' ? req.body['settlementReference'] : undefined,
+            escrowReference:
+              typeof req.body?.['escrowReference'] === 'string'
+                ? req.body['escrowReference']
+                : undefined,
+            settlementReference:
+              typeof req.body?.['settlementReference'] === 'string'
+                ? req.body['settlementReference']
+                : undefined,
             confirmedEscrowAmount:
-              typeof req.body?.['confirmedEscrowAmount'] === 'string' || typeof req.body?.['confirmedEscrowAmount'] === 'number'
+              typeof req.body?.['confirmedEscrowAmount'] === 'string' ||
+              typeof req.body?.['confirmedEscrowAmount'] === 'number'
                 ? new Decimal(req.body['confirmedEscrowAmount'] as string | number)
                 : undefined,
           }
@@ -1110,11 +1176,15 @@ async function start(): Promise<void> {
     const autoWithdrawDiscoveryParties =
       autoWithdrawConfig.discoveryParties.length > 0
         ? [...autoWithdrawConfig.discoveryParties]
-        : [...new Set([
-            ...(authConfig.userParties ? [...authConfig.userParties] : []),
-            ...(authConfig.serviceParties ? [...authConfig.serviceParties] : []),
-            authConfig.escrowOperator,
-          ].filter(Boolean))];
+        : [
+            ...new Set(
+              [
+                ...(authConfig.userParties ? [...authConfig.userParties] : []),
+                ...(authConfig.serviceParties ? [...authConfig.serviceParties] : []),
+                authConfig.escrowOperator,
+              ].filter(Boolean),
+            ),
+          ];
 
     const effectiveAutoWithdrawConfig = {
       ...autoWithdrawConfig,

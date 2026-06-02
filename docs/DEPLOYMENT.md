@@ -12,11 +12,16 @@ docker compose -f docker/docker-compose.yml up -d
 
 Brings up:
 
-| Service | Port | Purpose |
-|---|---|---|
-| Canton sandbox | gRPC 5001, JSON API 7575, Admin 5002 | Single-node participant for development |
-| Dashboard | 3000 | Nginx-served SPA |
-| Proxy | 4000 | Express REST API |
+| Service        | Port                  | Purpose                                 |
+| -------------- | --------------------- | --------------------------------------- |
+| Canton sandbox | gRPC 5001, Admin 5002 | Single-node participant for development |
+| Dashboard      | 3000                  | Nginx-served SPA                        |
+| Proxy          | 4000                  | Express REST API                        |
+
+Wallet-backed V2 E2E is tested against the Amulet wallet running on a
+separate Splice validator LocalNet built from
+`canton-network/splice@token-standard-v2-upcoming`. That wallet gateway
+should expose `http://localhost:3030/api/v0/dapp`.
 
 Data persists in the `canton-data` Docker volume. Reset:
 
@@ -90,40 +95,40 @@ node packages/proxy/dist/index.js
 
 **Required environment variables (production):**
 
-| Variable | Default | Description |
-|---|---|---|
-| `PROXY_PORT` | `4000` | Proxy listen port |
-| `CANTON_HOST` | `localhost` | Canton ledger API host |
-| `CANTON_PORT` | `5001` | Canton ledger API gRPC port |
-| `CANTON_USE_TLS` | `false` | Set `true` to use gRPC TLS |
-| `CANTON_JSON_API_URL` | (required for readiness) | Canton JSON API base URL |
-| `CANTON_SYNCHRONIZER_ID` | (required) | Synchronizer/domain id streams are created on |
-| `CANTON_STREAMS_PACKAGE_ID` | (required) | Vetted package id of the canton-streams DAR |
-| `PROXY_AUTH_MODE` | `dev` | `jwt` (production) or `dev` |
-| `PROXY_OIDC_ISSUER` | (none) | OIDC issuer URL — required when `PROXY_AUTH_MODE=jwt` |
-| `PROXY_JWT_AUDIENCE` | `https://canton.network.global` | Expected JWT audience |
-| `PROXY_SERVICE_TOKEN` | (none) | Service JWT for finalize / auto-withdraw routes |
-| `PROXY_ESCROW_OPERATOR` | (none) | Escrow-operator party id |
-| `ALLOWED_ORIGINS` | (none) | CORS allowlist, comma-separated (e.g. `http://localhost:3000`) |
-| `LOG_LEVEL` | `info` | `trace` / `debug` / `info` / `warn` / `error` |
+| Variable                    | Default                         | Description                                                    |
+| --------------------------- | ------------------------------- | -------------------------------------------------------------- |
+| `PROXY_PORT`                | `4000`                          | Proxy listen port                                              |
+| `CANTON_HOST`               | `localhost`                     | Canton ledger API host                                         |
+| `CANTON_PORT`               | `5001`                          | Canton ledger API gRPC port                                    |
+| `CANTON_USE_TLS`            | `false`                         | Set `true` to use gRPC TLS                                     |
+| `CANTON_JSON_API_URL`       | (required for readiness)        | Canton JSON API base URL                                       |
+| `CANTON_SYNCHRONIZER_ID`    | (required)                      | Synchronizer/domain id streams are created on                  |
+| `CANTON_STREAMS_PACKAGE_ID` | (required)                      | Vetted package id of the canton-streams DAR                    |
+| `PROXY_AUTH_MODE`           | `dev`                           | `jwt` (production) or `dev`                                    |
+| `PROXY_OIDC_ISSUER`         | (none)                          | OIDC issuer URL — required when `PROXY_AUTH_MODE=jwt`          |
+| `PROXY_JWT_AUDIENCE`        | `https://canton.network.global` | Expected JWT audience                                          |
+| `PROXY_SERVICE_TOKEN`       | (none)                          | Service JWT for finalize / auto-withdraw routes                |
+| `PROXY_ESCROW_OPERATOR`     | (none)                          | Escrow-operator party id                                       |
+| `ALLOWED_ORIGINS`           | (none)                          | CORS allowlist, comma-separated (e.g. `http://localhost:3000`) |
+| `LOG_LEVEL`                 | `info`                          | `trace` / `debug` / `info` / `warn` / `error`                  |
 
 **Recommended readiness flags (production):**
 
-| Variable | Description |
-|---|---|
-| `PROXY_STARTUP_REQUIRE_PACKAGE_ENDPOINT=1` | Fail startup unless the canton-streams package is visible on JSON API |
-| `PROXY_STARTUP_REQUIRE_VETTED_PACKAGES=1` | Fail startup unless the package is vetted on the synchronizer |
+| Variable                                                  | Description                                                           |
+| --------------------------------------------------------- | --------------------------------------------------------------------- |
+| `PROXY_STARTUP_REQUIRE_PACKAGE_ENDPOINT=1`                | Fail startup unless the canton-streams package is visible on JSON API |
+| `PROXY_STARTUP_REQUIRE_VETTED_PACKAGES=1`                 | Fail startup unless the package is vetted on the synchronizer         |
 | `PROXY_STARTUP_REQUIRE_INTERACTIVE_SUBMISSION_ENDPOINT=1` | Fail startup unless `/v2/interactive-submission/prepare` is reachable |
-| `PROXY_STARTUP_FAIL_ON_UNKNOWN_PACKAGE_VETTING=1` | Treat unknown vetting state as fatal |
+| `PROXY_STARTUP_FAIL_ON_UNKNOWN_PACKAGE_VETTING=1`         | Treat unknown vetting state as fatal                                  |
 
 **Event-driven auto-withdraw:**
 
 The proxy subscribes to `TransferEventsV2` and advances stream state on settlement events instead of polling. To enable:
 
-| Variable | Description |
-|---|---|
-| `PROXY_TRANSFER_EVENTS_ENABLED=1` | Turn on the V2 events subscriber |
-| `PROXY_SERVICE_USER_ID` | Ledger user id used for interactive submission of `Allocation_Settle` |
+| Variable                          | Description                                                           |
+| --------------------------------- | --------------------------------------------------------------------- |
+| `PROXY_TRANSFER_EVENTS_ENABLED=1` | Turn on the V2 events subscriber                                      |
+| `PROXY_SERVICE_USER_ID`           | Ledger user id used for interactive submission of `Allocation_Settle` |
 
 Falls back to interactive submission when a participant cannot stream the event directly.
 
@@ -149,7 +154,7 @@ Recommended production posture:
 
 ### 4. Per-asset configuration
 
-All asset routing lives in `config/asset-registry.json`. Each asset entry advertises its admin party, Scan endpoint, wallet-gateway URL, and V1/V2 capability flags. The SDK reads this at runtime via `getAssetCapabilities(instrumentRef)` and selects the right adapter per CIP-0112.
+All asset routing lives in `config/asset-registry.json`. Each asset entry advertises its admin party, Scan endpoint, wallet-gateway URL, and V2 capability flags. The SDK reads this at runtime via `getAssetCapabilities(instrumentRef)` and rejects assets that do not advertise required V2 allocation support.
 
 ```jsonc
 {
@@ -160,13 +165,11 @@ All asset routing lives in `config/asset-registry.json`. Each asset entry advert
       "scanEndpoint": "https://scan.canton.network",
       "walletGatewayUrl": "https://wallet.example.com/api/v0/dapp",
       "capabilities": {
-        "transfersV1": true,
-        "transfersV2": true,
         "allocationsV2": true,
-        "transferEventsV2": true
-      }
-    }
-  ]
+        "transferEventsV2": true,
+      },
+    },
+  ],
 }
 ```
 
@@ -198,23 +201,28 @@ server {
 
 **Dashboard build-time environment variables (Vite):**
 
-| Variable | Default | Description |
-|---|---|---|
-| `VITE_PROXY_URL` | `/` (Vite dev proxy) | Proxy base URL when not co-served |
-| `VITE_WALLET_GATEWAY_URL` | `http://localhost:3030/api/v0/dapp` | CIP-103 wallet gateway endpoint |
-| `VITE_SKIP_WALLET_PICKER` | `false` | Auto-select the remote wallet without picker UI |
-| `VITE_WC_PROJECT_ID` | (none) | WalletConnect / Reown project id (optional adapter) |
+| Variable                  | Default                             | Description                                         |
+| ------------------------- | ----------------------------------- | --------------------------------------------------- |
+| `VITE_PROXY_URL`          | `/` (Vite dev proxy)                | Proxy base URL when not co-served                   |
+| `VITE_WALLET_GATEWAY_URL` | `http://localhost:3030/api/v0/dapp` | CIP-103 wallet gateway endpoint                     |
+| `VITE_SKIP_WALLET_PICKER` | `false`                             | Auto-select the remote wallet without picker UI     |
+| `VITE_WC_PROJECT_ID`      | (none)                              | WalletConnect / Reown project id (optional adapter) |
 
 Template: `packages/dashboard/.env.example`. Never commit `.env.local` (gitignored).
 
-### 6. Wallet gateway
+### 6. Amulet wallet gateway
 
 The dashboard talks to any [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md)-compliant wallet via `@canton-network/dapp-sdk`. The reference implementation is the [Splice Wallet Kernel](https://github.com/canton-network/splice-wallet-kernel). To run SWK locally:
 
-1. Clone + start SWK per its README (`pm2 list` should show the `remote` workspace running on `:3030`)
-2. Edit `wallet-gateway/test/config.json` `server.allowedOrigins` to include `http://localhost:3000`
-3. Restart SWK
-4. Open the dashboard — Connect Wallet → SWK login → authenticated
+For Token Standard V2 flows, use the Amulet wallet that runs on a
+Splice validator LocalNet built from `token-standard-v2-upcoming`.
+Issue [canton-network/splice#5498](https://github.com/canton-network/splice/issues/5498)
+tracks the iterated-settlement wallet support this app depends on.
+
+1. Build/start the Splice LocalNet from `token-standard-v2-upcoming`
+2. Confirm the Amulet wallet gateway is listening on `:3030`
+3. Allow the dashboard origin (`http://localhost:3000`) in the wallet gateway config
+4. Open the dashboard — Connect Wallet → Amulet login → authenticated
 
 See [SWK-WALLET-RUNBOOK.md](SWK-WALLET-RUNBOOK.md) for the full walkthrough including the headless-browser caveat.
 
@@ -264,12 +272,12 @@ The SDK's template registry reads this at startup. Restart the proxy for the cha
 
 ### Health checks
 
-| Check | Command |
-|---|---|
-| Proxy | `curl http://localhost:4000/api/health` |
-| Canton gRPC | `grpcurl -plaintext localhost:5001 grpc.health.v1.Health/Check` |
-| Canton JSON API | `curl http://localhost:7575/v2/version` |
-| Dashboard | `curl -I http://localhost:3000/` |
+| Check           | Command                                                         |
+| --------------- | --------------------------------------------------------------- |
+| Proxy           | `curl http://localhost:4000/api/health`                         |
+| Canton gRPC     | `grpcurl -plaintext localhost:5001 grpc.health.v1.Health/Check` |
+| Canton JSON API | `curl http://localhost:7575/v2/version`                         |
+| Dashboard       | `curl -I http://localhost:3000/`                                |
 
 ### Monitoring
 
@@ -289,14 +297,14 @@ For pointing your local proxy + dashboard at a remote validator over an SSH tunn
 
 ## Validation probes
 
-| Script | Purpose |
-|---|---|
-| `scripts/devnet-smoke.sh` | End-to-end lifecycle on a local sandbox |
-| `scripts/testnet-cc-stream-probe.mjs` | CC / Amulet stream against a real validator |
-| `scripts/testnet-usdcx-stream-probe.mjs` | USDCx stream against a real validator |
-| `scripts/testnet-v2-stream-probe.mjs` | V2-native asset against a V2 validator |
-| `scripts/query-adoption-metrics.mjs` | Aggregate adoption metrics across asset Scan endpoints |
-| `scripts/check-tunnel.sh` | Detect a local sandbox shadowing an SSH tunnel port |
+| Script                                   | Purpose                                                |
+| ---------------------------------------- | ------------------------------------------------------ |
+| `scripts/devnet-smoke.sh`                | End-to-end lifecycle on a local sandbox                |
+| `scripts/testnet-cc-stream-probe.mjs`    | CC / Amulet stream against a real validator            |
+| `scripts/testnet-usdcx-stream-probe.mjs` | USDCx stream against a real validator                  |
+| `scripts/testnet-v2-stream-probe.mjs`    | V2-native asset against a V2 validator                 |
+| `scripts/query-adoption-metrics.mjs`     | Aggregate adoption metrics across asset Scan endpoints |
+| `scripts/check-tunnel.sh`                | Detect a local sandbox shadowing an SSH tunnel port    |
 
 Local-environment defaults for the probes can live in `config/local.<env>.json` (gitignored). A template is in `config/local.testnet.example.json`.
 

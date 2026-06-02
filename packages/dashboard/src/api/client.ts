@@ -48,7 +48,7 @@ export class CantonStreamsApi {
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
-     
+
     _getParty?: () => string | null,
   ) {}
 
@@ -91,7 +91,9 @@ export class CantonStreamsApi {
     return raw.map(deserializeStream);
   }
 
-  async listPendingStreamRequests(filter?: PendingStreamRequestFilter): Promise<PendingStreamRequest[]> {
+  async listPendingStreamRequests(
+    filter?: PendingStreamRequestFilter,
+  ): Promise<PendingStreamRequest[]> {
     const params = new URLSearchParams();
     if (filter?.sender) params.set('sender', filter.sender);
     if (filter?.recipient) params.set('recipient', filter.recipient);
@@ -105,26 +107,40 @@ export class CantonStreamsApi {
   }
 
   async getStream(sender: string, streamId: string): Promise<Stream> {
-    const raw = await this.request<RawStream>('GET', `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}`);
+    const raw = await this.request<RawStream>(
+      'GET',
+      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}`,
+    );
     return deserializeStream(raw);
   }
 
   async getStreamHistory(sender: string, streamId: string): Promise<StreamEvent[]> {
-    return this.request<StreamEvent[]>('GET', `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/history`);
+    return this.request<StreamEvent[]>(
+      'GET',
+      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/history`,
+    );
   }
 
   // --- Mutations ---
 
-  async createStream(params: CreateStreamParams): Promise<{ requestContractId: string; streamId: string }> {
+  async createStream(
+    params: CreateStreamParams,
+  ): Promise<{ requestContractId: string; streamId: string }> {
     return this.request('POST', '/api/streams', serializeCreateParams(params));
   }
 
   async acceptStream(sender: string, streamId: string): Promise<{ escrowContractId: string }> {
-    return this.request('POST', `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/accept`);
+    return this.request(
+      'POST',
+      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/accept`,
+    );
   }
 
   async withdraw(sender: string, streamId: string): Promise<WithdrawResult> {
-    const raw = await this.request<RawWithdrawResult>('POST', `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/withdraw`);
+    const raw = await this.request<RawWithdrawResult>(
+      'POST',
+      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/withdraw`,
+    );
     return {
       amountWithdrawn: new Decimal(raw.amountWithdrawn),
       newTotalWithdrawn: new Decimal(raw.newTotalWithdrawn),
@@ -174,22 +190,34 @@ export class CantonStreamsApi {
   }
 
   async renew(sender: string, streamId: string, params: RenewParams): Promise<string> {
-    return this.request('POST', `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/renew`, {
-      additionalAmount: params.additionalAmount.toString(),
-      newEndTime: params.newEndTime.toISOString(),
-      holdingCid: params.holdingCid,
-      senderAccount: params.senderAccount,
-    });
+    return this.request(
+      'POST',
+      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/renew`,
+      {
+        additionalAmount: params.additionalAmount.toString(),
+        newEndTime: params.newEndTime.toISOString(),
+        holdingCid: params.holdingCid,
+        senderAccount: params.senderAccount,
+      },
+    );
   }
 
   /**
    * Finalize custody for an accepted stream request (service-only).
    * Included for admin/debug tooling in the dashboard.
    */
-  async finalizeEscrow(sender: string, streamId: string, recipient: string): Promise<{ escrowContractId: string }> {
-    return this.request('POST', `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/finalize`, {
-      recipient,
-    });
+  async finalizeEscrow(
+    sender: string,
+    streamId: string,
+    recipient: string,
+  ): Promise<{ escrowContractId: string }> {
+    return this.request(
+      'POST',
+      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/finalize`,
+      {
+        recipient,
+      },
+    );
   }
 
   // --- Phase 3: Delegated Policies ---
@@ -327,24 +355,26 @@ function deserializeStream(raw: RawStream): Stream {
     state: deserializeState(raw.state),
     // Include escrowRef for custody-backed streams (built inline to avoid
     // mutating a readonly property on the Stream interface)
-    ...(raw.escrowRef ? {
-      escrowRef: {
-        escrowHoldingCid: raw.escrowRef.escrowHoldingCid,
-        escrowAmount: raw.escrowRef.escrowAmount,
-        escrowOperator: raw.escrowRef.escrowOperator,
-        instrumentRef: raw.escrowRef.instrumentRef ?? {
-          depository: '',
-          issuer: '',
-          instrumentId: '',
-          instrumentVersion: '',
-        },
-        recipientAccount: (raw.escrowRef.recipientAccount ?? {}) as LedgerRecord,
-        fundingReference: (raw.escrowRef as any).fundingReference,
-        lastSettlementReference: (raw.escrowRef as any).lastSettlementReference,
-        senderAccountRef: (raw.escrowRef as any).senderAccountRef,
-        recipientAccountRef: (raw.escrowRef as any).recipientAccountRef,
-      },
-    } : {}),
+    ...(raw.escrowRef
+      ? {
+          escrowRef: {
+            escrowHoldingCid: raw.escrowRef.escrowHoldingCid,
+            escrowAmount: raw.escrowRef.escrowAmount,
+            escrowOperator: raw.escrowRef.escrowOperator,
+            instrumentRef: raw.escrowRef.instrumentRef ?? {
+              depository: '',
+              issuer: '',
+              instrumentId: '',
+              instrumentVersion: '',
+            },
+            recipientAccount: (raw.escrowRef.recipientAccount ?? {}) as LedgerRecord,
+            fundingReference: (raw.escrowRef as any).fundingReference,
+            lastSettlementReference: (raw.escrowRef as any).lastSettlementReference,
+            senderAccountRef: (raw.escrowRef as any).senderAccountRef,
+            recipientAccountRef: (raw.escrowRef as any).recipientAccountRef,
+          },
+        }
+      : {}),
   };
 }
 
@@ -354,7 +384,7 @@ function deserializePendingStreamRequest(raw: RawPendingStreamRequest): PendingS
     config: deserializeConfig(raw.config),
     recipientAccount: deserializeLedgerRecord(raw.recipientAccount),
     observers: raw.observers ?? [],
-    settlementMode: (raw as any).settlementMode ?? SettlementMode.UtilityHoldingCustody,
+    settlementMode: (raw as any).settlementMode ?? SettlementMode.TokenStandardCustody,
     fundingReference: (raw as any).fundingReference,
     fundingHoldingCid: (raw as any).fundingHoldingCid,
     escrowOperator: (raw as any).escrowOperator,
@@ -371,13 +401,15 @@ function deserializeConfig(raw: RawStream['config']): StreamConfig {
     endTime: new Date(raw.endTime),
     vestingMode: deserializeVestingMode(raw.vestingMode),
     assetType: (raw.assetType as AssetType) ?? AssetType.GlobalCip56,
-    settlementMode: (raw.settlementMode as SettlementMode) ?? SettlementMode.UtilityHoldingCustody,
+    settlementMode: (raw.settlementMode as SettlementMode) ?? SettlementMode.TokenStandardCustody,
     cancellable: raw.cancellable,
     instrumentRef: raw.instrumentRef ?? undefined,
   };
 }
 
-function deserializeLedgerRecord(raw: Record<string, unknown> | undefined): LedgerRecord | undefined {
+function deserializeLedgerRecord(
+  raw: Record<string, unknown> | undefined,
+): LedgerRecord | undefined {
   if (!raw) return undefined;
   return raw as LedgerRecord;
 }
@@ -439,7 +471,11 @@ function serializeVestingMode(config: VestingModeConfig): Record<string, unknown
     case VestingMode.CliffLinear:
       return { mode: config.mode, cliffTime: config.cliffTime.toISOString() };
     case VestingMode.Stepped:
-      return { mode: config.mode, stepInterval: config.stepInterval, amountPerStep: config.amountPerStep.toString() };
+      return {
+        mode: config.mode,
+        stepInterval: config.stepInterval,
+        amountPerStep: config.amountPerStep.toString(),
+      };
     case VestingMode.RenewableTerm:
       return { mode: config.mode, termDuration: config.termDuration };
     case VestingMode.Linear:

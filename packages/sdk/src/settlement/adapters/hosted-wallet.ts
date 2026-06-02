@@ -5,7 +5,7 @@
  *
  * **Two layers of deprecation apply**:
  *
- * 1. **Settlement-reference path** replaced by V1/V2 AllocationRequest
+ * 1. **Settlement-reference path** replaced by V2 AllocationRequest
  *    pattern. Use `dispatchSettlement` from
  *    `settlement/allocation-dispatch.ts`.
  *
@@ -90,12 +90,7 @@ export function signPreparedHash(
 
   const seed = naclSecret.subarray(0, 32);
   const pkcs8Header = Buffer.from([
-    0x30, 0x2e,
-    0x02, 0x01, 0x00,
-    0x30, 0x05,
-    0x06, 0x03, 0x2b, 0x65, 0x70,
-    0x04, 0x22,
-    0x04, 0x20,
+    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
   ]);
   const pkcs8Der = Buffer.concat([pkcs8Header, seed]);
   const signingKey = createPrivateKey({
@@ -130,7 +125,10 @@ export function extractSettlementReferenceFromWalletGatewayResult(
   );
 }
 
-export function readHostedWalletCredentialMapFromEnv(): Record<string, HostedWalletPartyCredentials> {
+export function readHostedWalletCredentialMapFromEnv(): Record<
+  string,
+  HostedWalletPartyCredentials
+> {
   const credentials: Record<string, HostedWalletPartyCredentials> = {};
 
   const rawMapping = trimToUndefined(process.env['CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON']);
@@ -161,10 +159,17 @@ export function readHostedWalletCredentialMapFromEnv(): Record<string, HostedWal
     credentials,
     process.env['PROXY_ESCROW_OPERATOR'] ?? process.env['ESCROW_OPERATOR'],
     {
-      appToken: process.env['PROXY_ESCROW_OPERATOR_APP_TOKEN'] ?? process.env['ESCROW_OPERATOR_APP_TOKEN'],
-      publicKey: process.env['PROXY_ESCROW_OPERATOR_PUBLIC_KEY'] ?? process.env['ESCROW_OPERATOR_PUBLIC_KEY'],
-      privateKey: process.env['PROXY_ESCROW_OPERATOR_PRIVATE_KEY'] ?? process.env['ESCROW_OPERATOR_PRIVATE_KEY'],
-      privateKeyFile: process.env['PROXY_ESCROW_OPERATOR_PRIVATE_KEY_FILE'] ?? process.env['ESCROW_OPERATOR_PRIVATE_KEY_FILE'],
+      appToken:
+        process.env['PROXY_ESCROW_OPERATOR_APP_TOKEN'] ?? process.env['ESCROW_OPERATOR_APP_TOKEN'],
+      publicKey:
+        process.env['PROXY_ESCROW_OPERATOR_PUBLIC_KEY'] ??
+        process.env['ESCROW_OPERATOR_PUBLIC_KEY'],
+      privateKey:
+        process.env['PROXY_ESCROW_OPERATOR_PRIVATE_KEY'] ??
+        process.env['ESCROW_OPERATOR_PRIVATE_KEY'],
+      privateKeyFile:
+        process.env['PROXY_ESCROW_OPERATOR_PRIVATE_KEY_FILE'] ??
+        process.env['ESCROW_OPERATOR_PRIVATE_KEY_FILE'],
     },
   );
   injectLegacyCredentials(credentials, process.env['SENDER_PARTY'], {
@@ -204,21 +209,15 @@ function normalizeCredentials(value: unknown): HostedWalletPartyCredentials | un
   }
 
   const record = value as Record<string, unknown>;
-  const appToken = trimToUndefined(
-    asString(record['appToken']) ??
-    asString(record['token']),
-  );
+  const appToken = trimToUndefined(asString(record['appToken']) ?? asString(record['token']));
   const publicKey = trimToUndefined(
-    asString(record['publicKey']) ??
-    asString(record['public_key']),
+    asString(record['publicKey']) ?? asString(record['public_key']),
   );
   const privateKey = trimToUndefined(
-    asString(record['privateKey']) ??
-    asString(record['private_key']),
+    asString(record['privateKey']) ?? asString(record['private_key']),
   );
   const privateKeyFile = trimToUndefined(
-    asString(record['privateKeyFile']) ??
-    asString(record['private_key_file']),
+    asString(record['privateKeyFile']) ?? asString(record['private_key_file']),
   );
 
   if (!appToken && !publicKey && !privateKey && !privateKeyFile) {
@@ -241,10 +240,7 @@ function readTextField(
   return typeof rendered === 'string' ? rendered : undefined;
 }
 
-function readNestedTextField(
-  value: unknown,
-  path: readonly string[],
-): string | undefined {
+function readNestedTextField(value: unknown, path: readonly string[]): string | undefined {
   let cursor: unknown = value;
   for (const step of path) {
     if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) {
@@ -257,7 +253,7 @@ function readNestedTextField(
 
 function maybeRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : null;
 }
 

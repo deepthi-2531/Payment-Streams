@@ -36,12 +36,14 @@ import {
   type ReactNode,
 } from 'react';
 import {
+  DappSDK,
   dappSDK,
   RemoteAdapter,
   type StatusEvent,
   type Wallet,
   type Network,
   type ListAccountsResult,
+  type WalletPickerFn,
 } from '@canton-network/dapp-sdk';
 
 /**
@@ -52,8 +54,8 @@ import {
  * the popup ends up in a browser window outside the automation tab
  * tracker and can't be clicked through. It's also unnecessary noise
  * when only one wallet is available locally. When
- * `VITE_SKIP_WALLET_PICKER=true`, we pass a no-UI `walletPicker` to
- * `dappSDK.init()` that returns the first `remote` entry it finds,
+ * `VITE_SKIP_WALLET_PICKER=true`, we create a dedicated `DappSDK`
+ * with a no-UI `walletPicker` that returns the first `remote` entry it finds,
  * falling back to a synthetic remote entry pointing at
  * `VITE_WALLET_GATEWAY_URL` (default `http://localhost:3030/api/v0/dapp`).
  *
@@ -61,12 +63,18 @@ import {
  * normal picker UX.
  */
 const SKIP_PICKER =
-  (import.meta as unknown as { env?: Record<string, string | undefined> })
-    .env?.['VITE_SKIP_WALLET_PICKER'] === 'true';
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[
+    'VITE_SKIP_WALLET_PICKER'
+  ] === 'true';
 const WALLET_GATEWAY_URL =
-  (import.meta as unknown as { env?: Record<string, string | undefined> })
-    .env?.['VITE_WALLET_GATEWAY_URL'] ??
-  'http://localhost:3030/api/v0/dapp';
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[
+    'VITE_WALLET_GATEWAY_URL'
+  ] ?? 'http://localhost:3030/api/v0/dapp';
+const WALLET_NAME =
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[
+    'VITE_WALLET_NAME'
+  ] ?? 'Splice Amulet Wallet (LocalNet V2)';
+const REMOTE_PROVIDER_ID = `remote:${WALLET_GATEWAY_URL}`;
 
 type PickerEntry = {
   readonly providerId: string;
@@ -75,17 +83,15 @@ type PickerEntry = {
   readonly url?: string;
 };
 
-async function autoRemotePicker(
-  entries: readonly PickerEntry[],
-): Promise<PickerEntry> {
+async function autoRemotePicker(entries: readonly PickerEntry[]): Promise<PickerEntry> {
   const remote = entries.find((e) => e.type === 'remote' && e.url);
   if (remote) return remote;
   // Fall back to constructing a synthetic remote entry pointing at the
   // configured wallet-gateway URL. The SDK will register a fresh
   // RemoteAdapter for it on the connection attempt.
   return {
-    providerId: `remote:${WALLET_GATEWAY_URL}`,
-    name: 'Splice Wallet Kernel',
+    providerId: REMOTE_PROVIDER_ID,
+    name: WALLET_NAME,
     type: 'remote',
     url: WALLET_GATEWAY_URL,
   };
@@ -93,15 +99,51 @@ async function autoRemotePicker(
 
 const SKIP_PICKER_INIT_OPTIONS = SKIP_PICKER
   ? {
+      defaultAdapters: [],
       additionalAdapters: [
         new RemoteAdapter({
-          name: 'Splice Wallet Kernel',
+          providerId: REMOTE_PROVIDER_ID,
+          name: WALLET_NAME,
           rpcUrl: WALLET_GATEWAY_URL,
+          description: 'CIP-103 Amulet wallet gateway for Token Standard V2 LocalNet',
         }),
       ],
-      walletPicker: autoRemotePicker as unknown as never,
     }
   : undefined;
+
+// dappSDK 1.1.0 only honors `walletPicker` in the DappSDK constructor;
+// passing it to `init()` is ignored. Use a dedicated SDK instance for
+// the automation/local-Amulet path so no popup picker is created.
+const walletSdk = SKIP_PICKER
+  ? new DappSDK({ walletPicker: autoRemotePicker as unknown as WalletPickerFn })
+  : dappSDK;
+
+async function assertRemoteWalletReachable(): Promise<void> {
+  try {
+    const response = await fetch(WALLET_GATEWAY_URL, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 'streams-wallet-preflight',
+        method: 'status',
+        params: {},
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+  } catch (err) {
+    const suffix = err instanceof Error ? ` (${err.message})` : '';
+    throw new Error(
+      `Amulet wallet gateway is not reachable at ${WALLET_GATEWAY_URL}${suffix}. ` +
+        'Start the Splice LocalNet validator wallet from token-standard-v2-upcoming, ' +
+        'then retry Connect wallet.',
+    );
+  }
+}
 
 type WalletProvider = StatusEvent['provider'] | null;
 
@@ -178,13 +220,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     initRef.current = true;
 
     const handleStatus = (event: StatusEvent) => setStatus(event);
-    const handleAccounts = (event: readonly Wallet[]) =>
-      setAccounts(event ?? []);
+    const handleAccounts = (event: readonly Wallet[]) => setAccounts(event ?? []);
     const handleConnected = (event: StatusEvent) => {
       setStatus(event);
       setError(null);
       // best-effort refresh of accounts post-connect
-      void dappSDK
+      void walletSdk
         .listAccounts()
         .then((list: ListAccountsResult) => setAccounts(list ?? []))
         .catch(() => {
@@ -196,39 +237,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         await (SKIP_PICKER_INIT_OPTIONS
-          ? dappSDK.init(SKIP_PICKER_INIT_OPTIONS)
-          : dappSDK.init());
+          ? walletSdk.init(SKIP_PICKER_INIT_OPTIONS)
+          : walletSdk.init());
         if (cancelled) return;
-        const current = await dappSDK.status();
+        const current = await walletSdk.status();
         if (cancelled) return;
         setStatus(current);
         if (current.connection.isConnected) {
           try {
-            const list = await dappSDK.listAccounts();
+            const list = await walletSdk.listAccounts();
             if (!cancelled) setAccounts(list ?? []);
           } catch {
             /* ignore */
           }
         }
-        await dappSDK.onStatusChanged(handleStatus);
-        await dappSDK.onAccountsChanged(handleAccounts);
-        await dappSDK.onConnected(handleConnected);
+        await walletSdk.onStatusChanged(handleStatus);
+        await walletSdk.onAccountsChanged(handleAccounts);
+        await walletSdk.onConnected(handleConnected);
       } catch (err) {
         if (!cancelled)
-          setError(
-            err instanceof Error
-              ? err.message
-              : 'Failed to initialize wallet SDK',
-          );
+          setError(err instanceof Error ? err.message : 'Failed to initialize wallet SDK');
       }
     })();
 
     return () => {
       cancelled = true;
       // best-effort detach; listeners are tied to the SDK singleton
-      void dappSDK.removeOnStatusChanged(handleStatus).catch(() => {});
-      void dappSDK.removeOnAccountsChanged(handleAccounts).catch(() => {});
-      void dappSDK.removeOnConnected(handleConnected).catch(() => {});
+      void walletSdk.removeOnStatusChanged(handleStatus).catch(() => {});
+      void walletSdk.removeOnAccountsChanged(handleAccounts).catch(() => {});
+      void walletSdk.removeOnConnected(handleConnected).catch(() => {});
     };
   }, []);
 
@@ -236,15 +273,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setIsConnecting(true);
     setError(null);
     try {
-      const result = await dappSDK.connect();
+      if (SKIP_PICKER) {
+        await assertRemoteWalletReachable();
+      }
+      const result = await (SKIP_PICKER_INIT_OPTIONS
+        ? walletSdk.connect(SKIP_PICKER_INIT_OPTIONS)
+        : walletSdk.connect());
       if (!result.isConnected) {
         setError(result.reason ?? 'Wallet connection rejected');
         return;
       }
-      const current = await dappSDK.status();
+      const current = await walletSdk.status();
       setStatus(current);
       try {
-        const list = await dappSDK.listAccounts();
+        const list = await walletSdk.listAccounts();
         setAccounts(list ?? []);
       } catch {
         /* ignore */
@@ -254,9 +296,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setDevParty(null);
       writeDevSession(null, null);
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : 'Wallet connection failed',
-      );
+      setError(err instanceof Error ? err.message : 'Wallet connection failed');
     } finally {
       setIsConnecting(false);
     }
@@ -264,7 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(async () => {
     try {
-      await dappSDK.disconnect();
+      await walletSdk.disconnect();
     } catch {
       /* swallow — we still clear local state */
     }
@@ -275,22 +315,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeDevSession(null, null);
   }, []);
 
-  const setDevCredentials = useCallback(
-    (token: string, party: string) => {
-      setDevToken(token);
-      setDevParty(party);
-      writeDevSession(token, party);
-    },
-    [],
-  );
+  const setDevCredentials = useCallback((token: string, party: string) => {
+    setDevToken(token);
+    setDevParty(party);
+    writeDevSession(token, party);
+  }, []);
 
   const primaryAccount = useMemo<Wallet | null>(() => {
     if (accounts.length === 0) return null;
     return accounts.find((a) => a.primary) ?? accounts[0] ?? null;
   }, [accounts]);
 
-  const walletToken =
-    status?.network?.accessToken ?? status?.session?.accessToken ?? null;
+  const walletToken = status?.network?.accessToken ?? status?.session?.accessToken ?? null;
   const walletParty = primaryAccount?.partyId ?? null;
   const walletConnected = Boolean(status?.connection.isConnected);
 
