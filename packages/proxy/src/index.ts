@@ -332,10 +332,20 @@ async function getPendingRequestOrThrow(
   );
 
   if (!request) {
+    // The SDK currently builds a StreamAdmin directly (V2 metadata +
+    // wallet-driven AllocationFactory_Allocate), so there is no
+    // intermediate CreateStreamRequest contract for the recipient to
+    // accept. /accept and /reject therefore return 404 by design until
+    // the future V2 StreamAdminRequest template lands. Surface that
+    // architectural context so API users do not have to chase it down
+    // from the route name alone.
     throw new AuthError(
       404,
       'request_not_found',
-      `Pending request not found: sender=${sender}, streamId=${streamId}`,
+      `No pending stream-request contract for sender=${sender}, streamId=${streamId}. ` +
+        'The dashboard creates V2 StreamAdmin directly (no propose/accept ceremony at this layer); ' +
+        'the /accept and /reject routes are reserved for the future V2 StreamAdminRequest template. ' +
+        'Recipient preapproval today happens in the Amulet wallet.',
     );
   }
 

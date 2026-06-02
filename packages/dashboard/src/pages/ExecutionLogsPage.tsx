@@ -11,6 +11,7 @@ import { useQuery } from '@tanstack/react-query';
 import { ScrollText, CheckCircle2, XCircle, Search } from 'lucide-react';
 import { useCantonClient } from '../hooks/useCantonClient.js';
 import type { RawExecutionLog } from '../api/client.js';
+import { formatCantonDateTime } from '../lib/cantonTime.js';
 import {
   Skeleton,
   ErrorState,
@@ -165,7 +166,7 @@ function LogRow({ log }: { readonly log: RawExecutionLog }) {
         className="mono"
         style={{ fontSize: 11.5, color: 'var(--fg-3)' }}
       >
-        {new Date(log.executionTime).toLocaleString()}
+        {formatCantonDateTime(log.executionTime)}
       </td>
       <td
         style={{

@@ -17,10 +17,11 @@
  */
 
 import type { CSSProperties } from 'react';
-import { CheckCircle2, AlertCircle, Wallet, RotateCcw } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Wallet, RotateCcw, Plug } from 'lucide-react';
 import type { Stream } from '@canton-streams/sdk/browser';
 import { useStreamWalletApproval } from '../../hooks/useStreamWalletApproval.js';
 import { clearStreamApproval } from '../../lib/walletApprovals.js';
+import { useAuth } from '../../store/auth.js';
 
 export interface WalletApprovalControlProps {
   readonly stream: Stream;
@@ -28,6 +29,25 @@ export interface WalletApprovalControlProps {
 
 export function WalletApprovalControl({ stream }: WalletApprovalControlProps) {
   const { record, isPending, approve, markPreapproved } = useStreamWalletApproval(stream);
+  // We need a connected CIP-103 wallet for `walletSdk.open()` to land
+  // — the dapp-sdk throws "Not connected — call connect() first"
+  // otherwise. Surface that as an inline, actionable hint instead of
+  // letting the raw error bubble out of the click handler. A
+  // dev-mode session (JWT-paste path) has no wallet to round-trip
+  // through, so the button stays disabled there too.
+  const { isAuthenticated, devMode } = useAuth();
+  const cannotApprove = !isAuthenticated || devMode;
+
+  if (cannotApprove && record.status === 'idle') {
+    return (
+      <div style={containerStyle}>
+        <StatusPill status="no-wallet" />
+        <span style={hintTextStyle}>
+          Connect a CIP-103 wallet (top-right) to preapprove this stream.
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div style={containerStyle}>
@@ -38,7 +58,7 @@ export function WalletApprovalControl({ stream }: WalletApprovalControlProps) {
           type="button"
           className="btn btn-primary btn-sm"
           onClick={() => void approve()}
-          disabled={isPending}
+          disabled={isPending || cannotApprove}
         >
           <Wallet size={12} />
           {isPending ? 'Opening wallet…' : 'Approve in Amulet wallet'}
@@ -123,12 +143,25 @@ function StatusPill({ status }: { readonly status: StatusValue }) {
   );
 }
 
-type StatusValue = 'idle' | 'wallet-opened' | 'preapproved' | 'error';
+type StatusValue =
+  | 'idle'
+  | 'wallet-opened'
+  | 'preapproved'
+  | 'error'
+  | 'no-wallet';
 
 const STATUS: Record<
   StatusValue,
   { label: string; help: string; icon: typeof Wallet; bg: string; fg: string }
 > = {
+  'no-wallet': {
+    label: 'Wallet not connected',
+    help:
+      'No CIP-103 wallet is connected to this session. Connect a wallet (top-right) before you can preapprove streams. The dev-mode JWT path does not have a wallet to round-trip through.',
+    icon: Plug,
+    bg: 'var(--bg-elev)',
+    fg: 'var(--fg-3)',
+  },
   idle: {
     label: 'No wallet approval yet',
     help:
@@ -172,4 +205,9 @@ const containerStyle: CSSProperties = {
 const errorTextStyle: CSSProperties = {
   fontSize: 11,
   color: 'var(--danger)',
+};
+
+const hintTextStyle: CSSProperties = {
+  fontSize: 11.5,
+  color: 'var(--fg-3)',
 };

@@ -79,3 +79,16 @@ export function formatCantonDateTime(
   const d = parseCantonTime(value);
   return d ? d.toLocaleString() : fallback;
 }
+
+/**
+ * Render only the time portion of a Canton timestamp (HH:MM:SS in the
+ * current locale), with a graceful fallback. Used by ExecutorStatusPage
+ * where the date is already implicit in the surrounding context.
+ */
+export function formatCantonTimeOnly(
+  value: string | number | Date | null | undefined,
+  fallback = '—',
+): string {
+  const d = parseCantonTime(value);
+  return d ? d.toLocaleTimeString() : fallback;
+}

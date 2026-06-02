@@ -817,9 +817,11 @@ function StepReview({
             <Check size={18} />
           </div>
           <div>
-            <div style={{ fontWeight: 500 }}>Stream proposed</div>
+            <div style={{ fontWeight: 500 }}>Ready to create</div>
             <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-              The recipient will see this in their inbox and accept to activate.
+              The stream goes live as soon as you submit; the recipient sees it
+              in their Incoming view. V2 funding approval happens in the
+              Amulet wallet.
             </div>
           </div>
         </div>
@@ -919,10 +921,15 @@ function StepReview({
             lineHeight: 1.6,
           }}
         >
-          <li>You sign the propose-stream command in your wallet.</li>
-          <li>The proposal appears in the recipient's inbox; they accept to activate.</li>
+          <li>You submit; the stream is created on-ledger and starts accruing.</li>
           <li>
-            Once active, accruals tick continuously and the recipient can withdraw what's vested.
+            The recipient sees it in their Incoming view. V2 funding approval
+            (the Amulet TransferPreapproval) happens separately in the
+            recipient's wallet.
+          </li>
+          <li>
+            Accruals tick continuously and the recipient can withdraw what's
+            vested once the wallet approval is in place.
           </li>
         </ol>
       </div>

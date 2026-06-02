@@ -17,6 +17,7 @@ import {
   SectionHeader,
 } from '../components/common/index.js';
 import { PulseStat } from '../components/primitives/PulseStat.js';
+import { formatCantonTimeOnly } from '../lib/cantonTime.js';
 
 export function ExecutorStatusPage() {
   const client = useCantonClient();
@@ -204,7 +205,7 @@ function RecentLogCard({ log }: { readonly log: RawExecutionLog }) {
         className="mono"
         style={{ fontSize: 11, color: 'var(--fg-4)', flexShrink: 0 }}
       >
-        {new Date(log.executionTime).toLocaleTimeString()}
+        {formatCantonTimeOnly(log.executionTime)}
       </span>
     </div>
   );
