@@ -41,10 +41,16 @@ interface SubmitResult {
   readonly streamId?: string;
 }
 
-const SAMPLE_CSV = `recipient,amount,asset,instrumentAdmin,fundingReference,senderAccount,recipientAccount,escrowOperator,start,end,vesting,cancellable
-bob::1220abcd,8000,CC,amulet::1220admin,allocation-bob-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""bob::1220abcd"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-12-31T00:00,Linear,true
-carol::1220beef,120000,CC,amulet::1220admin,allocation-carol-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""carol::1220beef"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2030-01-01T00:00,CliffLinear,false
-erin::1220cafe,12,CC,amulet::1220admin,allocation-erin-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""erin::1220cafe"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-04-01T00:00,Stepped,true
+// Per-variant columns at the right edge — cliffTime / stepInterval /
+// amountPerStep / termDuration. Leave them empty on Linear rows; supply
+// them as required by the vesting mode on the other rows. The zod
+// schema enforces this so you get a useful per-cell error in the
+// preview rather than a silent default like "1 day in microseconds".
+const SAMPLE_CSV = `recipient,amount,asset,instrumentAdmin,fundingReference,senderAccount,recipientAccount,escrowOperator,start,end,vesting,cancellable,cliffTime,stepInterval,amountPerStep,termDuration
+bob::1220abcd,8000,CC,amulet::1220admin,allocation-bob-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""bob::1220abcd"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-12-31T00:00,Linear,true,,,,
+carol::1220beef,120000,CC,amulet::1220admin,allocation-carol-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""carol::1220beef"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2030-01-01T00:00,CliffLinear,false,2027-01-01T00:00,,,
+erin::1220cafe,12,CC,amulet::1220admin,allocation-erin-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""erin::1220cafe"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-04-01T00:00,Stepped,true,,86400000000,1,
+frank::1220feed,300,CC,amulet::1220admin,allocation-frank-001,"{""owner"":""alice::1220sender"",""id"":""default""}","{""owner"":""frank::1220feed"",""id"":""default""}",operator::1220escrow,2026-01-01T00:00,2026-12-31T00:00,RenewableTerm,true,,,,2592000000000
 `;
 
 const MAX_ROWS = 500;
@@ -811,26 +817,32 @@ function validateRow(raw: Record<string, string>, index: number): ParsedRow {
 }
 
 function buildCreateParams(party: string, row: BatchRow): CreateStreamParams {
+  // The CSV schema (lib/schemas/batchRow.ts) now requires per-variant
+  // columns for CliffLinear / Stepped / RenewableTerm. Reading them
+  // straight off `row` keeps the buildParams call honest — earlier
+  // revisions hard-coded 1-day step intervals and 30-day terms, which
+  // silently shipped wrong vesting curves whenever the CSV asked for
+  // non-Linear modes.
   const vestingConfig =
     row.vesting === VestingMode.Linear
       ? { mode: VestingMode.Linear as const }
       : row.vesting === VestingMode.CliffLinear
         ? {
             mode: VestingMode.CliffLinear as const,
-            cliffTime: new Date(
-              new Date(row.start).getTime() +
-                (new Date(row.end).getTime() - new Date(row.start).getTime()) * 0.25,
-            ),
+            // Schema guarantees cliffTime is present for this branch.
+            cliffTime: new Date(row.cliffTime!),
           }
         : row.vesting === VestingMode.Stepped
           ? {
               mode: VestingMode.Stepped as const,
-              stepInterval: 86_400_000_000, // 1 day in μs as a default
-              amountPerStep: new Decimal(row.amount).div(30),
+              // Schema guarantees both fields for this branch.
+              stepInterval: row.stepInterval!,
+              amountPerStep: new Decimal(row.amountPerStep!),
             }
           : {
               mode: VestingMode.RenewableTerm as const,
-              termDuration: 30 * 86_400_000_000, // 30 days
+              // Schema guarantees termDuration for this branch.
+              termDuration: row.termDuration!,
             };
 
   return {
