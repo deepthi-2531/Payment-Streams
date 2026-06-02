@@ -44,37 +44,71 @@ The harness pins the Splice repository to the same commit as
 Override with `SPLICE_PINNED_COMMIT=<sha>` if you are testing an upstream
 patch before bumping the pin.
 
-## Step 1 — Bring up the Splice LocalNet Amulet wallet
+## Step 1 — Bring up the Splice LocalNet and an Amulet wallet gateway
 
-The orchestration script clones Splice at the pinned commit and prints the
-exact upstream commands to start Canton, the validator, and the wallet
-gateway. The script does **not** run those commands automatically because
-they depend on tools not all hosts have (sbt, Postgres) and they take a
-long time:
+The orchestration script clones the upstream Splice repo at the pinned
+commit and prints the canonical docker-compose command to start the
+LocalNet stack. The script does **not** run the start command automatically
+because the cold boot is slow and the operator may want to inspect the
+clone first:
 
 ```bash
 bash scripts/start-localnet-e2e.sh
 ```
 
-Then, in the printed `.splice-localnet/` checkout, run the upstream
-commands (these are the ones the Splice repository documents; copy them
-verbatim from the script output to avoid drift):
+Then, in the printed `.splice-localnet/` checkout, start the upstream
+LocalNet via its canonical wrapper (verified at the pinned commit in
+[`build-tools/splice-localnet-compose.sh`](https://raw.githubusercontent.com/canton-network/splice/2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea/build-tools/splice-localnet-compose.sh),
+which invokes `docker compose` on `cluster/compose/localnet/compose.yaml`
+with the `sv`, `app-provider`, and `app-user` profiles):
 
 ```bash
 cd .splice-localnet
-./build-tools/local-canton/start-canton.sh
-./build-tools/local-validator/start-validator.sh
-./build-tools/local-wallet/start-wallet-gateway.sh
+docker --version && docker compose version          # sanity-check Docker is present
+./build-tools/splice-localnet-compose.sh start      # boot Canton + SV + app-user/app-provider validators + wallet UIs
 ```
 
-When the wallet gateway is up, you should see a successful CIP-103 status
-response:
+This brings up Canton, a super-validator, an `app-user` validator, an
+`app-provider` validator, three React wallet UIs (on ports `2000`,
+`3000`, `4000` — see `APP_USER_UI_PORT` / `APP_PROVIDER_UI_PORT` /
+`SV_UI_PORT` in `cluster/compose/localnet/env/common.env`), and exposes
+the participant JSON-Ledger-API on the `x975` ports
+(`PARTICIPANT_JSON_API_PORT_SUFFIX=975`, so app-user is on
+`http://localhost:2975` and app-provider on `http://localhost:3975`).
+
+> **Honest gap on `:3030`.** The upstream LocalNet stack at the pinned
+> commit `2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea` does **not** publish a
+> CIP-103 JSON-RPC wallet gateway at `http://localhost:3030/api/v0/dapp`.
+> That endpoint is provided by the **Splice Wallet Kit** (SWK), a
+> separate component published as `@canton-network/splice-wallet-kit` (or
+> built from [`canton-network/splice-wallet-kit`](https://github.com/canton-network/splice-wallet-kit)).
+> The three legacy paths older revisions of this doc referenced
+> (`build-tools/local-canton/start-canton.sh`,
+> `build-tools/local-validator/start-validator.sh`,
+> `build-tools/local-wallet/start-wallet-gateway.sh`) do not exist in
+> `canton-network/splice` at any commit — `build-tools/` only contains
+> `splice-localnet-compose.sh` and `splice-compose.sh`.
+
+To get a working `:3030` CIP-103 endpoint, after LocalNet is up:
+
+1. Clone the Splice Wallet Kit and `npm run start` it, pointing its
+   `CANTON_NODE_URL` at the LocalNet `app-user` validator
+   (`http://localhost:2975`) or `app-provider` (`http://localhost:3975`).
+2. Add the dashboard's origin (default `http://localhost:3000` — note
+   this collides with the upstream `app-provider` wallet UI port; either
+   change `STREAMS_DASHBOARD_PORT` for the Streams stack in Step 2 or
+   leave the upstream UI down) to the SWK `allowedOrigins`.
+3. Confirm the gateway is up with a CIP-103 status probe:
 
 ```bash
 curl -fsS -X POST http://localhost:3030/api/v0/dapp \
   -H 'content-type: application/json' \
   --data '{"jsonrpc":"2.0","id":"probe","method":"status","params":{}}'
 ```
+
+If your environment provides an Amulet wallet gateway at a different
+URL, export `VITE_WALLET_GATEWAY_URL=<your-url>` before Step 2 and the
+dashboard image will pick it up (see the env note in Step 2).
 
 ## Step 2 — Bring up the Streams stack on top of the running wallet
 
@@ -93,6 +127,12 @@ VITE_WALLET_GATEWAY_URL=http://localhost:3030/api/v0/dapp
 VITE_SKIP_WALLET_PICKER=true
 VITE_WALLET_NAME=Splice Amulet Wallet (LocalNet V2)
 ```
+
+`docker/docker-compose.yml` substitutes `VITE_WALLET_GATEWAY_URL` via
+`${VITE_WALLET_GATEWAY_URL:-http://localhost:3030/api/v0/dapp}`, so if
+you exported a non-default value before running the script (or before
+invoking `docker compose` directly), that URL flows through to the
+dashboard build and the fail-closed preflight in Step 4 will probe it.
 
 `VITE_SKIP_WALLET_PICKER=true` makes the dashboard's CIP-103 client skip
 the picker UI. The first thing `connect()` does in that mode is preflight

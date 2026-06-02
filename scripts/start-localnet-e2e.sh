@@ -32,7 +32,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPLICE_CHECKOUT_DIR="${SPLICE_CHECKOUT_DIR:-$ROOT_DIR/.splice-localnet}"
-SPLICE_REPO_URL="${SPLICE_REPO_URL:-https://github.com/hyperledger-labs/splice}"
+SPLICE_REPO_URL="${SPLICE_REPO_URL:-https://github.com/canton-network/splice}"
 SPLICE_PINNED_COMMIT="${SPLICE_PINNED_COMMIT:-}"
 WALLET_GATEWAY_URL="${WALLET_GATEWAY_URL:-http://localhost:3030/api/v0/dapp}"
 WALLET_PROBE_TIMEOUT="${WALLET_PROBE_TIMEOUT:-90}"
@@ -93,26 +93,71 @@ build_localnet_amulet_wallet() {
     echo "    [skip] SKIP_LOCALNET_BUILD=1; expecting an externally-managed wallet at $WALLET_GATEWAY_URL"
     return 0
   fi
+
+  # At the pinned commit (canton-network/splice @ $SPLICE_PINNED_COMMIT) the
+  # canonical LocalNet path is the docker-compose stack driven by
+  # build-tools/splice-localnet-compose.sh. It brings up Canton + a
+  # super-validator + an app-user validator + an app-provider validator +
+  # three React wallet UIs (on 2000/3000/4000), plus participant JSON-Ledger
+  # APIs on x975 ports.
+  #
+  # Critically, that stack does NOT expose a CIP-103 JSON-RPC wallet
+  # gateway at :3030/api/v0/dapp. That endpoint is provided by the separate
+  # Splice Wallet Kit (SWK), which the operator must run alongside LocalNet
+  # (clone canton-network/splice-wallet-kit, `npm run start`, point
+  # CANTON_NODE_URL at the app-user validator JSON API on :2975 or the
+  # app-provider on :3975, and add this dashboard's origin to allowedOrigins).
+  #
+  # There is therefore no honest one-command path from a stock CI runner to
+  # a working $WALLET_GATEWAY_URL at the pinned commit. We print the verified
+  # upstream startup steps for transparency, then refuse to fake readiness.
+
+  local compose_wrapper="$SPLICE_CHECKOUT_DIR/build-tools/splice-localnet-compose.sh"
+
   cat <<EOF
 
-    The Splice LocalNet validator + Amulet wallet build is owned by the
-    upstream Splice repository. Run the upstream commands from inside
-    $SPLICE_CHECKOUT_DIR:
+    Splice LocalNet stack (verified upstream commands at $SPLICE_PINNED_COMMIT):
 
       cd "$SPLICE_CHECKOUT_DIR"
-      ./build-tools/local-canton/start-canton.sh        # gRPC participant
-      ./build-tools/local-validator/start-validator.sh  # validator + Amulet wallet
-      ./build-tools/local-wallet/start-wallet-gateway.sh # CIP-103 gateway at :3030
+      ./build-tools/splice-localnet-compose.sh start
 
-    These commands are intentionally NOT executed automatically here:
-    they require Daml SDK + Java + sbt + Postgres in the host environment
-    and take 10-30 minutes on a cold cache. The .github/workflows/e2e.yml
-    job runs them on workflow_dispatch when an operator opts in.
+    This brings up the canton-network/splice docker-compose LocalNet:
+      - app-user wallet UI    : http://localhost:2000
+      - app-provider wallet UI: http://localhost:3000
+      - SV wallet UI          : http://localhost:4000
+      - participant JSON APIs : :2975 / :3975 / :4975
 
-    Once the wallet is up at $WALLET_GATEWAY_URL, re-run this script with
-    SKIP_LOCALNET_BUILD=1 to bring up the Streams stack on top.
+    HONEST GAP: the pinned commit does NOT publish a CIP-103 JSON-RPC
+    wallet gateway at $WALLET_GATEWAY_URL as part of LocalNet. That
+    endpoint comes from the separate Splice Wallet Kit (SWK), which must
+    be run alongside LocalNet by the operator. There is no canonical
+    one-command path at $SPLICE_PINNED_COMMIT that yields :3030.
+
+    To proceed, bring up the wallet by whatever path your environment
+    uses (LocalNet + SWK, an externally-managed CIP-103 gateway, or a
+    mock), then re-run this script with:
+
+      SKIP_LOCALNET_BUILD=1 bash scripts/start-localnet-e2e.sh
 
 EOF
+
+  if [[ "$LOCALNET_DRY_RUN" == "1" ]]; then
+    echo "    [dry-run] would invoke: $compose_wrapper start"
+    echo "    [dry-run] skipping execution; wallet gateway at :3030 will NOT be reachable"
+    return 0
+  fi
+
+  # Attempt the verified upstream LocalNet bring-up when the wrapper is
+  # present on disk and docker is available. Even on success this does
+  # not produce :3030 — probe_wallet_gateway will surface that honestly.
+  if [[ -x "$compose_wrapper" ]] && command -v docker >/dev/null 2>&1; then
+    run_step "Starting Splice LocalNet (docker compose) via $compose_wrapper" \
+      bash -c "cd \"$SPLICE_CHECKOUT_DIR\" && ./build-tools/splice-localnet-compose.sh start"
+  else
+    echo "    [warn] $compose_wrapper not executable or docker missing; LocalNet not started here"
+  fi
+
+  fail "no canonical one-command LocalNet path at $SPLICE_PINNED_COMMIT exposes $WALLET_GATEWAY_URL. Bring up the wallet (e.g. Splice Wallet Kit alongside LocalNet) and re-run with SKIP_LOCALNET_BUILD=1."
 }
 
 probe_wallet_gateway() {
