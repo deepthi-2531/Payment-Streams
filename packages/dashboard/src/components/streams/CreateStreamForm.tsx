@@ -150,7 +150,8 @@ export function CreateStreamForm() {
           className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 flex items-center gap-2 text-sm text-emerald-800"
         >
           <CheckCircle2 size={15} className="text-emerald-600" />
-          Stream proposal submitted — awaiting recipient acceptance.
+          Stream created. The recipient will see it in their Incoming view; V2
+          funding approval happens in the wallet.
         </div>
       )}
 
