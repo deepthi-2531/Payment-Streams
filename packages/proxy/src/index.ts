@@ -166,6 +166,36 @@ async function createAuthorizedClient(
 }
 
 /**
+ * Same as {@link createAuthorizedClient}, but also returns the resolved
+ * caller party so routes that need to enforce party-scoped invariants
+ * (e.g. "only the policy sender can revoke") do not have to re-read
+ * the X-Canton-Party header, which the dapp-sdk dashboard no longer
+ * sends after the STR-123 auth cutover.
+ *
+ * The caller party comes from the JWT `party`/`sub` claim (auth mode)
+ * or from the dev-mode JWT extraction in `authorizeRequest`. This is
+ * the same identity the client is then authorized to actAs.
+ */
+async function createAuthorizedClientWithParty(
+  req: express.Request,
+  action: Action,
+  additionalParties: string[] = [],
+): Promise<{ client: CantonStreamsClient; party: string }> {
+  const auth: AuthResult = await authorizeRequest(req, action, authConfig);
+
+  const config: ClientConfig = {
+    host: CANTON_HOST,
+    port: CANTON_PORT,
+    useTls: CANTON_USE_TLS,
+    synchronizerId: CANTON_SYNCHRONIZER_ID,
+    token: auth.token,
+    actAs: [...new Set([...auth.actAs, ...additionalParties.filter(Boolean)])],
+  };
+
+  return { client: new CantonStreamsClient(config), party: auth.actAs[0] ?? '' };
+}
+
+/**
  * Create a service-authorized client for custody finalization.
  *
  * Builds actAs from the service identity plus any additional parties a route
@@ -1055,7 +1085,13 @@ app.get('/api/policies', async (req, res) => {
 app.post('/api/policies/:contractId/revoke', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'cancel');
+    // Read both the client AND the resolved caller party from auth so
+    // we do not depend on the X-Canton-Party header — the dapp-sdk
+    // dashboard no longer sends it after the STR-123 auth cutover,
+    // which would otherwise make this route always 401 from the UI.
+    const authorized = await createAuthorizedClientWithParty(req, 'cancel');
+    client = authorized.client;
+    const callerParty = authorized.party;
     const contractId = req.params['contractId']!;
 
     // [H6 fix] Previously the route called createAuthorizedClient with
@@ -1069,9 +1105,11 @@ app.post('/api/policies/:contractId/revoke', async (req, res) => {
       res.status(404).json({ error: 'policy not found or not visible to caller' });
       return;
     }
-    const callerParty = (req.headers['x-canton-party'] as string | undefined)?.trim();
     if (!callerParty) {
-      res.status(401).json({ error: 'X-Canton-Party header required' });
+      res.status(400).json({
+        error: 'unresolved_caller_party',
+        reason: 'auth layer returned an empty party — check JWT party/sub claim',
+      });
       return;
     }
     if (policy.sender !== callerParty) {

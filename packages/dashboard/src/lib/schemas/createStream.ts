@@ -43,6 +43,20 @@ const datetimeLocalSchema = z
  * Vesting-mode-specific extra fields. Keyed by mode; the discriminated
  * union ensures each variant has exactly the fields the SDK shape needs.
  */
+/**
+ * `react-hook-form` passes values from `<input type="number">` as
+ * STRINGS unless the consumer opts into `valueAsNumber`. The wizard
+ * keeps the default registration so empty inputs stay `''` rather than
+ * `NaN`, which means the zod schema must coerce. `z.coerce.number()`
+ * accepts both the numeric and string forms, then runs `.int()` /
+ * `.positive()` against the coerced value. Without this, the Stepped
+ * and RenewableTerm branches always rejected as "Invalid input".
+ */
+const positiveIntFromInputSchema = z.coerce
+  .number()
+  .int('Must be a whole number')
+  .positive('Must be greater than zero');
+
 const vestingConfigSchema = z.discriminatedUnion('vestingMode', [
   z.object({
     vestingMode: z.literal(VestingMode.Linear),
@@ -53,12 +67,12 @@ const vestingConfigSchema = z.discriminatedUnion('vestingMode', [
   }),
   z.object({
     vestingMode: z.literal(VestingMode.Stepped),
-    stepInterval: z.number().int().positive('stepInterval must be > 0'),
+    stepInterval: positiveIntFromInputSchema,
     amountPerStep: decimalStringSchema,
   }),
   z.object({
     vestingMode: z.literal(VestingMode.RenewableTerm),
-    termDuration: z.number().int().positive('termDuration must be > 0'),
+    termDuration: positiveIntFromInputSchema,
   }),
 ]);
 
