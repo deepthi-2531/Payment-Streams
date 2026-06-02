@@ -27,7 +27,9 @@ Brings up:
 Wallet-backed E2E requires a separate Splice validator LocalNet with
 Token Standard V2 support. The Amulet wallet gateway from that LocalNet
 should expose the CIP-103 dapp API at
-`http://localhost:3030/api/v0/dapp`.
+`http://localhost:3030/api/v0/dapp`. The full step-by-step harness is
+[docs/E2E-HARNESS.md](E2E-HARNESS.md), orchestrated by
+`scripts/start-localnet-e2e.sh`.
 
 Watch readiness:
 
