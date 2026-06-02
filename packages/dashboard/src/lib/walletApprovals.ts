@@ -135,11 +135,18 @@ export async function requestStreamWalletApproval(
     writeStreamApproval(stream, record);
     return record;
   } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // The dapp-sdk throws "Not connected — call connect() first" when
+    // `walletSdk.open()` is fired before a wallet session exists.
+    // Translate that into actionable copy for the inbox card rather
+    // than passing the bare SDK string straight to the user.
+    const actionable = /not connected/i.test(raw)
+      ? 'No CIP-103 wallet is connected to this session. Connect a wallet (top-right) and try again.'
+      : raw;
     const record: StreamApprovalRecord = {
       status: 'error',
       updatedAt: Date.now(),
-      errorMessage:
-        err instanceof Error ? err.message : 'Wallet approval failed',
+      errorMessage: actionable,
     };
     writeStreamApproval(stream, record);
     return record;
