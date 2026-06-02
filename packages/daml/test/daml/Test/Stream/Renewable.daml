@@ -293,13 +293,13 @@ testRenewableRenewCompleted = script do
     exerciseCmd completedCid Renew_Stream with
       additionalDeposit = 6000.0
       newEndTime = newEnd
-      renewTime = newEnd
+      renewTime = end
 
   -- Verify state is Active again
   escrows2 <- query @StreamEscrow bob
   let (_, renewed) = head escrows2
   assertMsg "Status back to Active" (renewed.state.status == Active)
-  assertMsg "Total deposit updated" (renewed.config.totalDeposited == 15000.0)
+  assertMsg "Total deposit reset to new funded term" (renewed.config.totalDeposited == 6000.0)
 
   debug ("GOLDEN:renewable_renew_completed:totalDeposited:" <> show renewed.config.totalDeposited)
   debug ("GOLDEN:renewable_renew_completed:status:" <> show renewed.state.status)

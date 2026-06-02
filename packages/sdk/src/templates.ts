@@ -348,6 +348,7 @@ export const CHOICE_REVOKE_POLICY = 'RevokePolicy';
  * Each entry includes the template ID and its settlement mode for tagging.
  */
 export const ESCROW_TEMPLATES = [
+  { templateId: TEMPLATE_STREAM_ADMIN, settlementMode: SettlementMode.TokenStandardCustody },
   { templateId: TEMPLATE_STREAM_ESCROW, settlementMode: SettlementMode.NumericLegacy },
   { templateId: TEMPLATE_UTILITY_ESCROW, settlementMode: SettlementMode.UtilityHoldingCustody },
   {

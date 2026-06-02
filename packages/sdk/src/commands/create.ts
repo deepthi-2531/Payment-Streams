@@ -18,6 +18,7 @@ import {
   buildStreamAdminCreate,
   type VestingMode as StreamAdminVestingMode,
 } from './stream-admin.js';
+import { TEMPLATE_STREAM_ADMIN } from '../templates.js';
 import type { Logger } from 'pino';
 
 /**
@@ -66,6 +67,8 @@ export async function createStream(
   if (!validated.recipientAccount)
     throw new Error('recipientAccount required for TokenStandardCustody');
 
+  await assertNoDuplicateStreamAdmin(transport, validated.sender, streamId, actAs, logger);
+
   const adminCreate = buildStreamAdminCreate({
     streamId,
     sender: validated.sender,
@@ -111,6 +114,8 @@ export async function createBatch(
   if (!params.streams || params.streams.length === 0) {
     throw new Error('Batch must contain at least one stream');
   }
+
+  assertNoDuplicateBatchStreamIds(params.streams);
 
   logger.info({ count: params.streams.length }, 'Creating batch of stream requests');
 
@@ -158,5 +163,42 @@ function toStreamAdminVestingMode(config: VestingModeConfig): StreamAdminVesting
 function assertActAsIncludesSender(actAs: string[], sender: string): void {
   if (!actAs.includes(sender)) {
     throw new Error(`actAs must include sender party "${sender}"`);
+  }
+}
+
+async function assertNoDuplicateStreamAdmin(
+  transport: Transport,
+  sender: string,
+  streamId: string,
+  actAs: string[],
+  logger: Logger,
+): Promise<void> {
+  try {
+    const existing = await transport.query<any>(TEMPLATE_STREAM_ADMIN, undefined, actAs);
+    const duplicate = existing.find((row) => row?.sender === sender && row?.streamId === streamId);
+    if (duplicate) {
+      throw new Error(`Stream already exists for sender="${sender}" and streamId="${streamId}"`);
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Stream already exists')) {
+      throw err;
+    }
+    logger.warn?.(
+      { sender, streamId, err },
+      'Could not preflight duplicate StreamAdmin; proceeding with create',
+    );
+  }
+}
+
+function assertNoDuplicateBatchStreamIds(streams: ReadonlyArray<CreateStreamParams>): void {
+  const seen = new Set<string>();
+  for (const stream of streams) {
+    const streamId = stream.streamId;
+    if (!streamId) continue;
+    const key = `${stream.sender}\u0000${streamId}`;
+    if (seen.has(key)) {
+      throw new Error(`Batch contains duplicate streamId="${streamId}" for sender="${stream.sender}"`);
+    }
+    seen.add(key);
   }
 }

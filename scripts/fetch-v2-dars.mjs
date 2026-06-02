@@ -161,9 +161,51 @@ const V1_BUILD_ONLY_DARS = [
  */
 const POST_V2_BUILD_ONLY_DARS = [
   {
-    name: 'splice-util-token-standard-wallet',
+    name: 'splice-util',
+    version: '0.1.6',
+    filename: 'splice-util-0.1.6.dar',
+    location: 'daml/splice-util',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-api-reward-assignment-v1',
     version: '1.0.0',
-    filename: 'splice-util-token-standard-wallet-1.0.0.dar',
+    filename: 'splice-api-reward-assignment-v1-1.0.0.dar',
+    location: 'daml/splice-api-reward-assignment-v1',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-amulet',
+    version: '0.1.20',
+    filename: 'splice-amulet-0.1.20.dar',
+    location: 'daml/splice-amulet',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-test-token-v1',
+    version: '1.0.0',
+    filename: 'splice-test-token-v1-1.0.0.dar',
+    location: 'token-standard/examples/splice-test-token-v1',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-token-test-trading-app',
+    version: '1.0.2',
+    filename: 'splice-token-test-trading-app-1.0.2.dar',
+    location: 'token-standard/examples/splice-token-test-trading-app',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-token-standard-v1-test',
+    version: '1.0.14',
+    filename: 'splice-token-standard-v1-test-1.0.14.dar',
+    location: 'token-standard/splice-token-standard-v1-test',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-util-token-standard-wallet',
+    version: '1.1.0',
+    filename: 'splice-util-token-standard-wallet-1.1.0.dar',
     location: 'daml/splice-util-token-standard-wallet',
     role: 'build-only',
   },
@@ -278,6 +320,7 @@ const DAR_SOURCES = [
   ...POST_V2_BUILD_ONLY_DARS,
   ...V2_TEST_INFRASTRUCTURE_DARS,
 ].filter(Boolean);
+const EXPECTED_WRITTEN_DAR_COUNT = DAR_SOURCES.filter((dar) => dar.role !== 'build-only').length;
 
 function parseArgs(argv) {
   const args = {
@@ -514,6 +557,14 @@ async function buildAndCollect(spliceRoot, args) {
       writeFileSync(currentAlias, bytes);
     }
 
+    // Some Splice utility packages resolve token-standard dependencies from
+    // `daml/dars/<name>-<version>.dar` instead of sibling `.daml/dist`
+    // aliases. Mirror every built DAR into that cache so source-build and
+    // local modes are both self-contained.
+    const darsCache = resolve(spliceRoot, 'daml/dars');
+    mkdirSync(darsCache, { recursive: true });
+    writeFileSync(resolve(darsCache, dar.filename), bytes);
+
     // Key results by the manifest filename (our normalized name), but
     // record both names in the hashes file for traceability.
     results[dar.filename] = { bytes, actualName };
@@ -605,9 +656,9 @@ async function main() {
 
   const fetchedCount = writeDars(results, args);
   log('');
-  log(`Summary: ${fetchedCount} of ${DAR_SOURCES.length} DARs fetched.`);
+  log(`Summary: ${fetchedCount} of ${EXPECTED_WRITTEN_DAR_COUNT} publishable DARs fetched.`);
 
-  if (fetchedCount === DAR_SOURCES.length) {
+  if (fetchedCount === EXPECTED_WRITTEN_DAR_COUNT) {
     log('');
     log('Next steps (V2-only per STR-79):');
     log('');
