@@ -499,7 +499,7 @@ function decodeHistoryValue(val: any): any {
   if ('party' in val) return val.party;
   if ('contract_id' in val) return val.contract_id;
   if ('unit' in val) return undefined;
-  if ('enum' in val) return val.enum.enum_constructor;
+  if ('enum' in val) return val.enum.enum_constructor ?? val.enum.constructor;
   if ('record' in val) {
     const result: Record<string, unknown> = {};
     for (const field of val.record.fields ?? []) {
@@ -517,7 +517,7 @@ function decodeHistoryValue(val: any): any {
   }
   if ('variant' in val) {
     return {
-      tag: val.variant.variant_constructor,
+      tag: val.variant.variant_constructor ?? val.variant.constructor,
       value: decodeHistoryValue(val.variant.value),
     };
   }
@@ -716,7 +716,7 @@ function isStreamAdminPayload(raw: any): boolean {
     raw?.recipient !== undefined &&
     raw?.operator !== undefined &&
     raw?.instrumentRef !== undefined &&
-    raw?.currentAllocationCid !== undefined;
+    Object.prototype.hasOwnProperty.call(raw, 'currentAllocationCid');
 }
 
 function deserializeStreamAdminContract(raw: any): Stream {
@@ -789,6 +789,9 @@ function deserializeStreamStatus(raw: any): StreamStatus {
   if (raw?.tag && typeof raw.tag === 'string') return raw.tag as StreamStatus;
   if (raw?.variant_constructor && typeof raw.variant_constructor === 'string') {
     return raw.variant_constructor as StreamStatus;
+  }
+  if (raw?.constructor && typeof raw.constructor === 'string') {
+    return raw.constructor as StreamStatus;
   }
   return StreamStatus.Active;
 }

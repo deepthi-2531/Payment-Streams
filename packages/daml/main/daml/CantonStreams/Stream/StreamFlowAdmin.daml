@@ -88,8 +88,8 @@ template StreamFlowAdmin
       -- self-transfer, which preserves originalAllocationId per V2 spec).
     observers : [Party]
   where
-    signatory sender, recipient, operator
-    observer observers
+    signatory sender
+    observer recipient, operator, observers
 
     ensure currentFundedAmount >= 0.0
       && totalWithdrawn >= 0.0
