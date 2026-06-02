@@ -35,14 +35,14 @@ function validCreateParams() {
     },
     senderAccount: { owner: 'alice', accountNumber: 'sender-1' },
     recipientAccount: { owner: 'bob', accountNumber: 'recipient-1' },
-    settlementMode: SettlementMode.UtilityHoldingCustody,
-    holdingCid: '#holding-001',
+    settlementMode: SettlementMode.TokenStandardCustody,
+    fundingReference: 'source-allocation',
     escrowOperator: 'escrow-operator-party',
     cancellable: true,
   };
 }
 
-/** Base params for custody-backed streams (includes holdingCid + escrowOperator). */
+/** Base params for V2 custody-backed streams. */
 function validCustodyCreateParams() {
   return validCreateParams();
 }
@@ -191,36 +191,17 @@ describe('CreateStreamParamsSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('rejects NumericLegacy create mode', () => {
-    const params = {
-      ...validCreateParams(),
-      settlementMode: SettlementMode.NumericLegacy,
-    };
-    const result = CreateStreamParamsSchema.safeParse(params);
-    expect(result.success).toBe(false);
-  });
-
-  it('accepts validator-local streams without instrumentRef in LocalAssetCustody mode', () => {
-    const params = {
-      ...validCreateParams(),
-      assetType: AssetType.ValidatorLocalAsset,
-      settlementMode: SettlementMode.LocalAssetCustody,
-      instrumentRef: undefined,
-    };
-    const result = CreateStreamParamsSchema.safeParse(params);
-    expect(result.success).toBe(true);
-  });
-
-  it('rejects local-asset streams without recipientAccount', () => {
-    const params = {
-      ...validCreateParams(),
-      assetType: AssetType.ValidatorLocalAsset,
-      settlementMode: SettlementMode.LocalAssetCustody,
-      instrumentRef: undefined,
-      recipientAccount: undefined,
-    };
-    const result = CreateStreamParamsSchema.safeParse(params);
-    expect(result.success).toBe(false);
+  it('rejects non-V2 create modes', () => {
+    for (const settlementMode of [
+      SettlementMode.NumericLegacy,
+      SettlementMode.UtilityHoldingCustody,
+      SettlementMode.LocalAssetCustody,
+      SettlementMode.Delegated,
+    ]) {
+      const params = { ...validCreateParams(), settlementMode };
+      const result = CreateStreamParamsSchema.safeParse(params);
+      expect(result.success).toBe(false);
+    }
   });
 
   it('rejects instrumentRef for validator-local streams', () => {

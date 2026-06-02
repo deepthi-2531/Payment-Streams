@@ -10,9 +10,8 @@
  * Phase 6 (STR-117) replaces this single-page form with a 4-step wizard
  * built from the mockup; this file lands the pattern + closes STR-115.
  *
- * STR-103 note: the schema rejects `settlementMode: TokenStandardCustody`
- * with a pointer to STR-86, preventing users from hitting the runtime
- * `assertTokenStandardEscrowAvailable()` throw on submit.
+ * The form is V2-only: TokenStandardCustody via the CIP-0112
+ * AllocationRequest path.
  */
 
 import { useState } from 'react';
@@ -45,7 +44,7 @@ const selectClass =
 const defaults: Partial<CreateStreamSchemaValues> = {
   assetType: AssetType.GlobalCip56,
   vestingMode: VestingMode.Linear,
-  settlementMode: SettlementMode.UtilityHoldingCustody,
+  settlementMode: SettlementMode.TokenStandardCustody,
   cancellable: true,
 };
 
@@ -88,13 +87,7 @@ export function CreateStreamForm() {
         </FormField>
 
         <FormField name="totalDeposited" label="Total amount" required>
-          <input
-            className={inputClass}
-            type="number"
-            step="any"
-            min="0"
-            placeholder="1000.00"
-          />
+          <input className={inputClass} type="number" step="any" min="0" placeholder="1000.00" />
         </FormField>
 
         <div className="grid grid-cols-2 gap-4">
@@ -108,11 +101,19 @@ export function CreateStreamForm() {
 
         <FormField name="assetType" label="Asset type">
           <select className={selectClass}>
-            <option value={AssetType.GlobalCip56}>Global CIP-56 token</option>
-            <option value={AssetType.LocalCip56}>Local CIP-56 token</option>
-            <option value={AssetType.ValidatorLocalAsset}>Validator-local asset</option>
+            <option value={AssetType.GlobalCip56}>Global CIP-56 V2 token</option>
+            <option value={AssetType.LocalCip56}>Local CIP-56 V2 token</option>
           </select>
         </FormField>
+
+        <div className="grid grid-cols-2 gap-4">
+          <FormField name="instrumentAdmin" label="Instrument admin" required>
+            <input className={inputClass} placeholder="AmuletAdmin::ns" />
+          </FormField>
+          <FormField name="instrumentId" label="Instrument id" required>
+            <input className={inputClass} placeholder="Amulet" />
+          </FormField>
+        </div>
 
         <FormField name="vestingMode" label="Vesting mode">
           <select className={selectClass}>
@@ -127,13 +128,9 @@ export function CreateStreamForm() {
 
         <FormField name="settlementMode" label="Settlement mode">
           <select className={selectClass}>
-            <option value={SettlementMode.UtilityHoldingCustody}>UtilityHoldingCustody</option>
-            {/* STR-103: TokenStandardCustody disabled until Daml template lands */}
-            <option value={SettlementMode.TokenStandardCustody} disabled>
-              TokenStandardCustody — disabled (STR-86 pending)
+            <option value={SettlementMode.TokenStandardCustody}>
+              TokenStandardCustody — CIP-56 V2 AllocationRequest
             </option>
-            <option value={SettlementMode.LocalAssetCustody}>LocalAssetCustody</option>
-            <option value={SettlementMode.NumericLegacy}>NumericLegacy (dev)</option>
           </select>
         </FormField>
 
@@ -210,19 +207,13 @@ function ConditionalSettlementFields() {
   const { watch } = useFormContext<CreateStreamSchemaValues>();
   const mode = watch('settlementMode');
 
-  if (mode === SettlementMode.NumericLegacy) {
-    return null;
-  }
-  // UtilityHoldingCustody / LocalAssetCustody / TokenStandardCustody all
-  // need escrowOperator + accounts; TokenStandardCustody also rejected
-  // by the schema (STR-103).
+  if (mode !== SettlementMode.TokenStandardCustody) return null;
+
   return (
     <div className="space-y-4">
-      {mode !== SettlementMode.TokenStandardCustody && (
-        <FormField name="holdingCid" label="Holding CID" required>
-          <input className={inputClass} placeholder="00..." />
-        </FormField>
-      )}
+      <FormField name="fundingReference" label="Funding reference" required>
+        <input className={inputClass} placeholder="allocation-request/source-holding" />
+      </FormField>
       <FormField name="escrowOperator" label="Escrow operator party" required>
         <input className={inputClass} placeholder="EscrowOperator::ns" />
       </FormField>
@@ -250,6 +241,12 @@ function buildCreateParams(party: string, data: CreateStreamSchemaValues): Creat
     startTime: new Date(data.startTime),
     endTime: new Date(data.endTime),
     assetType: data.assetType,
+    instrumentRef: {
+      depository: data.instrumentAdmin,
+      issuer: data.instrumentAdmin,
+      instrumentId: data.instrumentId,
+      instrumentVersion: 'v2',
+    },
     settlementMode: data.settlementMode,
     cancellable: data.cancellable,
   };
@@ -258,33 +255,27 @@ function buildCreateParams(party: string, data: CreateStreamSchemaValues): Creat
     data.vestingMode === VestingMode.Linear
       ? { mode: VestingMode.Linear as const }
       : data.vestingMode === VestingMode.CliffLinear
-      ? { mode: VestingMode.CliffLinear as const, cliffTime: new Date(data.cliffTime) }
-      : data.vestingMode === VestingMode.Stepped
-      ? {
-          mode: VestingMode.Stepped as const,
-          stepInterval: data.stepInterval,
-          amountPerStep: new Decimal(data.amountPerStep),
-        }
-      : {
-          mode: VestingMode.RenewableTerm as const,
-          termDuration: data.termDuration,
-        };
+        ? { mode: VestingMode.CliffLinear as const, cliffTime: new Date(data.cliffTime) }
+        : data.vestingMode === VestingMode.Stepped
+          ? {
+              mode: VestingMode.Stepped as const,
+              stepInterval: data.stepInterval,
+              amountPerStep: new Decimal(data.amountPerStep),
+            }
+          : {
+              mode: VestingMode.RenewableTerm as const,
+              termDuration: data.termDuration,
+            };
 
   const settlementExtras: Partial<CreateStreamParams> = {};
-  if (
-    data.settlementMode === SettlementMode.UtilityHoldingCustody ||
-    data.settlementMode === SettlementMode.LocalAssetCustody
-  ) {
+  if (data.settlementMode === SettlementMode.TokenStandardCustody) {
     Object.assign(settlementExtras, {
-      holdingCid: data.holdingCid,
+      fundingReference: data.fundingReference,
       escrowOperator: data.escrowOperator,
       senderAccount: parseLedgerRecord(data.senderAccount),
       recipientAccount: parseLedgerRecord(data.recipientAccount),
     });
   }
-  // [STR-103] TokenStandardCustody is filtered out at schema validation;
-  // unreachable here, but if a future schema change re-enables it we'd
-  // wire fundingReference + accounts here too.
 
   return {
     ...baseConfig,

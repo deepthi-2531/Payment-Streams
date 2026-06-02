@@ -1,7 +1,7 @@
 /**
  * @module commands/create
  *
- * `canton-streams create` — Create a single holding-backed payment stream.
+ * `canton-streams create` — Create a single V2 token-standard payment stream.
  */
 
 import type { ArgumentsCamelCase, Argv } from 'yargs';
@@ -9,7 +9,12 @@ import Decimal from 'decimal.js';
 import chalk from 'chalk';
 import ora from 'ora';
 import { AssetType, CantonStreamsClient, SettlementMode, VestingMode } from '@canton-streams/sdk';
-import type { CreateStreamParams, InstrumentRef, LedgerRecord, VestingModeConfig } from '@canton-streams/sdk';
+import type {
+  CreateStreamParams,
+  InstrumentRef,
+  LedgerRecord,
+  VestingModeConfig,
+} from '@canton-streams/sdk';
 import { resolveConfig, type GlobalOptions } from '../config.js';
 
 interface CreateArgs extends GlobalOptions {
@@ -24,19 +29,17 @@ interface CreateArgs extends GlobalOptions {
   'amount-per-step'?: string;
   'term-duration'?: number;
   'asset-type': string;
-  'holding-cid': string;
-  'sender-account'?: string;
+  'funding-reference': string;
+  'sender-account': string;
   'recipient-account': string;
   'escrow-operator': string;
+  'instrument-admin': string;
   'instrument-id': string;
-  'instrument-version': string;
-  'instrument-issuer': string;
-  'instrument-depository': string;
   cancellable: boolean;
 }
 
 export const command = 'create';
-export const describe = 'Create a single holding-backed payment stream';
+export const describe = 'Create a single V2 token-standard payment stream';
 
 export function builder(yargs: Argv): Argv<CreateArgs> {
   return yargs
@@ -91,16 +94,17 @@ export function builder(yargs: Argv): Argv<CreateArgs> {
       type: 'string',
       choices: ['local-cip56', 'global-cip56'],
       default: 'global-cip56',
-      describe: 'Holding-backed CIP asset mode',
+      describe: 'CIP-56 V2 asset scope',
     })
-    .option('holding-cid', {
+    .option('funding-reference', {
       type: 'string',
       demandOption: true,
-      describe: 'Holding contract ID to lock as escrow',
+      describe: 'V2 funding/allocation reference prepared by the Amulet wallet',
     })
     .option('sender-account', {
       type: 'string',
-      describe: 'Sender account key as JSON (optional for current custody workflow)',
+      demandOption: true,
+      describe: 'Sender Amulet account key as JSON',
     })
     .option('recipient-account', {
       type: 'string',
@@ -110,27 +114,17 @@ export function builder(yargs: Argv): Argv<CreateArgs> {
     .option('escrow-operator', {
       type: 'string',
       demandOption: true,
-      describe: 'Escrow operator party that finalizes custody',
+      describe: 'Escrow operator party for V2 stream settlement',
+    })
+    .option('instrument-admin', {
+      type: 'string',
+      demandOption: true,
+      describe: 'CIP-56 V2 instrument admin party',
     })
     .option('instrument-id', {
       type: 'string',
       demandOption: true,
-      describe: 'Instrument identifier (for example CBTC)',
-    })
-    .option('instrument-version', {
-      type: 'string',
-      demandOption: true,
-      describe: 'Instrument version',
-    })
-    .option('instrument-issuer', {
-      type: 'string',
-      demandOption: true,
-      describe: 'Issuer party for the CIP instrument',
-    })
-    .option('instrument-depository', {
-      type: 'string',
-      demandOption: true,
-      describe: 'Depository/provider party for the CIP instrument',
+      describe: 'CIP-56 V2 instrument id (for example CC)',
     })
     .option('cancellable', {
       type: 'boolean',
@@ -149,13 +143,13 @@ export async function handler(argv: ArgumentsCamelCase<CreateArgs>): Promise<voi
 
   const vestingMode = buildVestingMode(argv);
   const streamId = `stream-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const senderAccount = argv.senderAccount ? parseLedgerRecord(argv.senderAccount, 'sender-account') : undefined;
+  const senderAccount = parseLedgerRecord(argv.senderAccount, 'sender-account');
   const recipientAccount = parseLedgerRecord(argv.recipientAccount, 'recipient-account');
   const instrumentRef: InstrumentRef = {
-    depository: argv.instrumentDepository,
-    issuer: argv.instrumentIssuer,
+    depository: argv.instrumentAdmin,
+    issuer: argv.instrumentAdmin,
     instrumentId: argv.instrumentId,
-    instrumentVersion: argv.instrumentVersion,
+    instrumentVersion: 'v2',
   };
 
   const params: CreateStreamParams = {
@@ -168,20 +162,20 @@ export async function handler(argv: ArgumentsCamelCase<CreateArgs>): Promise<voi
     vestingMode,
     assetType: parseAssetType(argv.assetType),
     instrumentRef,
-    holdingCid: argv.holdingCid,
-    ...(senderAccount ? { senderAccount } : {}),
+    fundingReference: argv.fundingReference,
+    senderAccount,
     recipientAccount,
-    settlementMode: SettlementMode.UtilityHoldingCustody,
+    settlementMode: SettlementMode.TokenStandardCustody,
     escrowOperator: argv.escrowOperator,
     cancellable: argv.cancellable,
   };
 
-  const spinner = ora('Creating holding-backed payment stream...').start();
+  const spinner = ora('Creating V2 token-standard payment stream...').start();
   const client = new CantonStreamsClient(config);
 
   try {
     const result = await client.createStream(params);
-    spinner.succeed(chalk.green('Holding-backed stream created successfully'));
+    spinner.succeed(chalk.green('V2 token-standard stream created successfully'));
     console.log();
     console.log(`  ${chalk.bold('Stream ID:')}      ${result.streamId}`);
     console.log(`  ${chalk.bold('Contract ID:')}   ${result.requestContractId}`);
@@ -191,6 +185,7 @@ export async function handler(argv: ArgumentsCamelCase<CreateArgs>): Promise<voi
     console.log(`  ${chalk.bold('Settlement:')}    ${params.settlementMode}`);
     console.log(`  ${chalk.bold('Asset Mode:')}    ${params.assetType}`);
     console.log(`  ${chalk.bold('Instrument ID:')} ${instrumentRef.instrumentId}`);
+    console.log(`  ${chalk.bold('Funding Ref:')}   ${params.fundingReference}`);
   } catch (err) {
     spinner.fail(chalk.red('Failed to create stream'));
     console.error(chalk.red(err instanceof Error ? err.message : String(err)));
@@ -214,7 +209,12 @@ function parseAssetType(value: string): AssetType {
 function parseLedgerRecord(value: string, flag: string): LedgerRecord {
   try {
     const parsed = JSON.parse(value) as LedgerRecord;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).length === 0
+    ) {
       throw new Error('must be a non-empty JSON object');
     }
     return parsed;
@@ -246,7 +246,11 @@ function buildVestingMode(argv: ArgumentsCamelCase<CreateArgs>): VestingModeConf
 
     case 'stepped': {
       if (!argv.stepInterval || !argv.amountPerStep) {
-        console.error(chalk.red('Error: --step-interval and --amount-per-step are required for stepped vesting'));
+        console.error(
+          chalk.red(
+            'Error: --step-interval and --amount-per-step are required for stepped vesting',
+          ),
+        );
         process.exit(1);
       }
       return {

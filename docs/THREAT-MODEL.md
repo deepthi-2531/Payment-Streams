@@ -364,16 +364,16 @@ The service token should:
 
 This section was added in advance of the M3 independent audit engagement
 (STR-24). It covers the trust boundaries introduced by changes since the
-original threat model: the unified CIP-56 settlement adapter, V1/V2
-runtime capability negotiation per CIP-0112, on-ledger DelegatedPolicy
+original threat model: the V2-only CIP-56 allocation path, V2
+runtime capability gating per CIP-0112, on-ledger DelegatedPolicy
 enforcement, multi-Scan adoption verification, and the CIP-103 dApp
 Provider.
 
-### Unified CIP-56 V1+V2 Settlement Adapter
+### V2-Only CIP-56 Settlement Path
 
-The library ships **one** settlement adapter that serves CC, USDCx, and
-any other CIP-56 V1 or V2 asset. Per-asset differences (admin party,
-Scan endpoint, wallet-gateway URL, capability flags) live in
+The library ships **one** V2 allocation path for assets that advertise
+the required V2 allocation capabilities. Per-asset differences (admin
+party, Scan endpoint, wallet-gateway URL, capability flags) live in
 `config/asset-registry.json`; the SDK never branches by asset name.
 
 **Threats**
@@ -382,8 +382,8 @@ Scan endpoint, wallet-gateway URL, capability flags) live in
 |---|---|---|
 | Asset registry tampering | `config/asset-registry.json` is committed in-repo; a malicious edit could route to an attacker-controlled Scan or wallet-gateway | Registry file is reviewed in code review and pinned per release. Adoption-metrics tooling (Foundation-side) consumes the manifest from a known repo + commit, not from the grantee's runtime |
 | Asset advertises V2 but doesn't honor V2 semantics | All routing goes through V2 — no fallback | `getAssetCapabilities` can be refreshed against on-chain metadata. If V2 errors surface, library fails-fast with the asset key + error context; operator decides whether to retry. **V1 fallback path does not exist** (V2-only per STR-79). |
-| InstrumentRef spoofing | A malicious actor could craft an `InstrumentRef` for a different asset | Daml-side validation (`assertInstrumentRefMatches` in `TokenStandardAdapter.daml`) enforces equality of all 4 fields; on-chain settlement references anchor to the actual asset admin |
-| Settlement reference forgery | The Daml layer only checks that a settlement reference is non-empty; the cryptographic settlement happens off-chain | Off-chain settlement is validated by the wallet-gateway against the SV Scan endpoint; the grantee's adoption-metrics aggregator verifies by querying public Scan, not by trusting in-repo data |
+| InstrumentRef spoofing | A malicious actor could craft an `InstrumentRef` for a different asset | V2 capability resolution binds the asset to its registry admin and instrument id; stream creation must use a registered V2 asset entry |
+| Settlement reference forgery | A malicious actor could spoof stream metadata | V2 `SettlementInfo` and `AllocationSpecification` are signed ledger arguments; the adoption-metrics aggregator verifies by querying public Scan, not by trusting in-repo data |
 
 ### CIP-0112 V2 capability assertion (V2-only per STR-79)
 
@@ -506,12 +506,11 @@ When the M3 audit firm is engaged, the scope covers:
 2. `StreamFlow` (rolling top-up) templates
 3. Unified propose / accept workflow (`UnifiedStream`)
 4. `DelegatedPolicy` + `PolicyExecutionState` + `ExecutionLog` enforcement
-5. CIP-56 V1 settlement adapter (`TokenStandardAdapter`)
-6. CIP-56 V2 settlement adapter (`TokenStandardV2Adapter`)
-7. V1↔V2 mixed-settlement conformance (`TokenDvP_V1V2Mixed`)
-8. Off-ledger trust boundary: proxy, executor, auto-withdraw worker
-9. SDK capability negotiation logic (`getAssetCapabilities`, `selectAdapter`)
-10. Asset registry integrity model
+5. CIP-56 V2 allocation and settlement orchestration
+6. TransferEventsV2 subscriber plus raw Ledger API V2 fallback
+7. Off-ledger trust boundary: proxy, executor, auto-withdraw worker
+8. SDK V2 capability gating (`getAssetCapabilities`)
+9. Asset registry integrity model
 
 ---
 
@@ -522,11 +521,10 @@ deprecated **settlement-reference path** (off-chain wallet-gateway
 prepare/execute calls anchored to on-ledger settlement references)
 with the **idiomatic CIP-56 Token Standard pattern**:
 
-1. The escrow contract (StreamEscrow / StreamFlow / MilestoneEscrow)
-   implements both `AllocationRequestV1.AllocationRequest` and
-   `AllocationRequestV2.AllocationRequest` interfaces per CIP-0112 §5.
-2. Senders' wallets observe the request and create `AllocationV1.Allocation`
-   or `AllocationV2.Allocation` reserving the funds.
+1. The stream admin contract (StreamAdmin / StreamFlow / MilestoneAdmin)
+   exposes the V2 `AllocationRequest` shape.
+2. Senders' wallets observe the request and create `AllocationV2.Allocation`
+   contracts reserving the funds.
 3. The escrow operator (or any executor authorized by the
    `SettlementInfo.executor` field) exercises `Allocation_Settle` to
    atomically move the funds and emit settlement events.
@@ -682,4 +680,3 @@ scope must include:
 6. Asset registry integrity (signatures on the in-repo JSON; CI
    verification that `build-asset-registry.mjs` output matches
    `config/asset-registry.json`)
-

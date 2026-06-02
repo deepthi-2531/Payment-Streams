@@ -28,8 +28,7 @@ const TRANSFER_RULE_PACKAGE_ID: string =
   'ed73d5b9ab717333f3dbd122de7be3156f8bf2614a67360c3dd61fc0135133fa';
 
 const INSTRUMENT_CONFIG_PACKAGE_ID: string =
-  process.env['CANTON_STREAMS_INSTRUMENT_CONFIG_PACKAGE_ID'] ??
-  TRANSFER_RULE_PACKAGE_ID;
+  process.env['CANTON_STREAMS_INSTRUMENT_CONFIG_PACKAGE_ID'] ?? TRANSFER_RULE_PACKAGE_ID;
 
 // Module + entity names
 const TRANSFER_RULE_MODULE = 'Utility.Registry.V0.Rule.Transfer';
@@ -55,7 +54,7 @@ const INSTRUMENT_CONFIG_TEMPLATE_ID = {
 
 /**
  * @deprecated Since STR-76 (plan §7.4). The settlement-reference path
- * is replaced by V1/V2 AllocationRequest. Use `dispatchSettlement` from
+ * is replaced by V2 AllocationRequest. Use `dispatchSettlement` from
  * `settlement/allocation-dispatch.ts`. Hard-removed in M4.
  */
 export class TransferRuleAdapter implements SettlementAdapter {
@@ -79,20 +78,26 @@ export class TransferRuleAdapter implements SettlementAdapter {
     logger: Logger,
   ): Promise<TransferResult> {
     logger.info(
-      { from: params.from.split('::')[0], to: params.to.split('::')[0],
-        amount: params.amount.toString(), instrumentId: params.instrumentId },
+      {
+        from: params.from.split('::')[0],
+        to: params.to.split('::')[0],
+        amount: params.amount.toString(),
+        instrumentId: params.instrumentId,
+      },
       'TransferRuleAdapter: executing TransferRule_Transfer',
     );
 
     // 1. Find the TransferRule for this registrar
-    const transferRuleCid = await this.findTransferRule(
-      transport, params.registrar, actAs, logger,
-    );
+    const transferRuleCid = await this.findTransferRule(transport, params.registrar, actAs, logger);
 
     // 2. Find the InstrumentConfiguration for this registrar + instrument
     const { instrumentConfigCid, operator, provider, instrumentIdentifier } =
       await this.findInstrumentConfig(
-        transport, params.registrar, params.instrumentId, actAs, logger,
+        transport,
+        params.registrar,
+        params.instrumentId,
+        actAs,
+        logger,
       );
 
     // 3. Build the transfer reference
@@ -121,7 +126,10 @@ export class TransferRuleAdapter implements SettlementAdapter {
     };
 
     logger.debug(
-      { transferRuleCid: transferRuleCid.slice(0, 20), instrumentConfigCid: instrumentConfigCid.slice(0, 20) },
+      {
+        transferRuleCid: transferRuleCid.slice(0, 20),
+        instrumentConfigCid: instrumentConfigCid.slice(0, 20),
+      },
       'TransferRuleAdapter: submitting exercise',
     );
 
@@ -146,7 +154,10 @@ export class TransferRuleAdapter implements SettlementAdapter {
     }
 
     logger.info(
-      { receiverHoldingCid: receiverHoldingCid.slice(0, 20), senderChangeCid: senderChangeCid?.slice(0, 20) },
+      {
+        receiverHoldingCid: receiverHoldingCid.slice(0, 20),
+        senderChangeCid: senderChangeCid?.slice(0, 20),
+      },
       'TransferRuleAdapter: transfer complete',
     );
 
@@ -182,13 +193,16 @@ export class TransferRuleAdapter implements SettlementAdapter {
     if (!match) {
       throw new Error(
         `No TransferRule found for registrar ${registrar.split('::')[0]}. ` +
-        `The registrar must publish a TransferRule on this participant to enable ` +
-        `TokenStandardCustody settlement. Contact the token issuer to request one.`,
+          `The registrar must publish a TransferRule on this participant to enable ` +
+          `TokenStandardCustody settlement. Contact the token issuer to request one.`,
       );
     }
 
     const cid = match.contractId ?? match.contract_id ?? '';
-    logger.debug({ registrar: registrar.split('::')[0], cid: cid.slice(0, 20) }, 'Found TransferRule');
+    logger.debug(
+      { registrar: registrar.split('::')[0], cid: cid.slice(0, 20) },
+      'Found TransferRule',
+    );
     return cid;
   }
 
@@ -222,7 +236,7 @@ export class TransferRuleAdapter implements SettlementAdapter {
     if (!match) {
       throw new Error(
         `No InstrumentConfiguration found for registrar=${registrar.split('::')[0]}, instrumentId=${instrumentId}. ` +
-        `The registrar must publish an InstrumentConfiguration for this instrument.`,
+          `The registrar must publish an InstrumentConfiguration for this instrument.`,
       );
     }
 

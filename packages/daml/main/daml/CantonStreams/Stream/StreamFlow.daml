@@ -186,7 +186,7 @@ template StreamFlow
     streamId : Text
       -- ^ Caller-supplied unique identifier.
     instrumentRef : InstrumentRef
-      -- ^ Asset reference (CC, USDCx, any CIP-56 V1 asset).
+      -- ^ Asset reference (CC, USDCx, any CIP-56 V2 asset).
     flowRate : Decimal
       -- ^ Tokens per microsecond. Must be > 0.
     startTime : Time

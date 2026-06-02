@@ -162,10 +162,10 @@ export type {
   ListAccountsResult as GatewayListAccountsResult,
 } from './signing/index.js';
 
-// Single-entry-point settlement dispatcher (STR-76). Routes V2-capable
-// assets through AllocationRequestV2, V1-capable through AllocationRequestV1,
-// and falls back to the deprecated settlement-reference adapter path
-// with a console.warn for assets that advertise neither.
+// Single-entry-point settlement dispatcher (STR-76). Routes assets that
+// advertise required V2 allocation support through AllocationRequestV2.
+// V1-only assets and deprecated settlement-reference adapter paths are
+// intentionally unsupported in the V2-only library.
 export {
   dispatchSettlement,
   buildWithdrawalSettleCommand,

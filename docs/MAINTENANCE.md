@@ -109,19 +109,16 @@ upgraded to v1.0.0 or later.
 
 ## V2 Token Standard Migration
 
-Per CIP-0112, the V2 token standard is designed for dual-interface
-coexistence with V1. The library's behavior across V1 → V2 transitions:
+Per CIP-0112, assets are expected to publish V2 interfaces alongside
+V1 during the transition. Canton Payment Streams is V2-only: assets
+advertising V1 only are not streamable with this library because V1 has
+no committed iterated-allocation primitive.
 
-1. **Assets advertising V1 only** — library uses `TokenStandardAdapter`
-   (V1) and existing flows continue to work indefinitely. No action
-   required by adopters.
-2. **Assets advertising V1 + V2** — library automatically prefers V2 via
-   `getAssetCapabilities` (per CIP-0112 § 5). Adopters see V2 features
-   (lock-in-place custody, multi-leg allocations, event-driven
-   advancement) light up without code changes once `config/asset-registry.json`
-   is updated for that asset.
-3. **Assets advertising V2 only** — library uses `TokenStandardV2Adapter`
-   exclusively. V1-only streams against these assets are not possible.
+Once an asset advertises V2 allocation support, update
+`config/asset-registry.json` and the SDK will route through the V2
+capability gate. If the asset also advertises `transferEventsV2`, the
+proxy uses the typed V2 event stream; otherwise the raw Ledger API V2
+fallback remains temporary backstop coverage.
 
 The library will track the `splice@token-standard-v2-upcoming` branch
 during V2 stabilization and align with the stable V2 release once

@@ -8,8 +8,10 @@
 -- thing at create time via `AllocationFactory_Allocate` with
 -- `committed=True`, no `nextIterationFunding`. The operator settles
 -- legs one-by-one as milestones are confirmed off-chain (per
--- the CIP-0112 update — the V2 spec supports per-leg settlement
--- through `Allocation_Settle.extraArgs.legId`).
+-- the CIP-0112 update — the V2 spec supports multi-leg settlement
+-- through standard `Allocation_Settle` / `SettlementFactory_SettleBatch`
+-- arguments. Do not invent a stream-specific V2 choice;
+-- `Allocation_ExecuteTransfer` is not part of the V2 surface.
 --
 -- `MilestoneAdmin` is the observability companion: it records the
 -- milestone list + confirmation state + pointer to the underlying
@@ -31,9 +33,9 @@
 -- |                   | totalling the full deposit, `committed=True`,         |
 -- |                   | `nextIterationFunding=None`. Operator records the     |
 -- |                   | allocation cid via `Bind_Allocation`.                 |
--- | Confirm one       | Operator exercises V2 `Allocation_Settle` with        |
--- |                   | extraArgs referencing the leg's id; the standard      |
--- |                   | settle atomically transfers that leg only. Operator   |
+-- | Confirm one       | Operator exercises V2 `Allocation_Settle` or a        |
+-- |                   | factory-backed settle using the standard V2 args,     |
+-- |                   | then                                                  |
 -- |                   | exercises `Confirm_Milestone` to record confirmation. |
 -- | Confirm batch     | Operator exercises V2                                 |
 -- |                   | `SettlementFactory_SettleBatch` with the relevant     |

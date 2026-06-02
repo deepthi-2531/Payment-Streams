@@ -230,11 +230,10 @@ export function assertTokenStandardEscrowAvailable(): void {
   }
   throw new Error(
     '[STR-103] TokenStandardEscrow Daml template is NOT present in the canton-streams package. ' +
-    'The SDK + proxy reference it but the Daml module was never published (likely folded into ' +
-    'StreamEscrow under STR-66). Any submit against this template will fail at the ledger. ' +
-    'Use settlementMode=NumericLegacy for sandbox/test, or wait for STR-86 (AllocationRequest-driven ' +
-    'lifecycle on dual-interface StreamEscrow). Override with ' +
-    'CANTON_STREAMS_TOKEN_STANDARD_ESCROW_PRESENT=true only if your deployment includes the template.',
+      'The SDK + proxy reference it but the Daml module was never published (likely folded into ' +
+      'StreamEscrow under STR-66). Any submit against this template will fail at the ledger. ' +
+      'Use the V2 AllocationRequest + StreamAdmin path instead. Override with ' +
+      'CANTON_STREAMS_TOKEN_STANDARD_ESCROW_PRESENT=true only if your deployment includes the template.',
   );
 }
 
@@ -351,7 +350,10 @@ export const CHOICE_REVOKE_POLICY = 'RevokePolicy';
 export const ESCROW_TEMPLATES = [
   { templateId: TEMPLATE_STREAM_ESCROW, settlementMode: SettlementMode.NumericLegacy },
   { templateId: TEMPLATE_UTILITY_ESCROW, settlementMode: SettlementMode.UtilityHoldingCustody },
-  { templateId: TEMPLATE_TOKEN_STANDARD_ESCROW, settlementMode: SettlementMode.TokenStandardCustody },
+  {
+    templateId: TEMPLATE_TOKEN_STANDARD_ESCROW,
+    settlementMode: SettlementMode.TokenStandardCustody,
+  },
   { templateId: TEMPLATE_LOCAL_ASSET_ESCROW, settlementMode: SettlementMode.LocalAssetCustody },
 ] as const;
 
@@ -360,9 +362,18 @@ export const ESCROW_TEMPLATES = [
  */
 export const CREATE_REQUEST_TEMPLATES = [
   { templateId: TEMPLATE_CREATE_REQUEST, settlementMode: SettlementMode.NumericLegacy },
-  { templateId: TEMPLATE_UTILITY_CREATE_REQUEST, settlementMode: SettlementMode.UtilityHoldingCustody },
-  { templateId: TEMPLATE_TOKEN_STANDARD_CREATE_REQUEST, settlementMode: SettlementMode.TokenStandardCustody },
-  { templateId: TEMPLATE_LOCAL_ASSET_CREATE_REQUEST, settlementMode: SettlementMode.LocalAssetCustody },
+  {
+    templateId: TEMPLATE_UTILITY_CREATE_REQUEST,
+    settlementMode: SettlementMode.UtilityHoldingCustody,
+  },
+  {
+    templateId: TEMPLATE_TOKEN_STANDARD_CREATE_REQUEST,
+    settlementMode: SettlementMode.TokenStandardCustody,
+  },
+  {
+    templateId: TEMPLATE_LOCAL_ASSET_CREATE_REQUEST,
+    settlementMode: SettlementMode.LocalAssetCustody,
+  },
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -389,7 +400,9 @@ export function validateTemplateRegistry(options?: {
 
   const check = (label: string, tmpl: TemplateId) => {
     if (!tmpl.packageId || tmpl.packageId.length < 16) {
-      missing.push(`${label}: packageId="${tmpl.packageId}" (${tmpl.moduleName}:${tmpl.entityName})`);
+      missing.push(
+        `${label}: packageId="${tmpl.packageId}" (${tmpl.moduleName}:${tmpl.entityName})`,
+      );
     }
   };
 
@@ -420,9 +433,9 @@ export function validateTemplateRegistry(options?: {
   if (missing.length > 0) {
     throw new Error(
       `Template registry validation failed — missing or invalid package IDs:\n` +
-      missing.map((m) => `  • ${m}`).join('\n') +
-      `\n\nSet the correct CANTON_STREAMS_*_PACKAGE_ID environment variables ` +
-      `or deploy the required DARs.`,
+        missing.map((m) => `  • ${m}`).join('\n') +
+        `\n\nSet the correct CANTON_STREAMS_*_PACKAGE_ID environment variables ` +
+        `or deploy the required DARs.`,
     );
   }
 }

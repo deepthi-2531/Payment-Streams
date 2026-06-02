@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import Decimal from 'decimal.js';
+
 import { createStream } from '../../src/commands/create.js';
 import { AssetType, SettlementMode, VestingMode } from '../../src/types/stream.js';
-import { TEMPLATE_LOCAL_ASSET_CREATE_REQUEST } from '../../src/templates.js';
+import { TEMPLATE_STREAM_ADMIN } from '../../src/templates.js';
 
 const logger = {
   fatal: () => undefined,
@@ -15,80 +16,74 @@ const logger = {
   child: () => logger,
 } as any;
 
+const validParams = {
+  streamId: 'v2-stream',
+  sender: 'alice',
+  recipient: 'bob',
+  totalDeposited: new Decimal('100'),
+  startTime: new Date('2026-03-31T00:00:00Z'),
+  endTime: new Date('2026-04-01T00:00:00Z'),
+  vestingMode: { mode: VestingMode.Linear },
+  assetType: AssetType.GlobalCip56,
+  instrumentRef: {
+    depository: 'AmuletAdmin::1',
+    issuer: 'AmuletAdmin::1',
+    instrumentId: 'Amulet',
+    instrumentVersion: 'v2',
+  },
+  fundingReference: 'source-allocation',
+  senderAccount: { owner: 'alice', id: '' },
+  recipientAccount: { owner: 'bob', id: '' },
+  settlementMode: SettlementMode.TokenStandardCustody,
+  escrowOperator: 'escrow-operator',
+  cancellable: true,
+};
+
 describe('createStream', () => {
-  it('creates local-asset streams without instrumentRef', async () => {
+  it('creates a V2 StreamAdmin contract for token-standard streams', async () => {
     const transport = {
-      create: vi.fn().mockResolvedValue({ contractId: '#request-001', result: {} }),
+      create: vi.fn().mockResolvedValue({ contractId: '#stream-admin-001', result: {} }),
     } as any;
 
-    const result = await createStream(
-      transport,
-      {
-        streamId: 'local-asset-stream',
-        sender: 'alice',
-        recipient: 'bob',
-        totalDeposited: new Decimal('100'),
-        startTime: new Date('2026-03-31T00:00:00Z'),
-        endTime: new Date('2026-04-01T00:00:00Z'),
-        vestingMode: { mode: VestingMode.Linear },
-        assetType: AssetType.ValidatorLocalAsset,
-        holdingCid: '#holding-001',
-        recipientAccount: { owner: 'bob', accountNumber: 'recipient-1' },
-        settlementMode: SettlementMode.LocalAssetCustody,
-        escrowOperator: 'escrow-operator',
-        cancellable: true,
-      },
-      ['alice'],
-      logger,
-    );
+    const result = await createStream(transport, validParams, ['alice'], logger);
 
     expect(result).toEqual({
-      requestContractId: '#request-001',
-      streamId: 'local-asset-stream',
+      requestContractId: '#stream-admin-001',
+      streamId: 'v2-stream',
     });
 
     expect(transport.create).toHaveBeenCalledWith(
-      TEMPLATE_LOCAL_ASSET_CREATE_REQUEST,
+      TEMPLATE_STREAM_ADMIN,
       expect.objectContaining({
-        fundingHoldingCid: { contract_id: '#holding-001' },
-        depositAmount: { numeric: '100' },
-        escrowOperator: { party: 'escrow-operator' },
-        recipientAccount: { owner: 'bob', accountNumber: 'recipient-1' },
-        observers: [],
+        streamId: { text: 'v2-stream' },
+        sender: { party: 'alice' },
+        recipient: { party: 'bob' },
+        operator: { party: 'escrow-operator' },
+        instrumentRef: expect.objectContaining({
+          issuer: { party: 'AmuletAdmin::1' },
+          instrumentId: { text: 'Amulet' },
+        }),
+        totalDeposited: { numeric: '100.0000000000' },
+        currentAllocationCid: { optional: null },
       }),
       ['alice'],
     );
-
-    const payload = transport.create.mock.calls[0][1];
-    expect(payload).not.toHaveProperty('symbol');
-    expect(payload).not.toHaveProperty('issuer');
   });
 
-  it('rejects local-asset streams without recipientAccount', async () => {
-    const transport = {
-      create: vi.fn(),
-    } as any;
+  it('rejects legacy settlement modes for new streams', async () => {
+    const transport = { create: vi.fn() } as any;
 
     await expect(
       createStream(
         transport,
         {
-          streamId: 'local-asset-stream',
-          sender: 'alice',
-          recipient: 'bob',
-          totalDeposited: new Decimal('100'),
-          startTime: new Date('2026-03-31T00:00:00Z'),
-          endTime: new Date('2026-04-01T00:00:00Z'),
-          vestingMode: { mode: VestingMode.Linear },
-          assetType: AssetType.ValidatorLocalAsset,
-          holdingCid: '#holding-001',
+          ...validParams,
           settlementMode: SettlementMode.LocalAssetCustody,
-          escrowOperator: 'escrow-operator',
-          cancellable: true,
-        } as any,
+          holdingCid: '#holding-001',
+        },
         ['alice'],
         logger,
       ),
-    ).rejects.toThrow('recipientAccount');
+    ).rejects.toThrow('V2-only');
   });
 });
