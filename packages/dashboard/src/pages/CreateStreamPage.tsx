@@ -14,7 +14,7 @@ export function CreateStreamPage() {
     <div style={{ paddingTop: 28 }}>
       <PageHeader
         title="Create a stream"
-        subtitle="Configure the schedule and custody. The recipient signs to activate."
+        subtitle="Configure the schedule and custody. The stream goes live on submit; recipient funding approval happens in the Amulet wallet."
       />
       <CreateStreamWizard />
     </div>
