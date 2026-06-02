@@ -24,9 +24,9 @@ Brings up:
 | Canton gRPC ledger API | localhost:5001        | SDK + proxy gRPC connection  |
 | Canton Admin API       | localhost:5002        | DAR upload, party allocation |
 
-Wallet-backed E2E requires a separate Splice validator LocalNet built
-from `canton-network/splice@token-standard-v2-upcoming`. The Amulet
-wallet gateway from that LocalNet should expose the CIP-103 dapp API at
+Wallet-backed E2E requires a separate Splice validator LocalNet with
+Token Standard V2 support. The Amulet wallet gateway from that LocalNet
+should expose the CIP-103 dapp API at
 `http://localhost:3030/api/v0/dapp`.
 
 Watch readiness:
@@ -61,7 +61,7 @@ pnpm dev
 
 ## Connect a wallet
 
-The dashboard uses [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md) for end-user wallet authentication via `@canton-network/dapp-sdk`. New stream flows target the **CIP-56 V2 / CIP-0112 AllocationRequest** path and should be tested with the Amulet wallet on a Splice LocalNet built from `token-standard-v2-upcoming`.
+The dashboard uses [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md) for end-user wallet authentication via `@canton-network/dapp-sdk`. New stream flows target the **CIP-56 V2 / CIP-0112 AllocationRequest** path and should be tested with the Amulet wallet on a Splice LocalNet with V2 wallet support.
 
 1. Open http://localhost:3000
 2. Click **Connect wallet** on the landing page

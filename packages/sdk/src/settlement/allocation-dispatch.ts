@@ -37,6 +37,7 @@ import {
   type NextIterationFunding,
   type TransferLegV2,
   type AllocationSettlementInfo,
+  type BatchSettlementParams,
 } from '../commands/allocation.js';
 
 // ---------------------------------------------------------------------------
@@ -94,7 +95,7 @@ export interface BatchSettleCommand {
   readonly action: 'batch-settle';
   readonly settlementFactoryCid: string;
   readonly templateIdSettlementFactory: TemplateId;
-  readonly allocationCids: Readonly<Record<string, string>>;
+  readonly batch: BatchSettlementParams;
   readonly actAs: ReadonlyArray<string>;
 }
 
@@ -171,7 +172,7 @@ export async function dispatchSettlement(
         caps,
         cmd.settlementFactoryCid,
         cmd.templateIdSettlementFactory,
-        cmd.allocationCids,
+        cmd.batch,
         [...cmd.actAs],
         logger,
       );
@@ -244,6 +245,7 @@ export type {
   NextIterationFunding,
   AllocationSettlementInfo,
   TransferLegV2,
+  BatchSettlementParams,
 };
 
 // Re-export Decimal so callers don't need a separate dependency line

@@ -10,21 +10,25 @@ Security analysis and invariant verification for Canton Payment Streams.
 
 | Party             | Role                                                       |
 |-------------------|------------------------------------------------------------|
-| **Sender**        | Funds the stream. Signatory on StreamEscrow. Can cancel (if cancellable) and renew. |
-| **Recipient**     | Receives streamed tokens. Signatory on StreamEscrow. Can withdraw and complete. |
-| **Escrow Operator** | Service party that manages custody-backed escrow (Phase 2+). Not a signatory on StreamEscrow; acts on custody holdings. |
+| **Sender**        | Funds the stream. Signatory on the stream-admin template (`StreamAdmin`/`StreamFlow`/`MilestoneAdmin`). Can cancel (if cancellable), renew, and authorise allocations against held funds. |
+| **Recipient**     | Receives streamed tokens. Signatory on the stream-admin template. Can withdraw and complete via the V2 `Allocation_Settle` settle path. |
+| **Escrow Operator** | Service party that drives V2 allocation settlement. Not a signatory on the stream-admin template; exercises `Allocation_Settle` / `SettlementFactory_SettleBatch` on the V2 `Allocation` contracts. |
 | **Observers**     | Parties with read-only visibility. Can call `GetStreamInfo` but cannot modify state. |
 
 ### Signatory model
 
-`StreamEscrow` requires both sender and recipient as signatories. This
-means:
+The stream-admin templates (`StreamAdmin`, `StreamFlow` + `StreamFlowAdmin`,
+`MilestoneAdmin`) require sender and recipient as joint signatories.
+This means:
 
-- Stream creation requires recipient consent (via the
-  `CreateStreamRequest` -> `Accept` workflow).
+- Stream creation requires recipient consent — the create flow lands
+  an `AllocationRequest` that the recipient's wallet accepts via
+  `AllocationFactory_Allocate(committed=True)`, atomically locking
+  the sender's funding.
 - Neither party can unilaterally create a stream that binds the other.
-- The Daml runtime enforces that only authorized controllers can
-  exercise choices.
+- The Daml runtime enforces that only authorised controllers can
+  exercise choices on both the stream-admin template and the
+  underlying V2 `Allocation`.
 
 ---
 

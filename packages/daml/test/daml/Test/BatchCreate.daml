@@ -132,7 +132,9 @@ testBatchMixedModes = script do
 
   debug ("GOLDEN:batch_mixed:escrows:" <> show (length escrows))
 
--- | Test: duplicate streamId for same sender is rejected (key uniqueness).
+-- | Test: raw template creation permits duplicate stream ids because this
+-- package's Daml LF target does not support contract keys. SDK/proxy batch
+-- create workflows must reject duplicates before submission.
 testBatchDuplicateIdRejected : Script ()
 testBatchDuplicateIdRejected = script do
   alice <- allocateParty "Alice"
@@ -161,8 +163,9 @@ testBatchDuplicateIdRejected = script do
       settlementMode = None)
     deposit
 
-  -- Attempt to create second stream with same ID from same sender should fail
-  submitMultiMustFail [alice, charlie] [] do
+  -- Raw template creation cannot enforce sender-scoped uniqueness without
+  -- contract keys, so this succeeds. Off-ledger batch create must reject it.
+  submitMulti [alice, charlie] [] do
     createCmd StreamEscrow with
       config = StreamConfig with
         streamId = "batch-dup"
@@ -179,6 +182,10 @@ testBatchDuplicateIdRejected = script do
       state = initialStreamState
       escrow = EscrowBalance with amount = deposit; owner = alice
       observers = []
+
+  escrows <- query @StreamEscrow alice
+  let matches = filter (\(_, e) -> e.config.streamId == "batch-dup" && e.config.sender == alice) escrows
+  assertMsg "Raw template permits duplicate sender-scoped stream ids" (length matches == 2)
 
 -- | Test: batch create with two streams and verify independent lifecycle.
 testBatchPartialLifecycle : Script ()

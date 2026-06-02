@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import Decimal from 'decimal.js';
 
-import { createStream } from '../../src/commands/create.js';
+import { createBatch, createStream } from '../../src/commands/create.js';
 import { AssetType, SettlementMode, VestingMode } from '../../src/types/stream.js';
 import { TEMPLATE_STREAM_ADMIN } from '../../src/templates.js';
 
@@ -42,6 +42,7 @@ const validParams = {
 describe('createStream', () => {
   it('creates a V2 StreamAdmin contract for token-standard streams', async () => {
     const transport = {
+      query: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({ contractId: '#stream-admin-001', result: {} }),
     } as any;
 
@@ -71,7 +72,7 @@ describe('createStream', () => {
   });
 
   it('rejects legacy settlement modes for new streams', async () => {
-    const transport = { create: vi.fn() } as any;
+    const transport = { query: vi.fn().mockResolvedValue([]), create: vi.fn() } as any;
 
     await expect(
       createStream(
@@ -85,5 +86,36 @@ describe('createStream', () => {
         logger,
       ),
     ).rejects.toThrow('V2-only');
+  });
+
+  it('rejects duplicate V2 StreamAdmin ids visible to the sender', async () => {
+    const transport = {
+      query: vi.fn().mockResolvedValue([{ sender: 'alice', streamId: 'v2-stream' }]),
+      create: vi.fn(),
+    } as any;
+
+    await expect(createStream(transport, validParams, ['alice'], logger)).rejects.toThrow(
+      'Stream already exists',
+    );
+    expect(transport.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('createBatch', () => {
+  it('rejects duplicate stream ids within the same sender batch', async () => {
+    const transport = {
+      query: vi.fn().mockResolvedValue([]),
+      create: vi.fn(),
+    } as any;
+
+    await expect(
+      createBatch(
+        transport,
+        { streams: [validParams, { ...validParams, recipient: 'charlie' }] },
+        ['alice'],
+        logger,
+      ),
+    ).rejects.toThrow('Batch contains duplicate streamId');
+    expect(transport.create).not.toHaveBeenCalled();
   });
 });

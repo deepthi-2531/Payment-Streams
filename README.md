@@ -70,6 +70,63 @@ The important design split:
 - The proxy/executor settles periods with V2 vocabulary such as
   `Allocation_Settle` and `SettlementFactory_SettleBatch`.
 
+## How a Canton dApp Uses This
+
+Think of this project as a payment-streaming module your Canton dApp can embed.
+Your app keeps its own product experience; Canton Payment Streams supplies the
+stream contracts, SDK helpers, settlement worker, and optional reference UI.
+
+You can integrate at three levels:
+
+| Integration style           | Use when                            | What you build                                       |
+| --------------------------- | ----------------------------------- | ---------------------------------------------------- |
+| Use the reference dashboard | You want a ready operator/user UI   | Configure wallet/proxy URLs and deploy it            |
+| Use the SDK + proxy         | You have your own frontend          | Your UI calls the SDK/proxy and opens wallet prompts |
+| Use Daml templates directly | You need deep product customization | Your app owns orchestration, UI, and worker logic    |
+
+Most dApps should start with **SDK + proxy**:
+
+1. Deploy the Streams DAR to the participant/synchronizer used by your app.
+2. Run the Streams proxy/executor next to your app backend.
+3. In your frontend, connect the user's CIP-103 wallet with
+   `@canton-network/dapp-sdk`.
+4. Use the SDK or proxy to create stream metadata with V2 fields:
+   recipient, amount, schedule, instrument id, funding reference, sender account,
+   recipient account, and escrow operator.
+5. Ask the wallet to approve the standard V2 allocation flow.
+6. Show stream status from the SDK/proxy query endpoints.
+
+### End-user flow inside your dApp
+
+This is what a user sees in a host dApp:
+
+```text
+1. User opens your dApp.
+2. User clicks "Connect wallet".
+3. Wallet shows the Canton account(s) available to the dApp.
+4. User chooses "Create payment stream".
+5. Your dApp collects recipient, token, amount, start/end, and vesting schedule.
+6. Wallet displays the Token Standard V2 allocation request.
+7. User approves in the wallet.
+8. Your dApp shows the stream as active/pending based on ledger state.
+9. The Streams executor settles each accrual period.
+10. Recipient sees streamed funds arrive through their wallet/account.
+```
+
+The user does not need to know about `StreamAdmin`, `Allocation_Settle`, or the
+proxy. Those are implementation details behind your product flow.
+
+### What this project provides vs. what your dApp owns
+
+| Provided here                      | Owned by your dApp                        |
+| ---------------------------------- | ----------------------------------------- |
+| Daml stream/admin templates        | Product-specific UX and copy              |
+| TypeScript SDK and validation      | Recipient selection and business rules    |
+| REST proxy for browser-safe access | Auth/session model around your app        |
+| Executor/settlement worker         | Operator deployment and monitoring        |
+| Reference dashboard                | Final branded frontend, if not using ours |
+| Local Docker app stack             | Production infra and wallet availability  |
+
 ## Quick Start
 
 ### Prerequisites
@@ -193,6 +250,7 @@ names in the type system, they exist so older contracts can be read and migrated
 
 | If you want to...      | Read                                                                 |
 | ---------------------- | -------------------------------------------------------------------- |
+| Ship one working stream end-to-end | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
 | Run the app locally    | [docs/QUICKSTART.md](docs/QUICKSTART.md)                             |
 | Understand the design  | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                         |
 | Integrate as a dapp    | [docs/integration-guide/README.md](docs/integration-guide/README.md) |
