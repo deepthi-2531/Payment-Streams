@@ -465,8 +465,9 @@ export class GrpcTransport implements Transport {
         .map((c: any) => {
           const decoded = this.decodeRecord<T>(c.create_arguments);
           // Attach contract_id from the created_event to the decoded payload
-          if (c.contract_id) {
-            (decoded as any).contractId = c.contract_id;
+          const contractId = c.contract_id ?? c.contractId;
+          if (contractId) {
+            (decoded as any).contractId = contractId;
           }
           if (c.offset !== undefined && c.offset !== null) {
             (decoded as any)._offset = String(c.offset);
@@ -474,11 +475,12 @@ export class GrpcTransport implements Transport {
           // Preserve template identity from the created_event so callers
           // can determine which template this contract came from without
           // relying on field-shape detection.
-          if (c.template_id) {
+          const templateId = c.template_id ?? c.templateId;
+          if (templateId) {
             (decoded as any)._templateId = {
-              packageId: c.template_id.package_id ?? '',
-              moduleName: c.template_id.module_name ?? '',
-              entityName: c.template_id.entity_name ?? '',
+              packageId: templateId.package_id ?? templateId.packageId ?? '',
+              moduleName: templateId.module_name ?? templateId.moduleName ?? '',
+              entityName: templateId.entity_name ?? templateId.entityName ?? '',
             };
           }
           return decoded;
@@ -875,11 +877,12 @@ export class GrpcTransport implements Transport {
     if ('timestamp' in val) return val.timestamp as T;
     if ('party' in val) return val.party as T;
     if ('contract_id' in val) return val.contract_id as T;
+    if ('contractId' in val) return val.contractId as T;
     if ('unit' in val) return undefined as unknown as T;
     if ('record' in val) return this.decodeRecord<T>(val.record);
     if ('variant' in val) {
       return {
-        tag: val.variant.variant_constructor,
+        tag: val.variant.variant_constructor ?? val.variant.constructor,
         value: this.decodeValue(val.variant.value),
       } as T;
     }
@@ -910,7 +913,7 @@ export class GrpcTransport implements Transport {
       return obj as T;
     }
     if ('enum' in val) {
-      return val.enum.enum_constructor as T;
+      return (val.enum.enum_constructor ?? val.enum.constructor) as T;
     }
     return val as T;
   }

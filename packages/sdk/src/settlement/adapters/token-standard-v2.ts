@@ -20,12 +20,9 @@
  * The Daml-side V2 adapter lives in
  * `packages/daml/main/daml/CantonStreams/Settlement/TokenStandardV2Adapter.daml`.
  *
- * **Status**: the V2 DARs are pinned to `canton-network/splice@token-standard-v2-upcoming`.
- * Until they are vetted and placed in `.lib/` (STR-42), this module
- * exports the type surfaces and dispatch metadata but defers concrete
- * V2 transfer calls to the per-protocol modules once V2 implementations
- * land. Callers should branch on `getAssetCapabilities` (STR-33)
- * rather than importing this module directly.
+ * This module exports the type surfaces and dispatch metadata used by
+ * the V2 settlement path. Callers should branch on `getAssetCapabilities`
+ * (STR-33) rather than importing this module directly.
  */
 
 import type { InstrumentIdV2, AccountV2 } from '../../types/stream.js';

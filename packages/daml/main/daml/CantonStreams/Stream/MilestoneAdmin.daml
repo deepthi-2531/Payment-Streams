@@ -95,8 +95,8 @@ template MilestoneAdmin
       -- allocation via `AllocationFactory_Allocate`.
     observers : [Party]
   where
-    signatory sender, recipient, operator
-    observer observers
+    signatory sender
+    observer recipient, operator, observers
 
     ensure totalDeposited > 0.0
       && totalReleased >= 0.0
