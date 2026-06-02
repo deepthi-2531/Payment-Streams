@@ -1,4 +1,19 @@
-import { Calendar, Clock, Hash, ArrowRight, Shield, Coins, FileText, Lock, Activity, CheckCircle, XCircle, ArrowDownToLine, RefreshCw, Plus } from 'lucide-react';
+import {
+  Calendar,
+  Clock,
+  Hash,
+  ArrowRight,
+  Shield,
+  Coins,
+  FileText,
+  Lock,
+  Activity,
+  CheckCircle,
+  XCircle,
+  ArrowDownToLine,
+  RefreshCw,
+  Plus,
+} from 'lucide-react';
 import type { Stream, StreamEvent } from '@canton-streams/sdk/browser';
 import { AssetType, SettlementMode } from '@canton-streams/sdk/browser';
 import { StatusBadge } from '../common/StatusBadge.js';
@@ -58,12 +73,16 @@ export function StreamDetail({ stream }: StreamDetailProps) {
         {/* Party flow */}
         <div className="mt-6 flex items-center gap-3 rounded-xl bg-gray-50 px-4 py-3">
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Sender</p>
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+              Sender
+            </p>
             <PartyDisplay partyId={config.sender} />
           </div>
           <ArrowRight className="h-4 w-4 text-gray-300 flex-shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Recipient</p>
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+              Recipient
+            </p>
             <PartyDisplay partyId={config.recipient} />
           </div>
         </div>
@@ -85,17 +104,29 @@ export function StreamDetail({ stream }: StreamDetailProps) {
           <ConfigItem
             icon={<Hash className="h-4 w-4" />}
             label="Total Deposited"
-            value={<AmountDisplay amount={config.totalDeposited} className="text-sm font-semibold text-gray-900 tabular-nums" />}
+            value={
+              <AmountDisplay
+                amount={config.totalDeposited}
+                className="text-sm font-semibold text-gray-900 tabular-nums"
+              />
+            }
           />
           <ConfigItem
             icon={<Hash className="h-4 w-4" />}
             label="Total Withdrawn"
-            value={<AmountDisplay amount={state.totalWithdrawn} className="text-sm font-semibold text-gray-900 tabular-nums" />}
+            value={
+              <AmountDisplay
+                amount={state.totalWithdrawn}
+                className="text-sm font-semibold text-gray-900 tabular-nums"
+              />
+            }
           />
           <ConfigItem
             icon={<Clock className="h-4 w-4" />}
             label="Start Time"
-            value={<span className="text-sm text-gray-900">{config.startTime.toLocaleString()}</span>}
+            value={
+              <span className="text-sm text-gray-900">{config.startTime.toLocaleString()}</span>
+            }
           />
           <ConfigItem
             icon={<Clock className="h-4 w-4" />}
@@ -125,7 +156,9 @@ export function StreamDetail({ stream }: StreamDetailProps) {
             icon={<Shield className="h-4 w-4" />}
             label="Cancellable"
             value={
-              <span className={`text-sm font-medium ${config.cancellable ? 'text-amber-600' : 'text-gray-500'}`}>
+              <span
+                className={`text-sm font-medium ${config.cancellable ? 'text-amber-600' : 'text-gray-500'}`}
+              >
                 {config.cancellable ? 'Yes' : 'No'}
               </span>
             }
@@ -141,12 +174,20 @@ export function StreamDetail({ stream }: StreamDetailProps) {
             <ConfigItem
               icon={<FileText className="h-4 w-4" />}
               label="Instrument ID"
-              value={<span className="text-sm font-mono text-gray-900">{config.instrumentRef.instrumentId}</span>}
+              value={
+                <span className="text-sm font-mono text-gray-900">
+                  {config.instrumentRef.instrumentId}
+                </span>
+              }
             />
             <ConfigItem
               icon={<FileText className="h-4 w-4" />}
               label="Version"
-              value={<span className="text-sm font-mono text-gray-900">{config.instrumentRef.instrumentVersion}</span>}
+              value={
+                <span className="text-sm font-mono text-gray-900">
+                  {config.instrumentRef.instrumentVersion}
+                </span>
+              }
             />
             <ConfigItem
               icon={<Hash className="h-4 w-4" />}
@@ -171,10 +212,15 @@ export function StreamDetail({ stream }: StreamDetailProps) {
               icon={<Lock className="h-4 w-4" />}
               label="Escrow Holding CID"
               value={
-                <span className="text-sm font-mono text-gray-900 break-all" title={stream.escrowRef.escrowHoldingCid}>
+                <span
+                  className="text-sm font-mono text-gray-900 break-all"
+                  title={stream.escrowRef.escrowHoldingCid}
+                >
                   {stream.escrowRef.escrowHoldingCid.slice(0, 16)}...
                   <button
-                    onClick={() => navigator.clipboard.writeText(stream.escrowRef!.escrowHoldingCid)}
+                    onClick={() =>
+                      navigator.clipboard.writeText(stream.escrowRef!.escrowHoldingCid)
+                    }
                     className="ml-1.5 text-gray-400 hover:text-brand-600 text-[10px]"
                     title="Copy full CID"
                   >
@@ -186,7 +232,11 @@ export function StreamDetail({ stream }: StreamDetailProps) {
             <ConfigItem
               icon={<Coins className="h-4 w-4" />}
               label="Escrow Amount"
-              value={<span className="text-sm font-semibold text-gray-900 tabular-nums">{stream.escrowRef.escrowAmount}</span>}
+              value={
+                <span className="text-sm font-semibold text-gray-900 tabular-nums">
+                  {stream.escrowRef.escrowAmount}
+                </span>
+              }
             />
             <ConfigItem
               icon={<Hash className="h-4 w-4" />}
@@ -199,7 +249,8 @@ export function StreamDetail({ stream }: StreamDetailProps) {
                 label="Instrument"
                 value={
                   <span className="text-sm font-mono text-gray-900">
-                    {stream.escrowRef.instrumentRef.instrumentId}@{stream.escrowRef.instrumentRef.instrumentVersion}
+                    {stream.escrowRef.instrumentRef.instrumentId}@
+                    {stream.escrowRef.instrumentRef.instrumentVersion}
                   </span>
                 }
               />
@@ -278,6 +329,11 @@ const settlementLabels: Record<string, { label: string; description: string; col
     description: 'Utility/CIP holding-backed custody — real transfers',
     color: 'bg-indigo-50 text-indigo-700',
   },
+  [SettlementMode.TokenStandardCustody]: {
+    label: 'Token Standard V2',
+    description: 'CIP-56 V2 / CIP-0112 AllocationRequest custody',
+    color: 'bg-brand-50 text-brand-700',
+  },
   [SettlementMode.LocalAssetCustody]: {
     label: 'Daml Finance Custody',
     description: 'Generic Daml Finance holding custody — real transfers',
@@ -286,19 +342,19 @@ const settlementLabels: Record<string, { label: string; description: string; col
 };
 
 function SettlementModeBadge({ mode }: { mode?: string }) {
-  const info = settlementLabels[mode ?? SettlementMode.UtilityHoldingCustody] ?? {
+  const info = settlementLabels[mode ?? SettlementMode.TokenStandardCustody] ?? {
     label: mode ?? 'Unknown',
     description: '',
     color: 'bg-gray-100 text-gray-600',
   };
   return (
     <div>
-      <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${info.color}`}>
+      <span
+        className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${info.color}`}
+      >
         {info.label}
       </span>
-      {info.description && (
-        <p className="mt-0.5 text-[10px] text-gray-400">{info.description}</p>
-      )}
+      {info.description && <p className="mt-0.5 text-[10px] text-gray-400">{info.description}</p>}
     </div>
   );
 }
@@ -311,12 +367,12 @@ function AssetModeBadge({ assetType }: { assetType: string }) {
   };
   return (
     <div>
-      <span className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${info.color}`}>
+      <span
+        className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${info.color}`}
+      >
         {info.label}
       </span>
-      {info.description && (
-        <p className="mt-0.5 text-[10px] text-gray-400">{info.description}</p>
-      )}
+      {info.description && <p className="mt-0.5 text-[10px] text-gray-400">{info.description}</p>}
     </div>
   );
 }
@@ -325,13 +381,19 @@ function AssetModeBadge({ assetType }: { assetType: string }) {
 // Activity History
 // ---------------------------------------------------------------------------
 
-const eventConfig: Record<string, { icon: typeof Plus; label: string; color: string; bg: string }> = {
-  created: { icon: Plus, label: 'Stream Created', color: 'text-brand-600', bg: 'bg-brand-50' },
-  withdrawn: { icon: ArrowDownToLine, label: 'Withdrawal', color: 'text-emerald-600', bg: 'bg-emerald-50' },
-  cancelled: { icon: XCircle, label: 'Cancelled', color: 'text-red-600', bg: 'bg-red-50' },
-  completed: { icon: CheckCircle, label: 'Completed', color: 'text-blue-600', bg: 'bg-blue-50' },
-  renewed: { icon: RefreshCw, label: 'Renewed', color: 'text-amber-600', bg: 'bg-amber-50' },
-};
+const eventConfig: Record<string, { icon: typeof Plus; label: string; color: string; bg: string }> =
+  {
+    created: { icon: Plus, label: 'Stream Created', color: 'text-brand-600', bg: 'bg-brand-50' },
+    withdrawn: {
+      icon: ArrowDownToLine,
+      label: 'Withdrawal',
+      color: 'text-emerald-600',
+      bg: 'bg-emerald-50',
+    },
+    cancelled: { icon: XCircle, label: 'Cancelled', color: 'text-red-600', bg: 'bg-red-50' },
+    completed: { icon: CheckCircle, label: 'Completed', color: 'text-blue-600', bg: 'bg-blue-50' },
+    renewed: { icon: RefreshCw, label: 'Renewed', color: 'text-amber-600', bg: 'bg-amber-50' },
+  };
 
 function ActivityHistory({ sender, streamId }: { sender: string; streamId: string }) {
   const { data: events, isLoading, error } = useStreamHistory(sender, streamId);
@@ -354,9 +416,7 @@ function ActivityHistory({ sender, streamId }: { sender: string; streamId: strin
         </div>
       )}
 
-      {error && (
-        <p className="text-xs text-red-500">Failed to load history</p>
-      )}
+      {error && <p className="text-xs text-red-500">Failed to load history</p>}
 
       {events && events.length === 0 && !isLoading && (
         <p className="text-xs text-gray-400 py-4 text-center">No events recorded yet</p>
@@ -372,13 +432,16 @@ function ActivityHistory({ sender, streamId }: { sender: string; streamId: strin
               const cfg = eventConfig[event.type] ?? eventConfig['created']!;
               const Icon = cfg!.icon;
               const p = (event.payload ?? {}) as Record<string, string | number | undefined>;
-              const ts = event.timestamp instanceof Date
-                ? event.timestamp
-                : new Date(event.timestamp as unknown as string);
+              const ts =
+                event.timestamp instanceof Date
+                  ? event.timestamp
+                  : new Date(event.timestamp as unknown as string);
 
               return (
                 <div key={`${event.type}-${idx}`} className="relative flex items-start gap-3 pl-1">
-                  <div className={`relative z-10 flex h-7 w-7 items-center justify-center rounded-full ${cfg!.bg} flex-shrink-0`}>
+                  <div
+                    className={`relative z-10 flex h-7 w-7 items-center justify-center rounded-full ${cfg!.bg} flex-shrink-0`}
+                  >
                     <Icon className={`h-3.5 w-3.5 ${cfg!.color}`} />
                   </div>
                   <div className="flex-1 min-w-0 pt-0.5">
@@ -391,26 +454,41 @@ function ActivityHistory({ sender, streamId }: { sender: string; streamId: strin
                     {/* Event details */}
                     {event.type === 'withdrawn' && p['amountWithdrawn'] && (
                       <p className="text-xs text-gray-500 mt-0.5">
-                        Amount: <span className="font-medium tabular-nums">{String(p['amountWithdrawn'])}</span>
+                        Amount:{' '}
+                        <span className="font-medium tabular-nums">
+                          {String(p['amountWithdrawn'])}
+                        </span>
                         {p['newTotalWithdrawn'] && (
-                          <span className="text-gray-400"> (total: {String(p['newTotalWithdrawn'])})</span>
+                          <span className="text-gray-400">
+                            {' '}
+                            (total: {String(p['newTotalWithdrawn'])})
+                          </span>
                         )}
                       </p>
                     )}
                     {event.type === 'cancelled' && (p['recipientAmount'] || p['senderRefund']) && (
                       <p className="text-xs text-gray-500 mt-0.5">
-                        Recipient: {String(p['recipientAmount'] ?? '0')} / Refund: {String(p['senderRefund'] ?? '0')}
+                        Recipient: {String(p['recipientAmount'] ?? '0')} / Refund:{' '}
+                        {String(p['senderRefund'] ?? '0')}
                       </p>
                     )}
                     {event.type === 'renewed' && p['additionalDeposit'] && (
                       <p className="text-xs text-gray-500 mt-0.5">
-                        Additional deposit: <span className="font-medium tabular-nums">{String(p['additionalDeposit'])}</span>
+                        Additional deposit:{' '}
+                        <span className="font-medium tabular-nums">
+                          {String(p['additionalDeposit'])}
+                        </span>
                       </p>
                     )}
                     {event.type === 'created' && p['totalDeposited'] && (
                       <p className="text-xs text-gray-500 mt-0.5">
-                        Deposited: <span className="font-medium tabular-nums">{String(p['totalDeposited'])}</span>
-                        {p['vestingMode'] && <span className="text-gray-400"> ({String(p['vestingMode'])})</span>}
+                        Deposited:{' '}
+                        <span className="font-medium tabular-nums">
+                          {String(p['totalDeposited'])}
+                        </span>
+                        {p['vestingMode'] && (
+                          <span className="text-gray-400"> ({String(p['vestingMode'])})</span>
+                        )}
                       </p>
                     )}
                   </div>

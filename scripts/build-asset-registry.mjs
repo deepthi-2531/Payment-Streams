@@ -3,7 +3,7 @@
  * Build / refresh `config/asset-registry.json` from public sources.
  *
  * The asset registry is the binding data layer for per-asset routing
- * (admin party, Scan endpoint URL, wallet-gateway URL, V1/V2 capability
+ * (admin party, Scan endpoint URL, wallet-gateway URL, V2 capability
  * flags). It's loaded by the SDK's `AssetRegistry` (STR-6) and consumed
  * by the adoption-metrics aggregator (STR-56).
  *

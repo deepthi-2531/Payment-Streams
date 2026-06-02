@@ -199,4 +199,4 @@ See `errors.ts` for the full error code constants.
 - [ ] You subscribe to `accountsChanged` so the UI re-binds when the user switches accounts
 - [ ] You handle `statusChanged → disconnected` by prompting reconnect, not by silently failing
 - [ ] You don't store JWT bearer tokens in localStorage (Path A doesn't need them; the wallet handles signing)
-- [ ] Featured-app rewards (CIP-0047) emission is enabled if you want adoption credit
+- [ ] Featured-app marker emission is reviewed against the current CIP-0047/CIP-0104 regime before enabling it

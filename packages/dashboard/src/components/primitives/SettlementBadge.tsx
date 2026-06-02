@@ -5,7 +5,7 @@
  *
  * Labels mirror the SDK's `SettlementMode` enum:
  *   - `UtilityHoldingCustody` → "CIP Custody"
- *   - `TokenStandardCustody` → "Token-Standard"
+ *   - `TokenStandardCustody` → "Token Standard V2"
  *   - `LocalAssetCustody` → "Daml Finance"
  *   - `Delegated` → "Delegated"
  *   - `NumericLegacy` → "Numeric (sandbox)"
@@ -14,7 +14,7 @@
  */
 const LABELS: Record<string, string> = {
   UtilityHoldingCustody: 'CIP Custody',
-  TokenStandardCustody: 'Token-Standard',
+  TokenStandardCustody: 'Token Standard V2',
   LocalAssetCustody: 'Daml Finance',
   Delegated: 'Delegated',
   NumericLegacy: 'Numeric (sandbox)',

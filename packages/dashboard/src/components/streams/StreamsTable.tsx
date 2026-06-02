@@ -94,10 +94,10 @@ function StreamRow({ stream, isLast }: { readonly stream: Stream; readonly isLas
   const wd = Number(stream.state.totalWithdrawn.toString());
   const pct = dep > 0 ? Math.min(1, wd / dep) : 0;
   const settlementLabel =
-    SETTLEMENT_LABELS[stream.config.settlementMode ?? SettlementMode.UtilityHoldingCustody] ?? 'Unknown';
+    SETTLEMENT_LABELS[stream.config.settlementMode ?? SettlementMode.TokenStandardCustody] ??
+    'Unknown';
   const instrumentId = stream.config.instrumentRef?.instrumentId;
-  const flowBarClass =
-    stream.state.status === StreamStatus.Active ? 'flow-bar' : 'flow-bar static';
+  const flowBarClass = stream.state.status === StreamStatus.Active ? 'flow-bar' : 'flow-bar static';
 
   return (
     <Link

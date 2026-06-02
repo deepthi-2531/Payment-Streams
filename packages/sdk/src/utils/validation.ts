@@ -158,18 +158,20 @@ export const CreateStreamParamsSchema = z
     }
 
     const assetType = data.assetType ?? AssetType.GlobalCip56;
-    const settlementMode = data.settlementMode ?? SettlementMode.UtilityHoldingCustody;
+    const settlementMode = data.settlementMode ?? SettlementMode.TokenStandardCustody;
 
-    // NumericLegacy re-enabled for testing when no CIP custody infrastructure is available.
-    // if (settlementMode === SettlementMode.NumericLegacy) {
-    //   ctx.addIssue({
-    //     code: z.ZodIssueCode.custom,
-    //     path: ['settlementMode'],
-    //     message: 'New NumericLegacy streams are disabled. Use a holding-backed settlement mode.',
-    //   });
-    // }
+    if (settlementMode !== SettlementMode.TokenStandardCustody) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['settlementMode'],
+        message: 'New streams are V2-only. Use TokenStandardCustody with a CIP-56 V2 asset.',
+      });
+    }
 
-    if (settlementMode === SettlementMode.UtilityHoldingCustody && assetType === AssetType.ValidatorLocalAsset) {
+    if (
+      settlementMode === SettlementMode.UtilityHoldingCustody &&
+      assetType === AssetType.ValidatorLocalAsset
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['assetType'],
@@ -177,7 +179,10 @@ export const CreateStreamParamsSchema = z
       });
     }
 
-    if (settlementMode === SettlementMode.TokenStandardCustody && assetType === AssetType.ValidatorLocalAsset) {
+    if (
+      settlementMode === SettlementMode.TokenStandardCustody &&
+      assetType === AssetType.ValidatorLocalAsset
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['assetType'],
@@ -185,7 +190,10 @@ export const CreateStreamParamsSchema = z
       });
     }
 
-    if (settlementMode === SettlementMode.LocalAssetCustody && assetType !== AssetType.ValidatorLocalAsset) {
+    if (
+      settlementMode === SettlementMode.LocalAssetCustody &&
+      assetType !== AssetType.ValidatorLocalAsset
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['assetType'],
@@ -209,7 +217,8 @@ export const CreateStreamParamsSchema = z
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ['instrumentRef'],
-          message: 'instrumentRef is required for CIP-56 asset types in custody-backed settlement modes',
+          message:
+            'instrumentRef is required for CIP-56 asset types in custody-backed settlement modes',
         });
       }
     }
@@ -223,7 +232,10 @@ export const CreateStreamParamsSchema = z
     }
 
     // Settlement-mode-specific cross-field checks (holdingCid, escrowOperator)
-    if (settlementMode === SettlementMode.UtilityHoldingCustody || settlementMode === SettlementMode.LocalAssetCustody) {
+    if (
+      settlementMode === SettlementMode.UtilityHoldingCustody ||
+      settlementMode === SettlementMode.LocalAssetCustody
+    ) {
       if (!data.holdingCid) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -249,6 +261,13 @@ export const CreateStreamParamsSchema = z
     }
 
     if (settlementMode === SettlementMode.TokenStandardCustody) {
+      if (!data.escrowOperator) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['escrowOperator'],
+          message: 'escrowOperator is required for token-standard custody',
+        });
+      }
       if (!data.fundingReference) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

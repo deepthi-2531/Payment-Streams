@@ -2,9 +2,8 @@
  * @module lib/schemas/createStream
  *
  * Zod schema for the Create Stream wizard. Drives both client-side
- * form validation (via @hookform/resolvers/zod) and the disabled-state
- * gate against settlement modes whose Daml template is not currently
- * shipped (STR-103: TokenStandardCustody).
+ * form validation (via @hookform/resolvers/zod). The create flow is
+ * V2-only: CIP-56 V2 assets via CIP-0112 AllocationRequest semantics.
  */
 
 import { z } from 'zod';
@@ -64,60 +63,25 @@ const vestingConfigSchema = z.discriminatedUnion('vestingMode', [
 ]);
 
 /**
- * Per-mode settlement extras. Conditional shape that mirrors what
- * `commands/create.ts` requires per `SettlementMode`.
- *
- * [STR-103] `TokenStandardCustody` is REJECTED at the schema level
- * because the Daml template doesn't exist (`assertTokenStandardEscrowAvailable`
- * throws at runtime). We surface this in the wizard with a disabled
- * option + tooltip referencing STR-86 (lifecycle migration).
+ * V2 settlement extras. Legacy modes remain in the SDK enum so old
+ * persisted payloads can parse, but new dashboard submissions are
+ * TokenStandardCustody only.
  */
-const settlementConfigSchema = z.discriminatedUnion('settlementMode', [
-  z.object({
-    settlementMode: z.literal(SettlementMode.NumericLegacy),
-  }),
-  z.object({
-    settlementMode: z.literal(SettlementMode.UtilityHoldingCustody),
-    holdingCid: z.string().min(1, 'holdingCid required for UtilityHoldingCustody'),
-    escrowOperator: partyIdSchema,
-    senderAccount: z.string().min(1, 'senderAccount required'),
-    recipientAccount: z.string().min(1, 'recipientAccount required'),
-  }),
-  // STR-103: TokenStandardCustody intentionally REJECTED at schema validation time.
-  z.object({
-    settlementMode: z.literal(SettlementMode.TokenStandardCustody),
-    fundingReference: z.string().min(1, 'fundingReference required for TokenStandardCustody'),
-    escrowOperator: partyIdSchema,
-    senderAccount: z.string().min(1, 'senderAccount required'),
-    recipientAccount: z.string().min(1, 'recipientAccount required'),
-  }).refine(() => false, {
-    message:
-      'TokenStandardCustody is not currently available — Daml template missing ' +
-      '(see STR-103). Use UtilityHoldingCustody until STR-86 lands the ' +
-      'AllocationRequest-driven lifecycle.',
-  }),
-  z.object({
-    settlementMode: z.literal(SettlementMode.LocalAssetCustody),
-    holdingCid: z.string().min(1, 'holdingCid required for LocalAssetCustody'),
-    escrowOperator: partyIdSchema,
-    senderAccount: z.string().min(1, 'senderAccount required'),
-    recipientAccount: z.string().min(1, 'recipientAccount required'),
-  }),
-  z.object({
-    settlementMode: z.literal(SettlementMode.Delegated),
-  }),
-]);
+const settlementConfigSchema = z.object({
+  settlementMode: z.literal(SettlementMode.TokenStandardCustody),
+  fundingReference: z.string().min(1, 'fundingReference required for V2 allocation funding'),
+  escrowOperator: partyIdSchema,
+  senderAccount: z.string().min(1, 'senderAccount required'),
+  recipientAccount: z.string().min(1, 'recipientAccount required'),
+});
 
 /**
- * V1 instrument reference (4-field). Optional at this layer because
- * NumericLegacy streams don't need it; downstream schemas refine.
+ * V2 asset address as exposed to humans. The SDK still bridges through
+ * `InstrumentRef` internally, so buildCreateParams maps this to
+ * `{ depository: admin, issuer: admin, instrumentId, instrumentVersion: "v2" }`.
  */
-const instrumentRefSchema = z.object({
-  depository: partyIdSchema,
-  issuer: partyIdSchema,
-  instrumentId: z.string().min(1),
-  instrumentVersion: z.string().min(1),
-});
+const instrumentAdminSchema = partyIdSchema;
+const instrumentIdSchema = z.string().trim().min(1, 'Instrument id required');
 
 /**
  * Top-level Create Stream form schema. Refined to enforce
@@ -128,20 +92,18 @@ export const createStreamSchema = z
     recipient: partyIdSchema,
     totalDeposited: decimalStringSchema,
     assetType: z.enum(AssetType),
-    instrumentRef: instrumentRefSchema.optional(),
+    instrumentAdmin: instrumentAdminSchema,
+    instrumentId: instrumentIdSchema,
     startTime: datetimeLocalSchema,
     endTime: datetimeLocalSchema,
     cancellable: z.boolean().default(true),
   })
   .and(vestingConfigSchema)
   .and(settlementConfigSchema)
-  .refine(
-    (data) => new Date(data.startTime).getTime() < new Date(data.endTime).getTime(),
-    {
-      message: 'endTime must be strictly after startTime',
-      path: ['endTime'],
-    },
-  )
+  .refine((data) => new Date(data.startTime).getTime() < new Date(data.endTime).getTime(), {
+    message: 'endTime must be strictly after startTime',
+    path: ['endTime'],
+  })
   .refine(
     (data) =>
       data.vestingMode !== VestingMode.CliffLinear ||

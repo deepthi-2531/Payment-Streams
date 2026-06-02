@@ -11,6 +11,11 @@ const validRow = {
   recipient: 'bob::1220abcdef',
   amount: '100.00',
   asset: 'USDCx',
+  instrumentAdmin: 'amulet::1220admin',
+  fundingReference: 'allocation-001',
+  senderAccount: '{"owner":"alice::1220sender","id":"default"}',
+  recipientAccount: '{"owner":"bob::1220abcdef","id":"default"}',
+  escrowOperator: 'operator::1220escrow',
   start: '2026-01-01T00:00',
   end: '2026-06-01T00:00',
   vesting: 'Linear',
@@ -75,6 +80,14 @@ describe('batchRowSchema', () => {
     const r = batchRowSchema.safeParse({
       ...validRow,
       vesting: 'Mystery',
+    });
+    expect(r.success).toBe(false);
+  });
+
+  it('rejects invalid account JSON', () => {
+    const r = batchRowSchema.safeParse({
+      ...validRow,
+      senderAccount: 'not-json',
     });
     expect(r.success).toBe(false);
   });

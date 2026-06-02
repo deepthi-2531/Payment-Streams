@@ -45,14 +45,14 @@ Compiled to DARs and uploaded to the participant.
 | `StreamAdmin` | `CantonStreams.Stream.StreamAdmin` | Prefunded, bounded-term stream (V2 committed-iterated drive) |
 | `StreamFlow` + `StreamFlowAdmin` | `CantonStreams.Stream.StreamFlow*` | Iterated stream with variable funding (subscriptions, recurring billing) |
 | `MilestoneAdmin` | `CantonStreams.Stream.MilestoneAdmin` | Multi-leg AllocationSpec gated on `ConfirmMilestone` (KPI / grant unlocks) |
-| `AllocationBridge` | `CantonStreams.Settlement.AllocationBridge` | Shared V1/V2 view-builder helpers + conservation invariants |
+| `AllocationBridge` | `CantonStreams.Settlement.AllocationBridge` | Shared V2 view-builder helpers + conservation invariants |
 | `DelegatedPolicy` + `PolicyExecutionState` + `ExecutionLog` | `CantonStreams.Policy.*` | Bounded executor authority (rate limit, expiry, scope, action allow-list) |
 | `FeaturedAppActivity` | `CantonStreams.FeaturedApp.Activity` | Opt-in CIP-0047 `FeaturedAppActivityMarker` emission helper (CIP-0047 is scheduled to be replaced by CIP-0104 around end of July; treat as transitional) |
 | `UnifiedStreamRequest` | `CantonStreams.Workflow.UnifiedStream` | Propose / accept / counter-propose state machine |
 | `BatchCreateRequest` | `CantonStreams.Workflow.BatchCreate` | Sender-side bulk stream creation |
 | `RenewRequest` | `CantonStreams.Workflow.RenewStream` | Per-period renewal for `RenewableTerm` vesting |
 
-All stream-admin templates implement **both** `AllocationRequestV1` and `AllocationRequestV2` interfaces per CIP-0112 §5 (dual-interface compatibility), so V1-only wallets see V1 and V2-aware wallets see V2 multi-leg / batch / iterated features on the same on-ledger contract.
+Stream-admin templates expose the V2 `AllocationRequest` shape only. Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces alongside V1; this library integrates once the asset advertises the required V2 capabilities.
 
 ### `packages/sdk/` — TypeScript SDK
 
@@ -65,7 +65,7 @@ Browser-safe via `@canton-streams/sdk/browser` (excludes Node-only deps like gRP
 | `GrpcTransport` / `JsonApiTransport` | Interchangeable transports |
 | `BalanceTicker` | Client-side accrual display |
 | Accrual functions | `linearAccrual`, `cliffLinearAccrual`, `steppedAccrual`, `renewableTermAccrual` |
-| `getAssetCapabilities(instrumentRef)` | Runtime CIP-0112 capability negotiation; library uses the result to pick the right adapter automatically |
+| `getAssetCapabilities(instrumentRef)` | Runtime CIP-0112 capability gate; library rejects assets that lack required V2 allocation support |
 | Asset registry loader | Reads `config/asset-registry.json` for per-asset admin / Scan / wallet-gateway routing |
 
 ### `packages/proxy/` — REST proxy
@@ -99,7 +99,7 @@ Dev fallback: JWT-paste in sessionStorage (intended for local proxy use only).
 
 Runs `DelegatedPolicy` execution against the on-ledger bounds (rate limit, expiry, scope, action allow-list, cooldown). Useful for trust-minimized recurring withdrawals on behalf of recipients.
 
-## Settlement: CIP-56 V2 + CIP-0112 capability negotiation
+## Settlement: CIP-56 V2 + CIP-0112 Capability Gate
 
 There is one settlement path: **CIP-56 V2 Token Standard** via the CIP-0112 `AllocationRequest` pattern. The legacy V0/V1 paths from earlier releases (Utility holding, NumericLegacy, LocalAsset, hosted wallet-gateway settlement-reference) have been removed.
 
@@ -110,17 +110,13 @@ There is one settlement path: **CIP-56 V2 Token Standard** via the CIP-0112 `All
 3. Registry entry advertises which interfaces the asset implements:
    ```jsonc
    {
-     "transfersV1": true,    // legacy V1 transfer interface still implemented
-     "transfersV2": true,    // V2 transfer interface implemented
-     "allocationsV2": true,  // V2 AllocationRequest interface implemented
-     "transferEventsV2": true // V2 events stream available
+     "allocationsV2": true,     // required: V2 allocation support
+     "transferEventsV2": true   // preferred: V2 events stream available
    }
    ```
-4. Library picks the right adapter per CIP-0112 § 5:
-   - If `allocationsV2 && transfersV2` → use V2 multi-leg, batch settlement, lock-in-place custody, TransferEventsV2 event-driven advancement
-   - Otherwise → use V1 single-leg AllocationRequest
+4. Library accepts the asset only when `allocationsV2 = true`. If `transferEventsV2 = true`, the proxy uses the V2 event stream; otherwise the raw Ledger API V2 fallback is temporary backstop coverage.
 
-When an asset is upgraded from V1 to V1+V2 (e.g. when CC or USDCx publish their V2 interfaces), only the registry entry needs to change — application code keeps working and automatically benefits from V2 features.
+When an asset is upgraded to advertise V2 interfaces (e.g. when CC or USDCx publish them), only the registry entry needs to change — application code keeps working and benefits from V2 features.
 
 ### Per-asset routing
 
@@ -182,7 +178,7 @@ See [THREAT-MODEL.md](THREAT-MODEL.md) for the full threat analysis.
 
 | Config | Source | Purpose |
 |---|---|---|
-| `config/asset-registry.json` | In-repo, public | Per-asset admin / Scan / wallet-gateway routing, V1/V2 capability flags |
+| `config/asset-registry.json` | In-repo, public | Per-asset admin / Scan / wallet-gateway routing, V2 capability flags |
 | Proxy env vars | `.env` or runtime env | `CANTON_HOST/PORT`, `CANTON_JSON_API_URL`, `CANTON_SYNCHRONIZER_ID`, `CANTON_STREAMS_PACKAGE_ID`, `PROXY_AUTH_MODE`, `PROXY_SERVICE_TOKEN`, etc. |
 | Dashboard env vars | `packages/dashboard/.env.local` (gitignored) | `VITE_SKIP_WALLET_PICKER`, `VITE_WALLET_GATEWAY_URL`, `VITE_WC_PROJECT_ID` |
 | Local-deployment metadata | `config/local.<env>.json` (gitignored) | Per-environment party ids, package ids, contract ids for sandbox debug scripts |

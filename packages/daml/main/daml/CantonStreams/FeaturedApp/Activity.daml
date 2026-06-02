@@ -1,29 +1,20 @@
--- | CIP-0047 FeaturedAppActivity integration for Canton Payment Streams.
+-- | Transitional CIP-0047 FeaturedAppActivity integration for Canton
+-- Payment Streams.
 --
 -- This module is the **integration seam** between Canton Payment Streams'
 -- lifecycle events (Create, Accept, Withdraw, Cancel, Renew, TopUp,
--- Complete) and the Canton Foundation's featured-app rewards program
--- per CIP-0047.
+-- Complete) and the Canton Foundation's featured-app marker program.
 --
 -- ## Why this matters
 --
 -- CIP-0047 introduces `FeaturedAppActivityMarker` contracts that
 -- registered featured-app providers emit to signal that a transaction
--- added value to the network. The Canton Foundation reward pool
--- allocates ~62% of validator rewards to featured-app activity, capped
--- at ~$1.50 per marked transaction.
+-- added value to the network.
 --
--- For Canton Payment Streams adopters, this means:
---
---   - Stream lifecycle events incur ~$0.50 USD in CC burn (fees)
---   - Featured-app rewards credit ~$1.50 USD per event back from the
---     validator rewards pool
---   - Net: economically positive at scale for the operator
---
--- This is the lever that makes the M5 adoption-bonus economics work:
--- high-frequency events (weekly LP claims, daily infra withdrawals)
--- are net-positive for adopters before considering the underlying
--- business value.
+-- This module deliberately does NOT encode reward economics. CIP-0047
+-- is expected to be phased out when CIP-0104 goes live, and the active
+-- reward regime is network- and time-dependent. Treat this as an
+-- optional marker-emission seam, not as a budgeting primitive.
 --
 -- ## Integration model
 --
@@ -31,7 +22,7 @@
 -- Canton Foundation as part of the CIP-0047 standard. Until that
 -- template is depended on directly in `.lib/`, this module defines an
 -- **integration record** `FeaturedAppEmission` that captures what
--- would be emitted, and a **driver function** `recordEmission` that
+-- would be emitted, and a helper function `buildEmission` that
 -- consumers can wire into their settlement orchestrator.
 --
 -- When the upstream CIP-0047 DAR is added to `.lib/`, replace the
@@ -55,8 +46,7 @@ module CantonStreams.FeaturedApp.Activity where
 --                      by the Canton Foundation upon registration)
 --   activityType     — which lifecycle event triggered the emission
 --   amount           — economic value associated with the event,
---                      used by the Foundation to compute reward
---                      allocation per CIP-0047
+--                      used by the active reward regime, if any
 --   streamId         — Canton Payment Streams stream id for audit
 --   participant      — the party performing the action (sender,
 --                      recipient, executor, depending on activityType)
@@ -146,11 +136,10 @@ buildEmission cfg activityType amount streamId participant meta =
   else None
 
 -- | Default amount associated with each activity type, used when the
--- caller doesn't supply a more specific amount. The Canton Foundation
--- computes featured-app reward allocation per CIP-0047 based on the
--- amount field, so consumers SHOULD pass the actual economic value
--- (e.g. amount transferred on a Withdraw); the defaults here are a
--- safety net.
+-- caller doesn't supply a more specific amount. Consumers SHOULD pass
+-- the actual economic value where the active marker regime needs it
+-- (e.g. amount transferred on a Withdraw); the defaults here are only a
+-- neutral safety net.
 defaultActivityAmount : ActivityType -> Decimal
 defaultActivityAmount activityType = case activityType of
   ActivityCreate -> 0.0   -- creation events typically don't earn rewards (no value transferred yet)

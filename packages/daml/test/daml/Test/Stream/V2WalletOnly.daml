@@ -157,8 +157,8 @@ testWalletOnlyStreamFlow_TopUpPauseResume = script do
 -- confirmed out-of-order via batch + per-leg settles.
 --
 -- Verifies the operator can drive a milestone stream against the V2
--- vocabulary's multi-leg `Allocation_Settle` (per-leg via `extraArgs.legId`)
--- and `SettlementFactory_SettleBatch` (multi-leg atomic) without the
+-- vocabulary's multi-leg `Allocation_Settle` and
+-- `SettlementFactory_SettleBatch` (multi-leg atomic) without the
 -- wallet seeing N separate prompts — just one initial
 -- `AllocationFactory_Allocate` with N TransferLegSides.
 testWalletOnlyMilestoneAdmin_FourMilestonesOutOfOrder : Script ()

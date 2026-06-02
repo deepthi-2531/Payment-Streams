@@ -123,7 +123,7 @@ const DEFAULT_TRANSFER_EXECUTE_BEFORE_SEC = 86_400;
 
 /**
  * @deprecated Since STR-76 (plan §7.4). The settlement-reference path
- * is replaced by V1/V2 AllocationRequest. Use `dispatchSettlement` from
+ * is replaced by V2 AllocationRequest. Use `dispatchSettlement` from
  * `settlement/allocation-dispatch.ts`. Hard-removed in M4.
  */
 export class TransferOfferAdapter implements SettlementAdapter {
@@ -152,106 +152,91 @@ export class TransferOfferAdapter implements SettlementAdapter {
   constructor(config: TransferOfferAdapterConfig = {}) {
     this.baseUrl = trimToUndefined(
       config.baseUrl ??
-      process.env['CANTON_STREAMS_HOST_WALLET_URL'] ??
-      process.env['CANTON_STREAMS_WALLET_GATEWAY_URL'] ??
-      process.env['WALLET_GATEWAY_URL'],
+        process.env['CANTON_STREAMS_HOST_WALLET_URL'] ??
+        process.env['CANTON_STREAMS_WALLET_GATEWAY_URL'] ??
+        process.env['WALLET_GATEWAY_URL'],
     )?.replace(/\/+$/, '');
     this.transferPath =
       trimToUndefined(
-        config.transferPath ??
-        process.env['CANTON_STREAMS_TRANSFER_OFFER_TRANSFER_PATH'],
-      ) ??
-      '/api/wallet/transfer';
+        config.transferPath ?? process.env['CANTON_STREAMS_TRANSFER_OFFER_TRANSFER_PATH'],
+      ) ?? '/api/wallet/transfer';
     this.jsonApiUrl = trimToUndefined(
-      config.jsonApiUrl ??
-      process.env['CANTON_JSON_API_URL'],
+      config.jsonApiUrl ?? process.env['CANTON_JSON_API_URL'],
     )?.replace(/\/+$/, '');
     this.ledgerToken = trimToUndefined(
-      config.ledgerToken ??
-      process.env['CANTON_LEDGER_TOKEN'] ??
-      process.env['LEDGER_TOKEN'],
+      config.ledgerToken ?? process.env['CANTON_LEDGER_TOKEN'] ?? process.env['LEDGER_TOKEN'],
     );
     this.ledgerUserId = trimToUndefined(
       config.ledgerUserId ??
-      process.env['CANTON_USER_ID'] ??
-      process.env['COMMAND_USER_ID'] ??
-      process.env['CANTON_JSON_API_TOKEN_SUB'],
+        process.env['CANTON_USER_ID'] ??
+        process.env['COMMAND_USER_ID'] ??
+        process.env['CANTON_JSON_API_TOKEN_SUB'],
     );
     this.synchronizerId = trimToUndefined(
       config.synchronizerId ??
-      process.env['CANTON_STREAMS_WALLET_GATEWAY_SYNCHRONIZER_ID'] ??
-      process.env['SYNCHRONIZER_ID'],
+        process.env['CANTON_STREAMS_WALLET_GATEWAY_SYNCHRONIZER_ID'] ??
+        process.env['SYNCHRONIZER_ID'],
     );
     this.registryApiBase = trimToUndefined(
       config.registryApiBase ??
-      process.env['CANTON_STREAMS_DA_TOKEN_STANDARD_API'] ??
-      process.env['DA_TOKEN_STANDARD_API'] ??
-      process.env['TOKEN_STANDARD_API_BASE'] ??
-      process.env['REGISTRY_API_BASE'],
+        process.env['CANTON_STREAMS_DA_TOKEN_STANDARD_API'] ??
+        process.env['DA_TOKEN_STANDARD_API'] ??
+        process.env['TOKEN_STANDARD_API_BASE'] ??
+        process.env['REGISTRY_API_BASE'],
     )?.replace(/\/+$/, '');
     this.registryToken = trimToUndefined(
       config.registryToken ??
-      process.env['CANTON_STREAMS_REGISTRY_API_TOKEN'] ??
-      process.env['REGISTRY_API_TOKEN'],
+        process.env['CANTON_STREAMS_REGISTRY_API_TOKEN'] ??
+        process.env['REGISTRY_API_TOKEN'],
     );
     this.transferFactoryPathTemplate =
       trimToUndefined(
         config.transferFactoryPathTemplate ??
-        process.env['CANTON_STREAMS_TRANSFER_FACTORY_PATH_TEMPLATE'],
-      ) ??
-      DEFAULT_TRANSFER_FACTORY_PATH_TEMPLATE;
+          process.env['CANTON_STREAMS_TRANSFER_FACTORY_PATH_TEMPLATE'],
+      ) ?? DEFAULT_TRANSFER_FACTORY_PATH_TEMPLATE;
     this.transferFactoryTemplate =
       trimToUndefined(
-        config.transferFactoryTemplate ??
-        process.env['CANTON_STREAMS_TRANSFER_FACTORY_TEMPLATE'],
-      ) ??
-      DEFAULT_TRANSFER_FACTORY_TEMPLATE;
+        config.transferFactoryTemplate ?? process.env['CANTON_STREAMS_TRANSFER_FACTORY_TEMPLATE'],
+      ) ?? DEFAULT_TRANSFER_FACTORY_TEMPLATE;
     this.transferExecuteBeforeSec =
       parsePositiveInt(
         config.transferExecuteBeforeSec ??
-        process.env['CANTON_STREAMS_TRANSFER_EXECUTE_BEFORE_SEC'],
-      ) ??
-      DEFAULT_TRANSFER_EXECUTE_BEFORE_SEC;
+          process.env['CANTON_STREAMS_TRANSFER_EXECUTE_BEFORE_SEC'],
+      ) ?? DEFAULT_TRANSFER_EXECUTE_BEFORE_SEC;
     this.instrumentIds = new Set(
       readCsv(
-        config.instrumentIds ??
-        process.env['CANTON_STREAMS_TRANSFER_OFFER_INSTRUMENT_IDS'],
+        config.instrumentIds ?? process.env['CANTON_STREAMS_TRANSFER_OFFER_INSTRUMENT_IDS'],
         DEFAULT_INSTRUMENT_IDS,
       ).map(normalizeInstrumentId),
     );
     this.registrarPrefixes = readCsv(
-      config.registrarPrefixes ??
-      process.env['CANTON_STREAMS_TRANSFER_OFFER_REGISTRAR_PREFIXES'],
+      config.registrarPrefixes ?? process.env['CANTON_STREAMS_TRANSFER_OFFER_REGISTRAR_PREFIXES'],
       DEFAULT_REGISTRAR_PREFIXES,
     );
     this.walletTransferTotalTimeoutMs = parsePositiveInt(
       config.walletTransferTotalTimeoutMs ??
-      process.env['CANTON_STREAMS_TRANSFER_OFFER_TOTAL_TIMEOUT_MS'],
+        process.env['CANTON_STREAMS_TRANSFER_OFFER_TOTAL_TIMEOUT_MS'],
     );
     this.cip56MaxAttempts = parsePositiveInt(
-      config.cip56MaxAttempts ??
-      process.env['CANTON_STREAMS_TRANSFER_OFFER_MAX_ATTEMPTS'],
+      config.cip56MaxAttempts ?? process.env['CANTON_STREAMS_TRANSFER_OFFER_MAX_ATTEMPTS'],
     );
     this.cip56MaxCommandAttempts = parsePositiveInt(
       config.cip56MaxCommandAttempts ??
-      process.env['CANTON_STREAMS_TRANSFER_OFFER_MAX_COMMAND_ATTEMPTS'],
+        process.env['CANTON_STREAMS_TRANSFER_OFFER_MAX_COMMAND_ATTEMPTS'],
     );
     this.cip56SubmitTimeoutMs = parsePositiveInt(
-      config.cip56SubmitTimeoutMs ??
-      process.env['CANTON_STREAMS_TRANSFER_OFFER_SUBMIT_TIMEOUT_MS'],
+      config.cip56SubmitTimeoutMs ?? process.env['CANTON_STREAMS_TRANSFER_OFFER_SUBMIT_TIMEOUT_MS'],
     );
     this.pendingPollAttempts =
       parsePositiveInt(
         config.pendingPollAttempts ??
-        process.env['CANTON_STREAMS_TRANSFER_OFFER_PENDING_POLL_ATTEMPTS'],
-      ) ??
-      24;
+          process.env['CANTON_STREAMS_TRANSFER_OFFER_PENDING_POLL_ATTEMPTS'],
+      ) ?? 24;
     this.pendingPollIntervalMs =
       parsePositiveInt(
         config.pendingPollIntervalMs ??
-        process.env['CANTON_STREAMS_TRANSFER_OFFER_PENDING_POLL_INTERVAL_MS'],
-      ) ??
-      2_500;
+          process.env['CANTON_STREAMS_TRANSFER_OFFER_PENDING_POLL_INTERVAL_MS'],
+      ) ?? 2_500;
     this.credentials = {
       ...readHostedWalletCredentialMapFromEnv(),
       ...(config.credentials ?? {}),
@@ -280,8 +265,8 @@ export class TransferOfferAdapter implements SettlementAdapter {
     if (!this.baseUrl) {
       throw new Error(
         'DA Utility / TransferOffer settlement requires CANTON_STREAMS_HOST_WALLET_URL ' +
-        '(or CANTON_STREAMS_WALLET_GATEWAY_URL / WALLET_GATEWAY_URL) pointing at a host app ' +
-        'that exposes /api/wallet/transfer and /api/wallet-gateway/*.',
+          '(or CANTON_STREAMS_WALLET_GATEWAY_URL / WALLET_GATEWAY_URL) pointing at a host app ' +
+          'that exposes /api/wallet/transfer and /api/wallet-gateway/*.',
       );
     }
 
@@ -290,7 +275,10 @@ export class TransferOfferAdapter implements SettlementAdapter {
     const receiverCredentials = this.resolveSigningCredentials(params.to);
     const requestId = params.reference ?? `streams-transfer-${Date.now()}`;
     const memo = params.reference ?? requestId;
-    const pendingSnapshot = await this.snapshotPendingTransfers(params.to, receiverCredentials.appToken);
+    const pendingSnapshot = await this.snapshotPendingTransfers(
+      params.to,
+      receiverCredentials.appToken,
+    );
 
     logger.info(
       {
@@ -338,7 +326,9 @@ export class TransferOfferAdapter implements SettlementAdapter {
             ...(this.cip56MaxCommandAttempts
               ? { cip56MaxCommandAttempts: this.cip56MaxCommandAttempts }
               : {}),
-            ...(this.cip56SubmitTimeoutMs ? { cip56SubmitTimeoutMs: this.cip56SubmitTimeoutMs } : {}),
+            ...(this.cip56SubmitTimeoutMs
+              ? { cip56SubmitTimeoutMs: this.cip56SubmitTimeoutMs }
+              : {}),
           },
           senderCredentials.appToken,
         );
@@ -383,9 +373,8 @@ export class TransferOfferAdapter implements SettlementAdapter {
         },
       );
     } catch (error) {
-      const settlementReference = extractCompletedSettlementReferenceFromTransferResponse(
-        transferResponse,
-      );
+      const settlementReference =
+        extractCompletedSettlementReferenceFromTransferResponse(transferResponse);
       if (settlementReference) {
         logger.info(
           {
@@ -404,7 +393,11 @@ export class TransferOfferAdapter implements SettlementAdapter {
       throw error;
     }
 
-    const execute = await this.acceptPendingTransfer(pendingTransfer, params.to, receiverCredentials);
+    const execute = await this.acceptPendingTransfer(
+      pendingTransfer,
+      params.to,
+      receiverCredentials,
+    );
     const settlementReference = extractSettlementReferenceFromWalletGatewayResult(execute);
 
     logger.info(
@@ -436,13 +429,11 @@ export class TransferOfferAdapter implements SettlementAdapter {
 
     throw new Error(
       `No hosted wallet appToken configured for party ${party}. ` +
-      'Provide it in CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON.',
+        'Provide it in CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON.',
     );
   }
 
-  private resolveOptionalSigningCredentials(
-    party: string,
-  ): TransferOfferSigningCredentials | null {
+  private resolveOptionalSigningCredentials(party: string): TransferOfferSigningCredentials | null {
     const credentials = this.credentials[party];
     if (
       credentials?.appToken &&
@@ -466,17 +457,17 @@ export class TransferOfferAdapter implements SettlementAdapter {
 
     throw new Error(
       `No hosted wallet signer configured for receiver party ${party}. ` +
-      'TransferOffer settlement needs appToken, publicKey, and privateKey/privateKeyFile.',
+        'TransferOffer settlement needs appToken, publicKey, and privateKey/privateKeyFile.',
     );
   }
 
   private canUseInteractiveSenderTransfer(): boolean {
     return Boolean(
       this.jsonApiUrl &&
-      this.ledgerToken &&
-      this.ledgerUserId &&
-      this.synchronizerId &&
-      this.registryApiBase,
+        this.ledgerToken &&
+        this.ledgerUserId &&
+        this.synchronizerId &&
+        this.registryApiBase,
     );
   }
 
@@ -494,7 +485,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
     if (inputHoldingCids.length === 0) {
       throw new Error(
         `No sender holdings found for ${params.instrumentId} at registrar ${params.registrar}; ` +
-        `cannot submit TransferFactory_Transfer for ${params.from}.`,
+          `cannot submit TransferFactory_Transfer for ${params.from}.`,
       );
     }
 
@@ -521,8 +512,10 @@ export class TransferOfferAdapter implements SettlementAdapter {
     }
 
     const normalizedContext = normalizeChoiceContextPayload(registryPayload);
-    const choiceArgumentWithContext =
-      applyChoiceContextToChoiceArgument(transferChoiceArgument, normalizedContext);
+    const choiceArgumentWithContext = applyChoiceContextToChoiceArgument(
+      transferChoiceArgument,
+      normalizedContext,
+    );
 
     return this.prepareAndExecuteInteractiveExercise(
       params.from,
@@ -563,34 +556,31 @@ export class TransferOfferAdapter implements SettlementAdapter {
       throw new Error(`ledger-end response missing offset: ${JSON.stringify(ledgerEnd)}`);
     }
 
-    const payload = await this.requestLedgerJson<unknown>(
-      '/v2/state/active-contracts',
-      {
-        method: 'POST',
-        body: {
-          userId: this.ledgerUserId,
-          activeAtOffset: offset,
-          filter: {
-            filtersByParty: {
-              [senderParty]: {
-                cumulative: [
-                  {
-                    identifierFilter: {
-                      WildcardFilter: {
-                        value: {
-                          includeCreatedEventBlob: false,
-                        },
+    const payload = await this.requestLedgerJson<unknown>('/v2/state/active-contracts', {
+      method: 'POST',
+      body: {
+        userId: this.ledgerUserId,
+        activeAtOffset: offset,
+        filter: {
+          filtersByParty: {
+            [senderParty]: {
+              cumulative: [
+                {
+                  identifierFilter: {
+                    WildcardFilter: {
+                      value: {
+                        includeCreatedEventBlob: false,
                       },
                     },
                   },
-                ],
-              },
+                },
+              ],
             },
           },
-          verbose: true,
         },
+        verbose: true,
       },
-    );
+    });
 
     return extractHoldingCandidates(payload, senderParty);
   }
@@ -606,9 +596,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
   ): Promise<Record<string, unknown>> {
     const synchronizerId = trimToUndefined(disclosedSynchronizerId) ?? this.synchronizerId;
     if (!synchronizerId) {
-      throw new Error(
-        `TransferFactory interactive submit for ${party} requires SYNCHRONIZER_ID.`,
-      );
+      throw new Error(`TransferFactory interactive submit for ${party} requires SYNCHRONIZER_ID.`);
     }
 
     const prepared = await this.requestLedgerJson<InteractivePrepareResponse>(
@@ -641,9 +629,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
     const preparedTransactionHash = trimToUndefined(prepared.preparedTransactionHash);
     const preparedTransaction = trimToUndefined(prepared.preparedTransaction);
     if (!preparedTransactionHash || !preparedTransaction) {
-      throw new Error(
-        `Interactive prepare response missing hash/transaction for ${party}.`,
-      );
+      throw new Error(`Interactive prepare response missing hash/transaction for ${party}.`);
     }
 
     const executePayload = {
@@ -693,20 +679,14 @@ export class TransferOfferAdapter implements SettlementAdapter {
         throw error;
       }
 
-      return this.requestLedgerJson<Record<string, unknown>>(
-        '/v2/interactive-submission/execute',
-        {
-          method: 'POST',
-          body: executePayload,
-        },
-      );
+      return this.requestLedgerJson<Record<string, unknown>>('/v2/interactive-submission/execute', {
+        method: 'POST',
+        body: executePayload,
+      });
     }
   }
 
-  private async requestRegistryJson<T>(
-    url: string,
-    body: Record<string, unknown>,
-  ): Promise<T> {
+  private async requestRegistryJson<T>(url: string, body: Record<string, unknown>): Promise<T> {
     const response = await this.fetchImpl(url, {
       method: 'POST',
       headers: {
@@ -727,8 +707,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
     }
 
     if (!response.ok) {
-      const rendered =
-        typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+      const rendered = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
       throw new Error(`HTTP ${response.status} registry ${url}: ${rendered}`);
     }
 
@@ -749,10 +728,9 @@ export class TransferOfferAdapter implements SettlementAdapter {
         return await this.requestRegistryJson<T>(url, choiceArgument);
       } catch (secondError) {
         const firstMessage = firstError instanceof Error ? firstError.message : String(firstError);
-        const secondMessage = secondError instanceof Error ? secondError.message : String(secondError);
-        throw new Error(
-          `${firstMessage}; fallback request also failed: ${secondMessage}`,
-        );
+        const secondMessage =
+          secondError instanceof Error ? secondError.message : String(secondError);
+        throw new Error(`${firstMessage}; fallback request also failed: ${secondMessage}`);
       }
     }
   }
@@ -790,18 +768,14 @@ export class TransferOfferAdapter implements SettlementAdapter {
     }
 
     if (!response.ok) {
-      const rendered =
-        typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+      const rendered = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
       throw new Error(`HTTP ${response.status} ${path}: ${rendered}`);
     }
 
     return (payload ?? {}) as T;
   }
 
-  private async snapshotPendingTransfers(
-    party: string,
-    token: string,
-  ): Promise<Set<string>> {
+  private async snapshotPendingTransfers(party: string, token: string): Promise<Set<string>> {
     const rows = await this.listPendingTransfers(party, token);
     return new Set(rows.map((row) => row.contractId));
   }
@@ -858,7 +832,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
 
     throw new Error(
       `Pending transfer for ${expected.instrumentId} from ${expected.sender.split('::')[0]} ` +
-      `to ${party.split('::')[0]} did not appear after ${this.pendingPollAttempts} attempts.`,
+        `to ${party.split('::')[0]} did not appear after ${this.pendingPollAttempts} attempts.`,
     );
   }
 
@@ -877,7 +851,9 @@ export class TransferOfferAdapter implements SettlementAdapter {
           contractId: pendingTransfer.contractId,
           ...(pendingTransfer.templateId ? { templateId: pendingTransfer.templateId } : {}),
           ...(pendingTransfer.instrumentId ? { instrumentId: pendingTransfer.instrumentId } : {}),
-          ...(pendingTransfer.instrumentAdmin ? { instrumentAdmin: pendingTransfer.instrumentAdmin } : {}),
+          ...(pendingTransfer.instrumentAdmin
+            ? { instrumentAdmin: pendingTransfer.instrumentAdmin }
+            : {}),
         },
       },
       credentials.appToken,
@@ -895,7 +871,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
     if (expectedPublicKey && expectedPublicKey !== credentials.publicKey) {
       throw new Error(
         `wallet-gateway expected public key ${expectedPublicKey}, ` +
-        `but the configured signer for ${party} uses ${credentials.publicKey}.`,
+          `but the configured signer for ${party} uses ${credentials.publicKey}.`,
       );
     }
 
@@ -942,8 +918,7 @@ export class TransferOfferAdapter implements SettlementAdapter {
     }
 
     if (!response.ok) {
-      const rendered =
-        typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+      const rendered = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
       throw new Error(`HTTP ${response.status} hosted wallet ${path}: ${rendered}`);
     }
 
@@ -952,7 +927,9 @@ export class TransferOfferAdapter implements SettlementAdapter {
 }
 
 function normalizeInstrumentId(value: string): string {
-  return String(value ?? '').trim().toUpperCase();
+  return String(value ?? '')
+    .trim()
+    .toUpperCase();
 }
 
 function fingerprintFromParty(party: string): string {
@@ -971,7 +948,9 @@ function buildRegistryUrl(
 ): string {
   const normalizedBase = trimToUndefined(baseUrl);
   if (!normalizedBase) {
-    throw new Error('DA token-standard transfer requires DA_TOKEN_STANDARD_API / REGISTRY_API_BASE.');
+    throw new Error(
+      'DA token-standard transfer requires DA_TOKEN_STANDARD_API / REGISTRY_API_BASE.',
+    );
   }
 
   const renderedPath = pathTemplate.replace(/\{([^}]+)\}/g, (_match, key) =>
@@ -1074,14 +1053,16 @@ function normalizeChoiceContextPayload(
 }
 
 function pickFactoryId(rawPayload: Record<string, unknown>): string {
-  return trimToUndefined(
-    asText(rawPayload['factoryId']) ??
-    asText(rawPayload['factoryCid']) ??
-    asText(rawPayload['contractId']) ??
-    asText(asRecord(rawPayload['factory'])['contractId']) ??
-    asText(asRecord(rawPayload['factory'])['id']) ??
-    asText(asRecord(rawPayload['result'])['factoryId']),
-  ) ?? '';
+  return (
+    trimToUndefined(
+      asText(rawPayload['factoryId']) ??
+        asText(rawPayload['factoryCid']) ??
+        asText(rawPayload['contractId']) ??
+        asText(asRecord(rawPayload['factory'])['contractId']) ??
+        asText(asRecord(rawPayload['factory'])['id']) ??
+        asText(asRecord(rawPayload['result'])['factoryId']),
+    ) ?? ''
+  );
 }
 
 function sanitizeMetaValues(values: Record<string, unknown>): Record<string, string> {
@@ -1097,36 +1078,35 @@ function sanitizeMetaValues(values: Record<string, unknown>): Record<string, str
 
 function extractHoldingCandidates(payload: unknown, senderParty: string): HoldingCandidate[] {
   return extractActiveContractRows(payload).reduce<HoldingCandidate[]>((out, row) => {
-      const source = row.payload;
-      const owner =
-        trimToUndefined(
-          asText(source['owner']) ??
+    const source = row.payload;
+    const owner =
+      trimToUndefined(
+        asText(source['owner']) ??
           asText(source['holder']) ??
           asText(asRecord(source['account'])['owner']),
-        ) ?? senderParty;
-      if (owner !== senderParty) {
-        return out;
-      }
+      ) ?? senderParty;
+    if (owner !== senderParty) {
+      return out;
+    }
 
-      const instrument =
-        parseInstrument(source['instrumentId'] ?? source['instrument']);
-      const amount = parseDecimal(
-        source['amount'] ??
+    const instrument = parseInstrument(source['instrumentId'] ?? source['instrument']);
+    const amount = parseDecimal(
+      source['amount'] ??
         source['initialAmount'] ??
         source['availableAmount'] ??
         source['unlockedAmount'],
-      );
-      if (!instrument || !amount) {
-        return out;
-      }
-
-      out.push({
-        contractId: row.contractId,
-        instrument,
-        amount,
-      });
+    );
+    if (!instrument || !amount) {
       return out;
-    }, []);
+    }
+
+    out.push({
+      contractId: row.contractId,
+      instrument,
+      amount,
+    });
+    return out;
+  }, []);
 }
 
 function extractActiveContractRows(
@@ -1163,8 +1143,9 @@ function extractActiveContractRows(
         payload: payloadRecord,
       };
     })
-    .filter((row): row is { contractId: string; templateId: string; payload: Record<string, unknown> } =>
-      Boolean(row?.contractId),
+    .filter(
+      (row): row is { contractId: string; templateId: string; payload: Record<string, unknown> } =>
+        Boolean(row?.contractId),
     );
 }
 
@@ -1182,22 +1163,19 @@ function normalizeTemplateId(value: unknown): string {
   return [packageId, moduleName, entityName].filter(Boolean).join(':');
 }
 
-function parseInstrument(
-  value: unknown,
-): { id: string; admin?: string } | null {
+function parseInstrument(value: unknown): { id: string; admin?: string } | null {
   const record = asRecord(value);
-  const id =
-    trimToUndefined(asText(record['id']) ?? asText(record['instrumentId']));
+  const id = trimToUndefined(asText(record['id']) ?? asText(record['instrumentId']));
   if (!id) {
     return null;
   }
 
   const admin = trimToUndefined(
     asText(record['admin']) ??
-    asText(record['issuer']) ??
-    asText(record['instrumentAdmin']) ??
-    asText(record['source']) ??
-    asText(record['registrar']),
+      asText(record['issuer']) ??
+      asText(record['instrumentAdmin']) ??
+      asText(record['source']) ??
+      asText(record['registrar']),
   );
   return admin ? { id, admin } : { id };
 }
@@ -1241,9 +1219,7 @@ function selectHoldingContractIds(
   holdings: readonly HoldingCandidate[],
   amount: Decimal,
 ): string[] {
-  const sorted = holdings
-    .slice()
-    .sort((left, right) => right.amount.comparedTo(left.amount));
+  const sorted = holdings.slice().sort((left, right) => right.amount.comparedTo(left.amount));
   const selected: string[] = [];
   let total = new Decimal(0);
 
@@ -1291,10 +1267,7 @@ function parsePositiveInt(value: number | string | undefined): number | undefine
 
 function deserializePendingTransfer(raw: unknown): PendingTransferRecord | null {
   const record = asRecord(raw);
-  const contractId =
-    asText(record['contractId']) ??
-    asText(record['contract_id']) ??
-    '';
+  const contractId = asText(record['contractId']) ?? asText(record['contract_id']) ?? '';
   if (!contractId) {
     return null;
   }
@@ -1320,9 +1293,7 @@ function deserializePendingTransfer(raw: unknown): PendingTransferRecord | null 
       asText(record['instrumentAdmin']) ??
       asText(record['instrument_admin']) ??
       undefined,
-    requestedAt: record['requestedAt']
-      ? deserializeTime(record['requestedAt'])
-      : undefined,
+    requestedAt: record['requestedAt'] ? deserializeTime(record['requestedAt']) : undefined,
     expired: asBoolean(record['expired'], false) || asBoolean(record['isExpired'], false),
   };
 }
@@ -1339,14 +1310,17 @@ function findMatchingPendingTransfer(
   },
 ): PendingTransferRecord | null {
   const matches = rows
-    .filter((row) =>
-      !excludedContractIds.has(row.contractId) &&
-      !row.expired &&
-      row.sender === expected.sender &&
-      row.receiver === expected.receiver &&
-      row.amount?.equals(expected.amount) &&
-      (!row.instrumentId || normalizeInstrumentId(row.instrumentId) === normalizeInstrumentId(expected.instrumentId)) &&
-      (!row.instrumentAdmin || row.instrumentAdmin === expected.instrumentAdmin),
+    .filter(
+      (row) =>
+        !excludedContractIds.has(row.contractId) &&
+        !row.expired &&
+        row.sender === expected.sender &&
+        row.receiver === expected.receiver &&
+        row.amount?.equals(expected.amount) &&
+        (!row.instrumentId ||
+          normalizeInstrumentId(row.instrumentId) ===
+            normalizeInstrumentId(expected.instrumentId)) &&
+        (!row.instrumentAdmin || row.instrumentAdmin === expected.instrumentAdmin),
     )
     .sort(comparePendingTransferPriority);
 
@@ -1357,8 +1331,7 @@ function comparePendingTransferPriority(
   left: PendingTransferRecord,
   right: PendingTransferRecord,
 ): number {
-  const requestedAtOrder =
-    (right.requestedAt?.getTime() ?? 0) - (left.requestedAt?.getTime() ?? 0);
+  const requestedAtOrder = (right.requestedAt?.getTime() ?? 0) - (left.requestedAt?.getTime() ?? 0);
   if (requestedAtOrder !== 0) {
     return requestedAtOrder;
   }
@@ -1381,10 +1354,26 @@ function extractCompletedSettlementReferenceFromTransferResponse(
     readNestedTextField(payload, ['settlement', 'externalTransactionHash']),
     readNestedTextField(payload, ['transfer', 'settlement', 'externalTransactionHash']),
     readNestedTextField(payload, ['commandId']),
-    readNestedTextField(payload, ['settlement', 'acceptResult', 'externalSigning', 'completionUpdateId']),
-    readNestedTextField(payload, ['transfer', 'settlement', 'acceptResult', 'externalSigning', 'completionUpdateId']),
+    readNestedTextField(payload, [
+      'settlement',
+      'acceptResult',
+      'externalSigning',
+      'completionUpdateId',
+    ]),
+    readNestedTextField(payload, [
+      'transfer',
+      'settlement',
+      'acceptResult',
+      'externalSigning',
+      'completionUpdateId',
+    ]),
     readNestedTextField(payload, ['settlement', 'acceptResult', 'externalTransactionHash']),
-    readNestedTextField(payload, ['transfer', 'settlement', 'acceptResult', 'externalTransactionHash']),
+    readNestedTextField(payload, [
+      'transfer',
+      'settlement',
+      'acceptResult',
+      'externalTransactionHash',
+    ]),
   ];
 
   for (const candidate of candidates) {
@@ -1396,10 +1385,7 @@ function extractCompletedSettlementReferenceFromTransferResponse(
   return undefined;
 }
 
-function readNestedTextField(
-  value: unknown,
-  path: readonly string[],
-): string | undefined {
+function readNestedTextField(value: unknown, path: readonly string[]): string | undefined {
   let cursor: unknown = value;
   for (const step of path) {
     if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) {
@@ -1412,7 +1398,7 @@ function readNestedTextField(
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
+    ? (value as Record<string, unknown>)
     : {};
 }
 

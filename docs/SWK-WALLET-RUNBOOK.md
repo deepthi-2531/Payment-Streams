@@ -1,8 +1,14 @@
-# Splice Wallet Kernel (SWK) — Local Signup / Sign-In Runbook
+# Amulet Wallet / Splice Wallet Kernel — Local Signup / Sign-In Runbook
 
 Companion to `TESTNET-RUNBOOK.md`. Covers wiring the dashboard's
-`@canton-network/dapp-sdk` to a local Splice Wallet Kernel for the
+`@canton-network/dapp-sdk` to a local Amulet wallet gateway for the
 CIP-103 wallet flow (signup → sign-in → list accounts → prepareExecute).
+
+For Token Standard V2 stream testing, prefer the Amulet wallet that runs
+on a Splice validator LocalNet built from
+`canton-network/splice@token-standard-v2-upcoming`. Issue
+[`canton-network/splice#5498`](https://github.com/canton-network/splice/issues/5498)
+tracks the iterated-settlement Amulet wallet support this repo relies on.
 
 ---
 
@@ -14,7 +20,7 @@ CIP-103 wallet flow (signup → sign-in → list accounts → prepareExecute).
     │ JSON-RPC 2.0 over HTTP+CORS
     │ method: connect / status / listAccounts / prepareExecute / signMessage / …
     ▼
-   Wallet Gateway Remote (:3030)   <— CIP-103 dapp endpoint at /api/v0/dapp
+   Amulet Wallet Gateway (:3030)   <— CIP-103 dapp endpoint at /api/v0/dapp
     │                              <— user UI at /login/, /parties/, /activities/
     │
     ├── Identity Providers (IDPs)
@@ -38,19 +44,19 @@ set `VITE_WALLET_GATEWAY_URL` in `packages/dashboard/.env.local`.
 
 ## Prerequisites
 
-1. SWK monorepo checked out and built. Refer to the upstream
-   [splice-wallet-kernel](https://github.com/canton-network/splice-wallet-kernel)
-   README for the supported run process (typically `pm2` with the
-   bundled `ecosystem.config.js`).
+1. Splice LocalNet checked out from `token-standard-v2-upcoming` and
+   running with the validator Amulet wallet enabled. The older standalone
+   SWK run process is still useful for CIP-103 smoke tests, but it is
+   not the target for Token Standard V2 iterated-settlement E2E.
 
 2. Ports we depend on:
 
-   | Port | Service                          | Role for our dashboard       |
-   |-----:|----------------------------------|------------------------------|
-   | 3030 | wallet-gateway-remote            | CIP-103 endpoint + user UI   |
-   | 8889 | mock-oauth2-server               | OAuth IDP for local network  |
-   | 5001…5202 | bundled Canton sandbox     | participant for `canton:local-*` networks |
-   | 8080 | wallet-gateway-extension dev     | extension preview (unused by us) |
+   |      Port | Service                      | Role for our dashboard                    |
+   | --------: | ---------------------------- | ----------------------------------------- |
+   |      3030 | Amulet wallet gateway        | CIP-103 endpoint + user UI                |
+   |      8889 | mock-oauth2-server           | OAuth IDP for local network               |
+   | 5001…5202 | bundled Canton sandbox       | participant for `canton:local-*` networks |
+   |      8080 | wallet-gateway-extension dev | extension preview (unused by us)          |
 
    Verify with `lsof -nP -iTCP -sTCP:LISTEN`.
 
@@ -65,7 +71,7 @@ set `VITE_WALLET_GATEWAY_URL` in `packages/dashboard/.env.local`.
    Restart the wallet-gateway after editing.
 
 4. Our proxy + dashboard running (`pnpm --filter @canton-streams/proxy
-   dev` and `pnpm --filter @canton-streams/dashboard dev`) per
+dev` and `pnpm --filter @canton-streams/dashboard dev`) per
    `TESTNET-RUNBOOK.md`.
 
 ---
@@ -91,14 +97,15 @@ set `VITE_WALLET_GATEWAY_URL` in `packages/dashboard/.env.local`.
 ### Skipping the picker (dev convenience)
 
 Set `VITE_SKIP_WALLET_PICKER=true` in `packages/dashboard/.env.local`
-to have `auth.tsx` install a custom no-UI picker that auto-selects the
-remote SWK. Useful when only one wallet is available locally and the
-picker UI is noise.
+to have `auth.tsx` create a dedicated `DappSDK({ walletPicker })`
+instance that auto-selects the configured remote Amulet wallet. Useful
+when only one wallet is available locally and the picker UI is noise.
 
 ```env
 # packages/dashboard/.env.local
 VITE_SKIP_WALLET_PICKER=true
 VITE_WALLET_GATEWAY_URL=http://localhost:3030/api/v0/dapp
+VITE_WALLET_NAME=Splice Amulet Wallet (LocalNet V2)
 ```
 
 The flag is off by default and never read in production builds.
@@ -180,7 +187,7 @@ For CI without a real browser, use the SWK conformance suite (STR-13)
 in `packages/sdk/src/cip103/*.test.ts` — it exercises the JSON-RPC
 contract directly without any popup.
 
-For headless flows that *do* need to drive the picker, prefer the
+For headless flows that _do_ need to drive the picker, prefer the
 `VITE_SKIP_WALLET_PICKER=true` mode described above; it removes the
 popup entirely.
 
