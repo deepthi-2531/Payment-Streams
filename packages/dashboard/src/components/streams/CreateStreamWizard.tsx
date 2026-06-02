@@ -6,7 +6,7 @@
  *   1. Recipient & amount   (recipient, totalDeposited, assetType)
  *   2. Schedule & vesting   (start/end + vesting mode + mode-specific fields + cancellable)
  *   3. Settlement & custody (settlement mode + custody-specific fields)
- *   4. Review & sign        (read-only summary + submit)
+ *   4. Review & create      (read-only summary + submit)
  *
  * Same source-of-truth as the single-page form: `createStreamSchema`
  * drives every field's validation (per-step we just call
@@ -54,7 +54,7 @@ const STEPS: readonly StepDef[] = [
   { id: 'recipient', label: 'Recipient & amount' },
   { id: 'schedule', label: 'Schedule & vesting' },
   { id: 'settlement', label: 'Settlement' },
-  { id: 'review', label: 'Review & sign' },
+  { id: 'review', label: 'Review & create' },
 ];
 
 /**
@@ -231,16 +231,16 @@ export function CreateStreamWizard() {
                 >
                   {submitted ? (
                     <>
-                      <Check size={14} /> Proposed
+                      <Check size={14} /> Created
                     </>
                   ) : createStream.isPending ? (
                     <>
                       <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />{' '}
-                      Signing…
+                      Creating…
                     </>
                   ) : (
                     <>
-                      <Sparkles size={14} /> Sign &amp; propose
+                      <Sparkles size={14} /> Create stream
                     </>
                   )}
                 </button>
@@ -785,8 +785,8 @@ function StepReview({
     <>
       <StepHeader
         number="4"
-        title="Review & sign"
-        subtitle="Final check before sending the proposal to the recipient."
+        title="Review & create"
+        subtitle="Final check before submitting. The stream goes live on submit; recipient funding approval happens in the Amulet wallet."
       />
 
       {success && (
