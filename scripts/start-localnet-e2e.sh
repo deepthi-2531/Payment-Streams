@@ -103,10 +103,17 @@ build_localnet_amulet_wallet() {
   #
   # Critically, that stack does NOT expose a CIP-103 JSON-RPC wallet
   # gateway at :3030/api/v0/dapp. That endpoint is provided by the separate
-  # Splice Wallet Kit (SWK), which the operator must run alongside LocalNet
-  # (clone canton-network/splice-wallet-kit, `npm run start`, point
-  # CANTON_NODE_URL at the app-user validator JSON API on :2975 or the
-  # app-provider on :3975, and add this dashboard's origin to allowedOrigins).
+  # Splice Wallet Kernel (historically "SWK"), now canonically hosted at
+  # canton-network/wallet. The operator must run it alongside LocalNet:
+  #
+  #   git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
+  #   cd .splice-wallet-kernel && yarn install && yarn build:all && yarn start:all
+  #
+  # Point its CANTON_NODE_URL at the app-user validator JSON API on :2975
+  # or the app-provider on :3975, and add this dashboard's origin to
+  # allowedOrigins. The gateway daemon is published as
+  # `@canton-network/wallet-gateway-remote`; the in-page client this
+  # dashboard imports is `@canton-network/dapp-sdk` (same monorepo).
   #
   # There is therefore no honest one-command path from a stock CI runner to
   # a working $WALLET_GATEWAY_URL at the pinned commit. We print the verified
@@ -129,13 +136,30 @@ build_localnet_amulet_wallet() {
 
     HONEST GAP: the pinned commit does NOT publish a CIP-103 JSON-RPC
     wallet gateway at $WALLET_GATEWAY_URL as part of LocalNet. That
-    endpoint comes from the separate Splice Wallet Kit (SWK), which must
-    be run alongside LocalNet by the operator. There is no canonical
-    one-command path at $SPLICE_PINNED_COMMIT that yields :3030.
+    endpoint comes from the separate Splice Wallet Kernel (historically
+    "SWK"), now canonically hosted at canton-network/wallet
+    (https://github.com/canton-network/wallet). It must be run alongside
+    LocalNet by the operator. There is no canonical one-command path at
+    $SPLICE_PINNED_COMMIT that yields :3030.
+
+    Verified upstream startup (from canton-network/wallet README):
+
+      git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
+      cd .splice-wallet-kernel
+      yarn install
+      yarn build:all
+      yarn start:all
+
+    Then probe the CIP-103 gateway (port is the documented default; the
+    upstream quickstart does not pin it):
+
+      curl -fsS -X POST $WALLET_GATEWAY_URL \\
+        -H 'content-type: application/json' \\
+        --data '{"jsonrpc":"2.0","id":"probe","method":"status","params":{}}'
 
     To proceed, bring up the wallet by whatever path your environment
-    uses (LocalNet + SWK, an externally-managed CIP-103 gateway, or a
-    mock), then re-run this script with:
+    uses (LocalNet + Splice Wallet Kernel, an externally-managed CIP-103
+    gateway, or a mock), then re-run this script with:
 
       SKIP_LOCALNET_BUILD=1 bash scripts/start-localnet-e2e.sh
 
@@ -157,7 +181,7 @@ EOF
     echo "    [warn] $compose_wrapper not executable or docker missing; LocalNet not started here"
   fi
 
-  fail "no canonical one-command LocalNet path at $SPLICE_PINNED_COMMIT exposes $WALLET_GATEWAY_URL. Bring up the wallet (e.g. Splice Wallet Kit alongside LocalNet) and re-run with SKIP_LOCALNET_BUILD=1."
+  fail "no canonical one-command LocalNet path at $SPLICE_PINNED_COMMIT exposes $WALLET_GATEWAY_URL. Bring up the wallet (e.g. Splice Wallet Kernel from canton-network/wallet alongside LocalNet) and re-run with SKIP_LOCALNET_BUILD=1."
 }
 
 probe_wallet_gateway() {
