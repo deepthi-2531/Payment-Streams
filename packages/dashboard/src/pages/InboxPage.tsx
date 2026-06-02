@@ -1,25 +1,34 @@
 /**
- * InboxPage — STR-122 Phase 6.
+ * InboxPage — "Incoming streams" view.
  *
- * Two-tab inbox showing pending stream requests:
- *   - **Incoming**: requests where the connected party is the recipient,
- *     waiting for accept/reject (real `useWithdraw`/`useAcceptStream`)
- *   - **Outgoing**: requests this party authored as sender, waiting on
- *     the recipient to accept
+ * The earlier design used this page as a two-tab pending-request inbox
+ * with a "Review & accept" button on each incoming request. That UX
+ * implied a propose/accept ceremony — the recipient confirms in the
+ * dashboard before the stream goes active.
  *
- * Both tabs hit the existing `usePendingStreamRequests({ recipient | sender })`
- * hook — no new API endpoint needed (the proxy already filters by party
- * role via `?sender=…` and `?recipient=…` query params; see
- * `api/client.ts::listPendingStreamRequests`). No mock fixtures.
+ * That ceremony does not exist in the current implemented V2 path:
+ * `commands/create.ts` builds a `StreamAdmin` directly (the V2 metadata
+ * + wallet-driven `AllocationFactory_Allocate(committed=True)` shape),
+ * with no intermediate request contract for the recipient to accept.
+ * Token-standard funding approvals happen in the Amulet wallet via
+ * `AllocationRequest`, not in this UI.
  *
- * Accept/reject from the incoming tab opens the Phase 6 `AcceptModal`.
+ * So this page is now an honest "Incoming streams" view: it lists
+ * streams where the connected party is the recipient. The future V2
+ * `StreamAdminRequest` propose/accept template will reintroduce a
+ * pending tab here, but until then the dashboard does not pretend an
+ * acceptance step exists.
+ *
+ * The existing `usePendingStreamRequests` hook + `PendingStreamRequest`
+ * type stay in the SDK and `hooks/useStreams.ts` so that future feature
+ * can plug back in without re-deriving the wire shape.
  */
 
-import { useState, type CSSProperties } from 'react';
+import { type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import { Inbox as InboxIcon, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
-import { usePendingStreamRequests } from '../hooks/useStreams.js';
+import { useStreams } from '../hooks/useStreams.js';
 import {
   Skeleton,
   ErrorState,
@@ -29,46 +38,38 @@ import {
 import { PartyChip } from '../components/primitives/PartyChip.js';
 import { VestingBadge } from '../components/primitives/VestingBadge.js';
 import { SettlementBadge } from '../components/primitives/SettlementBadge.js';
-import { AcceptModal } from '../components/streams/AcceptModal.js';
-import type { PendingStreamRequest } from '@canton-streams/sdk/browser';
-
-type Tab = 'in' | 'out';
+import type { Stream } from '@canton-streams/sdk/browser';
 
 export function InboxPage() {
   const { party, isAuthenticated } = useAuth();
-  const [tab, setTab] = useState<Tab>('in');
-  const [acceptTarget, setAcceptTarget] = useState<PendingStreamRequest | null>(null);
 
-  // The proxy supports `?sender=` and `?recipient=` filters — we pass the
-  // connected party in the appropriate slot for each tab.
-  const incomingQ = usePendingStreamRequests(
-    party ? { recipient: party } : undefined,
-  );
-  const outgoingQ = usePendingStreamRequests(party ? { sender: party } : undefined);
+  // Incoming streams = streams the proxy lists with this party as recipient.
+  // The proxy already supports a `recipient=` filter on /api/streams; we
+  // pass the connected party so the round-trip stays small.
+  const incomingQ = useStreams(party ? { recipient: party } : undefined);
 
   if (!isAuthenticated) {
     return (
       <div style={{ paddingTop: 28 }}>
-        <PageHeader title="Inbox" subtitle="Stream requests pending action" />
+        <PageHeader title="Incoming" subtitle="Streams sent to you" />
         <div
           className="card"
           style={{ padding: 36, textAlign: 'center', color: 'var(--fg-3)' }}
         >
-          Connect your party to view the inbox.
+          Connect your party to view incoming streams.
         </div>
       </div>
     );
   }
 
-  const active = tab === 'in' ? incomingQ : outgoingQ;
-  const incomingCount = incomingQ.data?.length ?? 0;
-  const outgoingCount = outgoingQ.data?.length ?? 0;
+  const incoming = incomingQ.data ?? [];
+  const incomingCount = incoming.length;
 
   return (
     <div style={{ paddingTop: 28 }}>
       <PageHeader
-        title="Inbox"
-        subtitle="Stream requests pending action"
+        title="Incoming"
+        subtitle="Streams where you are the recipient"
         actions={
           <Link to="/create" className="btn btn-primary">
             <ArrowUpRight size={14} /> New stream
@@ -76,164 +77,65 @@ export function InboxPage() {
         }
       />
 
-      {/* Tab strip */}
-      <div
-        style={{
-          display: 'inline-flex',
-          gap: 4,
-          padding: 4,
-          background: 'var(--bg-elev)',
-          border: '1px solid var(--line)',
-          borderRadius: 'var(--r-md)',
-          marginBottom: 18,
-        }}
-      >
-        <TabButton
-          active={tab === 'in'}
-          onClick={() => setTab('in')}
-          icon={<ArrowDownLeft size={13} />}
-          label="Incoming"
-          count={incomingCount}
-        />
-        <TabButton
-          active={tab === 'out'}
-          onClick={() => setTab('out')}
-          icon={<ArrowUpRight size={13} />}
-          label="Outgoing"
-          count={outgoingCount}
-        />
-      </div>
-
-      {active.isError && (
+      {incomingQ.isError && (
         <ErrorState
-          error={active.error}
-          title={`Could not load ${tab === 'in' ? 'incoming' : 'outgoing'} requests`}
-          onRetry={() => active.refetch()}
+          error={incomingQ.error}
+          title="Could not load incoming streams"
+          onRetry={() => incomingQ.refetch()}
         />
       )}
 
-      {active.isPending && <Skeleton.Row count={3} height={120} />}
+      {incomingQ.isPending && <Skeleton.Row count={3} height={120} />}
 
-      {active.data && active.data.length === 0 && !active.isPending && (
+      {!incomingQ.isPending && incomingCount === 0 && (
         <div className="card" style={{ padding: 36, textAlign: 'center' }}>
           <InboxIcon
             size={28}
             style={{ color: 'var(--fg-5)', margin: '0 auto 8px' }}
           />
           <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-3)' }}>
-            {tab === 'in'
-              ? 'No incoming requests waiting on you.'
-              : 'No outgoing requests waiting on recipients.'}
+            No incoming streams yet. V2 funding approvals happen in the wallet.
           </p>
         </div>
       )}
 
-      {active.data && active.data.length > 0 && (
+      {incomingCount > 0 && (
         <>
-          <SectionHeader
-            title={tab === 'in' ? 'Awaiting your acceptance' : 'Awaiting recipient'}
-            count={active.data.length}
-          />
+          <SectionHeader title="Incoming streams" count={incomingCount} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {active.data.map((req) => (
-              <PendingCard
-                key={`${req.config.sender}:${req.config.streamId}`}
-                request={req}
-                direction={tab}
-                onAccept={tab === 'in' ? () => setAcceptTarget(req) : undefined}
+            {incoming.map((stream) => (
+              <IncomingCard
+                key={`${stream.config.sender}:${stream.config.streamId}`}
+                stream={stream}
               />
             ))}
           </div>
         </>
       )}
-
-      {acceptTarget && (
-        <AcceptModal
-          request={acceptTarget}
-          onClose={() => setAcceptTarget(null)}
-        />
-      )}
     </div>
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-  count,
-}: {
-  readonly active: boolean;
-  readonly onClick: () => void;
-  readonly icon: React.ReactNode;
-  readonly label: string;
-  readonly count: number;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 6,
-        padding: '6px 12px',
-        borderRadius: 'var(--r-sm)',
-        fontSize: 12.5,
-        fontWeight: 500,
-        color: active ? 'var(--accent)' : 'var(--fg-3)',
-        background: active ? 'var(--accent-soft)' : 'transparent',
-        transition: 'background 120ms, color 120ms',
-      }}
-    >
-      {icon}
-      {label}
-      {count > 0 && (
-        <span
-          className="mono"
-          style={{
-            fontSize: 10,
-            fontWeight: 600,
-            background: active ? 'transparent' : 'var(--warn-soft)',
-            color: active ? 'var(--accent)' : 'var(--warn)',
-            padding: '1px 6px',
-            borderRadius: 999,
-          }}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
-function PendingCard({
-  request,
-  direction,
-  onAccept,
-}: {
-  readonly request: PendingStreamRequest;
-  readonly direction: Tab;
-  readonly onAccept?: () => void;
-}) {
-  const { config } = request;
-  const otherParty =
-    direction === 'in' ? config.sender : config.recipient;
+function IncomingCard({ stream }: { readonly stream: Stream }) {
+  const { config } = stream;
+  const sender = config.sender;
 
   return (
     <div className="card" style={cardStyle}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <PartyChip identity={{ handle: otherParty.split('::')[0], party: otherParty }} />
+        <PartyChip identity={{ handle: sender.split('::')[0] ?? sender, party: sender }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div
             style={{
               fontSize: 12,
               color: 'var(--fg-4)',
               marginBottom: 2,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
             }}
           >
-            {direction === 'in' ? 'From' : 'To'} ·{' '}
+            <ArrowDownLeft size={11} /> From ·{' '}
             <span className="mono" style={{ color: 'var(--fg-3)' }}>
               {config.streamId}
             </span>
@@ -268,8 +170,8 @@ function PendingCard({
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
           <VestingBadge vesting={config.vestingMode.mode} />
-          {request.settlementMode && (
-            <SettlementBadge mode={request.settlementMode} />
+          {config.settlementMode && (
+            <SettlementBadge mode={config.settlementMode} />
           )}
         </div>
       </div>
@@ -287,15 +189,12 @@ function PendingCard({
         <div style={{ fontSize: 11.5, color: 'var(--fg-4)' }}>
           {config.startTime.toLocaleDateString()} → {config.endTime.toLocaleDateString()}
         </div>
-        {onAccept && (
-          <button
-            type="button"
-            className="btn btn-primary btn-sm"
-            onClick={onAccept}
-          >
-            Review & accept
-          </button>
-        )}
+        <Link
+          to={`/streams/${encodeURIComponent(config.streamId)}`}
+          className="btn btn-ghost btn-sm"
+        >
+          View details <ArrowUpRight size={11} />
+        </Link>
       </div>
     </div>
   );
