@@ -172,6 +172,11 @@ dapp gateway at:
 http://localhost:3030/api/v0/dapp
 ```
 
+The full wallet-backed flow is documented in
+[docs/E2E-HARNESS.md](docs/E2E-HARNESS.md) and orchestrated by
+`scripts/start-localnet-e2e.sh`. The same script is wired to a manual
+`workflow_dispatch` job in `.github/workflows/e2e.yml`.
+
 ### Skip the wallet picker in local automation
 
 Create `packages/dashboard/.env.local`:
@@ -248,16 +253,17 @@ names in the type system, they exist so older contracts can be read and migrated
 
 ## Read Next
 
-| If you want to...      | Read                                                                 |
-| ---------------------- | -------------------------------------------------------------------- |
-| Ship one working stream end-to-end | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
-| Run the app locally    | [docs/QUICKSTART.md](docs/QUICKSTART.md)                             |
-| Understand the design  | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                         |
-| Integrate as a dapp    | [docs/integration-guide/README.md](docs/integration-guide/README.md) |
-| Deploy safely          | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)                             |
-| Review risks           | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)                         |
-| Configure wallet flows | [docs/SWK-WALLET-RUNBOOK.md](docs/SWK-WALLET-RUNBOOK.md)             |
-| Check REST endpoints   | [docs/API.md](docs/API.md)                                           |
+| If you want to...                            | Read                                                                    |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| Ship one working stream end-to-end           | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
+| Run the app locally                          | [docs/QUICKSTART.md](docs/QUICKSTART.md)                                |
+| Run the wallet-backed V2 E2E harness         | [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md)                              |
+| Understand the design                        | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                            |
+| Integrate as a dapp                          | [docs/integration-guide/README.md](docs/integration-guide/README.md)    |
+| Deploy safely                                | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)                                |
+| Review risks                                 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)                            |
+| Configure wallet flows                       | [docs/SWK-WALLET-RUNBOOK.md](docs/SWK-WALLET-RUNBOOK.md)                |
+| Check REST endpoints                         | [docs/API.md](docs/API.md)                                              |
 
 ## Development
 

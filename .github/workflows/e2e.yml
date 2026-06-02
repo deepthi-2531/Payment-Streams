@@ -1,0 +1,69 @@
+name: E2E — Wallet-backed V2 (manual)
+
+# STR-129 acceptance harness. Runs the live Splice LocalNet Amulet wallet
+# flow against the Streams docker stack and exercises the V2 allocation
+# choices end-to-end.
+#
+# This job is intentionally NOT triggered on push. The Splice LocalNet
+# stack takes 10-30 minutes to build on a cold cache and needs sbt +
+# Postgres + Daml SDK at runtime. Run it on demand when validating the
+# pinned upstream commit or a wallet-flow change.
+#
+# Trigger: GitHub Actions → "E2E — Wallet-backed V2 (manual)" → Run
+# workflow. The dry-run mode is the default so a misclick does not
+# accidentally start a 30-minute build.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Print plan only — do not clone/build/start anything'
+        type: boolean
+        default: true
+      splice_pinned_commit:
+        description: 'Override SPLICE_PINNED_COMMIT (leave empty to use scripts/fetch-v2-dars.mjs)'
+        type: string
+        default: ''
+      skip_localnet_build:
+        description: 'Skip cloning + building Splice LocalNet (only useful when re-running just the Streams stack)'
+        type: boolean
+        default: false
+
+jobs:
+  e2e:
+    name: Wallet-backed V2 E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Resolve effective Splice pinned commit
+        id: splicepin
+        run: |
+          if [ -n "${{ inputs.splice_pinned_commit }}" ]; then
+            echo "commit=${{ inputs.splice_pinned_commit }}" >> "$GITHUB_OUTPUT"
+          else
+            commit="$(grep -m1 SPLICE_PINNED_COMMIT scripts/fetch-v2-dars.mjs | sed -E "s/.*'([0-9a-f]+)'.*/\1/")"
+            echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Print resolved configuration
+        run: |
+          echo "Resolved SPLICE_PINNED_COMMIT: ${{ steps.splicepin.outputs.commit }}"
+          echo "Dry run: ${{ inputs.dry_run }}"
+          echo "Skip LocalNet build: ${{ inputs.skip_localnet_build }}"
+
+      - name: Run orchestration script
+        env:
+          SPLICE_PINNED_COMMIT: ${{ steps.splicepin.outputs.commit }}
+          LOCALNET_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          SKIP_LOCALNET_BUILD: ${{ inputs.skip_localnet_build && '1' || '0' }}
+        run: bash scripts/start-localnet-e2e.sh
+
+      - name: Run V2 conformance lint (defense in depth)
+        if: always()
+        run: bash scripts/check-v2-conformance.sh
