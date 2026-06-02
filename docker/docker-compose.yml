@@ -51,9 +51,9 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.dashboard
       args:
-        VITE_WALLET_GATEWAY_URL: http://localhost:3030/api/v0/dapp
-        VITE_SKIP_WALLET_PICKER: 'true'
-        VITE_WALLET_NAME: Splice Amulet Wallet (LocalNet V2)
+        VITE_WALLET_GATEWAY_URL: ${VITE_WALLET_GATEWAY_URL:-http://localhost:3030/api/v0/dapp}
+        VITE_SKIP_WALLET_PICKER: ${VITE_SKIP_WALLET_PICKER:-true}
+        VITE_WALLET_NAME: ${VITE_WALLET_NAME:-Splice Amulet Wallet (LocalNet V2)}
     ports:
       - '3000:80'
     depends_on:
