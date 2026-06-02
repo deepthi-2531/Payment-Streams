@@ -132,15 +132,19 @@ describe('dispatchSettlement — settle / cancel / batch-settle', () => {
       templateId: TEMPLATE_V2,
       actAs: ['exec'],
       nextIterationFunding: {
-        amount: new Decimal('70'),
-        holdingCids: ['h-1'],
-        nextSettleBefore: new Date('2026-02-01T00:00:00Z'),
+        amounts: { 'asset-1': new Decimal('70') },
       },
     });
     await dispatchSettlement(transport, v2Caps, cmd, logger);
     const call = (transport.exercise as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const arg = call[3] as { nextIterationFunding: { optional: { holdingCids: unknown[] } } };
-    expect(arg.nextIterationFunding.optional.holdingCids).toHaveLength(1);
+    const arg = call[3] as {
+      actors: unknown[];
+      nextIterationFunding: { optional: { text_map: { entries: Array<{ key: string }> } } };
+    };
+    expect(arg.actors).toEqual([{ party: 'exec' }]);
+    expect(arg.nextIterationFunding.optional.text_map.entries).toEqual([
+      { key: 'asset-1', value: { numeric: '70.0000000000' } },
+    ]);
   });
 
   it('cancel exercises Allocation_Cancel', async () => {
@@ -163,7 +167,23 @@ describe('dispatchSettlement — settle / cancel / batch-settle', () => {
       action: 'batch-settle',
       settlementFactoryCid: 'sf-1',
       templateIdSettlementFactory: TEMPLATE_SF,
-      allocationCids: { 'leg-1': 'a-1', 'leg-2': 'a-2' },
+      batch: {
+        settlement: {
+          executor: 'exec',
+          settlementRefId: 'stream-001:cycle-1',
+          requestedAt: new Date('2026-01-01T00:00:00Z'),
+        },
+        transferLegs: [
+          {
+            transferLegId: 'leg-1',
+            sender: { owner: 'sender', id: '' },
+            receiver: { owner: 'recipient', id: '' },
+            amount: new Decimal('10'),
+            instrumentId: 'asset-1',
+          },
+        ],
+        allocations: [{ allocationCid: 'a-1' }],
+      },
       actAs: ['exec'],
     }, logger);
     expect(result.version).toBe('v2');

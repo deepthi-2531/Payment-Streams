@@ -1,0 +1,11 @@
+.git
+node_modules
+**/node_modules
+**/.daml
+**/.lib
+**/dist
+**/.turbo
+.DS_Store
+.env
+.env.*
+!.env.example

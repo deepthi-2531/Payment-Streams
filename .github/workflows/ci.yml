@@ -11,6 +11,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # ─── V2 Token Standard upstream conformance lint ───
+  # Fails the build if any tracked file mentions an identifier that
+  # does not exist in canton-network/splice@token-standard-v2-upcoming.
+  # Independent of the TypeScript build so a bad doc commit fails fast.
+  v2_conformance:
+    name: V2 Upstream Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run V2 conformance lint
+        run: bash scripts/check-v2-conformance.sh
+
   # ─── TypeScript lint, build, test ───
   typescript:
     name: TypeScript Build & Test

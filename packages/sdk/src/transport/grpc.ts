@@ -698,9 +698,11 @@ export class GrpcTransport implements Transport {
    *   { int64: "86400000000" }                     → Value.int64
    *   { bool: true }                               → Value.bool
    *   { text: "hello" }                            → Value.text
-   *   { contract_id: "..." }                       → Value.contract_id
+   *   { contract_id: "..." } / { contractId: "..." } → Value.contract_id
    *   { variant: { variant_constructor, value } }  → Value.variant
    *   { list: { elements: [...] } }                → Value.list
+   *   { text_map: { entries: [{ key, value }] } }  → Value.text_map
+   *   { gen_map: { entries: [{ key, value }] } }   → Value.gen_map
    *   { record: { fields: [...] } }                → Value.record
    *   { tag: "Foo", value: {...} }                 → Variant shorthand
    *
@@ -734,6 +736,8 @@ export class GrpcTransport implements Transport {
             return { text: obj.text };
           case 'contract_id':
             return { contract_id: obj.contract_id };
+          case 'contractId':
+            return { contract_id: obj.contractId };
           case 'unit':
             return { unit: {} };
           default:
@@ -773,6 +777,34 @@ export class GrpcTransport implements Transport {
         const elements = (lst.elements as unknown[]) ?? [];
         return {
           list: { elements: elements.map((e) => this.encodeValue(e)) },
+        };
+      }
+
+      // Pre-tagged TextMap (full form: { text_map: { entries: [{ key, value }] } })
+      if ('text_map' in obj && keys.length === 1) {
+        const map = obj.text_map as Record<string, unknown>;
+        const entries = (map.entries as any[]) ?? [];
+        return {
+          text_map: {
+            entries: entries.map((entry) => ({
+              key: entry.key,
+              value: this.encodeValue(entry.value),
+            })),
+          },
+        };
+      }
+
+      // Pre-tagged GenMap (full form: { gen_map: { entries: [{ key, value }] } })
+      if ('gen_map' in obj && keys.length === 1) {
+        const map = obj.gen_map as Record<string, unknown>;
+        const entries = (map.entries as any[]) ?? [];
+        return {
+          gen_map: {
+            entries: entries.map((entry) => ({
+              key: this.encodeValue(entry.key),
+              value: this.encodeValue(entry.value),
+            })),
+          },
         };
       }
 
@@ -869,11 +901,11 @@ export class GrpcTransport implements Transport {
       }
       return obj as T;
     }
-    if ('map' in val) {
-      const entries = val.map.entries ?? [];
+    if ('gen_map' in val) {
+      const entries = val.gen_map.entries ?? [];
       const obj: Record<string, unknown> = {};
       for (const entry of entries) {
-        obj[entry.key] = this.decodeValue(entry.value);
+        obj[String(this.decodeValue(entry.key))] = this.decodeValue(entry.value);
       }
       return obj as T;
     }

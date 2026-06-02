@@ -30,8 +30,6 @@
 -- Signatories: sender + recipient (both must consent to creation).
 module CantonStreams.Stream.Escrow where
 
-import qualified DA.Map as Map
-
 import CantonStreams.Interface.Types
 import CantonStreams.Interface.Stream (StreamView(..), WithdrawResult(..), CancelResult(..))
 import CantonStreams.Stream.Accrual
@@ -90,8 +88,9 @@ template StreamEscrow
     signatory config.sender, config.recipient
     observer observers
 
-    -- Note: Contract keys not supported in Daml LF 2.x (SDK 3.4+).
-    -- Streams looked up by contract ID or query with streamId filter.
+    -- Contract keys are not supported in the SDK 3.4 / Daml LF target used
+    -- by this package. Sender-scoped stream-id uniqueness is enforced by the
+    -- SDK/proxy create workflow instead of this raw template constructor.
 
     -- Ensure invariants on every contract creation/archival
     ensure config.totalDeposited > 0.0

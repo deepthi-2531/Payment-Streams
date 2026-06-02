@@ -13,7 +13,7 @@
       "allocationsV2": true,
       "transferEventsV2": true,
       "meta": {
-        "standard": "CIP-56 V2 (token-standard-v2-upcoming)",
+        "standard": "CIP-56 V2",
         "note": "Test asset for V2-DevNet probes. Not for Mainnet."
       }
     }

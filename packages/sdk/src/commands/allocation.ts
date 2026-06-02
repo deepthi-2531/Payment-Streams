@@ -35,8 +35,8 @@ import type { Transport, TemplateId } from '../transport/base.js';
 import { type AssetCapabilities, assertActionSupported } from '../assets/capabilities.js';
 
 // ---------------------------------------------------------------------------
-// V2 allocation request types (wire-compatible with the stub Daml module in
-// CantonStreams.Settlement.Stubs.AllocationRequestV2)
+// V2 allocation request types (wire-compatible with the published
+// Splice.Api.Token.* V2 interfaces)
 // ---------------------------------------------------------------------------
 
 /**
@@ -61,13 +61,15 @@ export interface AccountV2 {
 /** Common settlement metadata. */
 export type AllocationMetadata = Record<string, string>;
 
-/**
- * Coordinates for a settlement. `executor` is the party authorized to
- * exercise `Allocation_Settle` (typically the escrow operator).
- */
+/** Coordinates for a settlement. `executors` are authorized to settle/cancel. */
 export interface AllocationSettlementInfo {
+  /** V2-standard executor list. */
+  readonly executors?: ReadonlyArray<string> | undefined;
+  /** @deprecated Use `executors`; kept as a compatibility shim for callers. */
   readonly executor: string;
   readonly settlementRefId: string;
+  /** Optional contract-id based settlement reference (`SettlementInfo.cid`). */
+  readonly settlementRefCid?: string | undefined;
   readonly requestedAt: Date;
   readonly allocateBefore?: Date | undefined;
   readonly settleBefore?: Date | undefined;
@@ -79,10 +81,17 @@ export interface AllocationSettlementInfo {
  * V2 InstrumentId.
  */
 export interface TransferLegV2 {
+  /**
+   * Deprecated party shorthand for the authorizer account. If `authorizer`
+   * is omitted this becomes `Account { owner = Some sender, provider = None, id = "" }`.
+   */
   readonly sender: string;
+  /** V2 allocation authorizer account. */
+  readonly authorizer?: AccountV2 | undefined;
   readonly receiver: AccountV2;
   readonly amount: Decimal;
   readonly instrumentId: InstrumentIdV2;
+  readonly side?: 'SenderSide' | 'ReceiverSide' | undefined;
   readonly meta?: AllocationMetadata | undefined;
 }
 
@@ -102,8 +111,14 @@ export interface BuildAllocationRequestParams {
     readonly legId: string;
     readonly leg: TransferLegV2;
   }>;
+  /** If true, the authorizer cannot withdraw before the settlement deadline. */
+  readonly committed?: boolean | undefined;
+  /** Initial iterated-settlement funding, keyed by V2 instrument id text. */
+  readonly nextIterationFunding?: NextIterationFundingAmounts | undefined;
   readonly meta?: AllocationMetadata | undefined;
   /** Prior AllocationRequest contract id this request originates from. */
+  readonly originalRequestCid?: string | undefined;
+  /** @deprecated Use `originalRequestCid`; retained for callers from the stub era. */
   readonly originalRequestId?: string | undefined;
 }
 
@@ -132,8 +147,53 @@ function damlNumeric(amount: Decimal | string | number): { numeric: string } {
   return { numeric: new Decimal(amount).toFixed(10) };
 }
 
-function metaToWire(meta: AllocationMetadata | undefined): Record<string, string> {
-  return meta ?? {};
+function optionalWire(value: unknown | undefined): { optional: unknown | null } {
+  return value !== undefined ? { optional: value } : { optional: null };
+}
+
+function textMapWire(
+  values: Readonly<Record<string, unknown>> | undefined,
+): { text_map: { entries: Array<{ key: string; value: unknown }> } } {
+  return {
+    text_map: {
+      entries: Object.entries(values ?? {}).map(([key, value]) => ({ key, value })),
+    },
+  };
+}
+
+function decimalTextMapWire(
+  values: NextIterationFundingAmounts | undefined,
+): { text_map: { entries: Array<{ key: string; value: { numeric: string } }> } } {
+  return {
+    text_map: {
+      entries: Object.entries(values ?? {}).map(([key, value]) => ({
+        key,
+        value: damlNumeric(value),
+      })),
+    },
+  };
+}
+
+function metaToWire(meta: AllocationMetadata | undefined): Record<string, unknown> {
+  const textValues = Object.fromEntries(
+    Object.entries(meta ?? {}).map(([key, value]) => [key, { text: value }]),
+  );
+  return { values: textMapWire(textValues) };
+}
+
+function damlVariant(variantConstructor: string, value: unknown = { unit: {} }): Record<string, unknown> {
+  return {
+    variant: {
+      variant_constructor: variantConstructor,
+      value,
+    },
+  };
+}
+
+function genMapWire(
+  entries: Array<{ key: unknown; value: unknown }>,
+): { gen_map: { entries: Array<{ key: unknown; value: unknown }> } } {
+  return { gen_map: { entries } };
 }
 
 // ---------------------------------------------------------------------------
@@ -161,38 +221,46 @@ export function buildAllocationRequest(
   const settleBefore =
     params.settlement.settleBefore ?? new Date(allocateBefore.getTime() + 5 * 60 * 1000);
 
-  const transferLegs: Record<string, Record<string, unknown>> = {};
-  for (const { legId, leg } of params.legs) {
-    transferLegs[legId] = {
-      sender: { party: leg.sender },
-      receiver: encodeAccountV2(leg.receiver),
-      amount: damlNumeric(leg.amount),
-      instrumentId: {
-        admin: { party: leg.instrumentId.admin },
-        id: { text: leg.instrumentId.id },
-      },
-      meta: metaToWire(leg.meta),
-    };
-  }
+  const settlementDeadline = params.settlement.settleBefore ?? settleBefore;
+  const committed = params.committed ?? true;
+  const allocations = params.legs.map(({ legId, leg }) => ({
+    admin: { party: leg.instrumentId.admin },
+    authorizer: encodeAccountV2(leg.authorizer ?? { owner: leg.sender, id: '' }),
+    transferLegSides: [
+      encodeTransferLegSide(legId, leg),
+    ],
+    settlementDeadline: optionalWire(damlTimestamp(settlementDeadline)),
+    nextIterationFunding: optionalWire(
+      params.nextIterationFunding !== undefined
+        ? decimalTextMapWire(params.nextIterationFunding)
+        : undefined,
+    ),
+    committed: { bool: committed },
+    meta: metaToWire(leg.meta),
+  }));
+
+  const executors = resolveExecutors(params.settlement);
+  const originalRequestCid = params.originalRequestCid ?? params.originalRequestId;
 
   const argument: Record<string, unknown> = {
     settlement: {
-      executor: { party: params.settlement.executor },
-      settlementRef: {
-        id: { text: params.settlement.settlementRefId },
-        contractRef: { optional: null },
-      },
-      requestedAt: damlTimestamp(params.settlement.requestedAt),
-      allocateBefore: damlTimestamp(allocateBefore),
-      settleBefore: damlTimestamp(settleBefore),
+      executors: executors.map((party) => ({ party })),
+      id: { text: params.settlement.settlementRefId },
+      cid: optionalWire(
+        params.settlement.settlementRefCid !== undefined
+          ? { contract_id: params.settlement.settlementRefCid }
+          : undefined,
+      ),
       meta: metaToWire(params.settlement.meta),
     },
-    transferLegs,
+    allocations,
+    requestedAt: damlTimestamp(params.settlement.requestedAt),
+    settleAt: optionalWire(damlTimestamp(settleBefore)),
+    availableActions: defaultAllocationRequestActions(params.legs, executors),
     meta: metaToWire(params.meta),
-    originalRequestId:
-      params.originalRequestId !== undefined
-        ? { optional: { text: params.originalRequestId } }
-        : { optional: null },
+    originalRequestCid: optionalWire(
+      originalRequestCid !== undefined ? { contract_id: originalRequestCid } : undefined,
+    ),
   };
 
   return { version: 'v2', templateId, argument };
@@ -250,6 +318,43 @@ function encodeAccountV2(acc: AccountV2): Record<string, unknown> {
   };
 }
 
+function encodeTransferLegSide(legId: string, leg: TransferLegV2): Record<string, unknown> {
+  return {
+    transferLegId: { text: legId },
+    side: damlVariant(leg.side ?? 'SenderSide'),
+    otherside: encodeAccountV2(leg.receiver),
+    amount: damlNumeric(leg.amount),
+    instrumentId: { text: leg.instrumentId.id },
+    meta: metaToWire(leg.meta),
+  };
+}
+
+function resolveExecutors(settlement: AllocationSettlementInfo): ReadonlyArray<string> {
+  const executors = settlement.executors ?? [settlement.executor];
+  if (executors.length === 0 || executors.some((party) => party.trim() === '')) {
+    throw new Error('V2 SettlementInfo requires at least one executor party');
+  }
+  return [...new Set(executors)];
+}
+
+function defaultAllocationRequestActions(
+  legs: BuildAllocationRequestParams['legs'],
+  fallbackParties: ReadonlyArray<string>,
+): Record<string, unknown> {
+  const actionParties = [...new Set(
+    legs.flatMap(({ leg }) => {
+      const account = leg.authorizer ?? { owner: leg.sender, id: '' };
+      return [account.owner, account.provider].filter((party): party is string => Boolean(party));
+    }),
+  )];
+  const parties = actionParties.length > 0 ? actionParties : fallbackParties;
+  const partyGroup = [parties.map((party) => ({ party }))];
+  return genMapWire([
+    { key: damlVariant('ARA_Accept'), value: partyGroup },
+    { key: damlVariant('ARA_Reject'), value: partyGroup },
+  ]);
+}
+
 // ---------------------------------------------------------------------------
 // Allocation_Settle dispatch
 // ---------------------------------------------------------------------------
@@ -260,12 +365,20 @@ function encodeAccountV2(acc: AccountV2): Record<string, unknown> {
  * primitive that backs StreamFlow's recurring streams and per the spec author's
  * update powers prefunded trading.
  */
-export interface NextIterationFunding {
+export type NextIterationFundingAmounts = Readonly<Record<string, Decimal | string | number>>;
+
+export interface TransferLegSideV2 {
+  readonly transferLegId: string;
+  readonly side: 'SenderSide' | 'ReceiverSide';
+  readonly otherside: AccountV2;
   readonly amount: Decimal;
-  /** Holding contract ids supplying the funding (wire-level identifiers). */
-  readonly holdingCids: ReadonlyArray<string>;
-  readonly nextSettleBefore: Date;
+  readonly instrumentId: string;
   readonly meta?: AllocationMetadata | undefined;
+}
+
+export interface NextIterationFunding {
+  /** V2-standard map keyed by instrument id text. */
+  readonly amounts: NextIterationFundingAmounts;
 }
 
 /**
@@ -278,19 +391,15 @@ export async function buildAllocationSettle(
   templateId: TemplateId,
   actAs: string[],
   logger: Logger,
-  opts?: { readonly nextIterationFunding?: NextIterationFunding },
+  opts?: {
+    readonly nextIterationFunding?: NextIterationFunding;
+    readonly extraTransferLegSides?: ReadonlyArray<TransferLegSideV2>;
+  },
 ): Promise<{ readonly version: 'v2'; readonly result: unknown }> {
   assertActionSupported(caps, 'allocation-single-leg');
 
   const nextWire = opts?.nextIterationFunding
-    ? {
-        optional: {
-          amount: damlNumeric(opts.nextIterationFunding.amount),
-          holdingCids: opts.nextIterationFunding.holdingCids.map((c) => ({ contractId: c })),
-          nextSettleBefore: damlTimestamp(opts.nextIterationFunding.nextSettleBefore),
-          meta: metaToWire(opts.nextIterationFunding.meta),
-        },
-      }
+    ? optionalWire(decimalTextMapWire(opts.nextIterationFunding.amounts))
     : { optional: null };
 
   logger.info(
@@ -302,6 +411,8 @@ export async function buildAllocationSettle(
     allocationCid,
     'Allocation_Settle',
     {
+      actors: actAs.map((party) => ({ party })),
+      extraTransferLegSides: (opts?.extraTransferLegSides ?? []).map(encodeTransferLegSideForChoice),
       nextIterationFunding: nextWire,
       extraArgs: emptyExtraArgsWire(),
     },
@@ -329,7 +440,7 @@ export async function buildAllocationCancel(
     templateId,
     allocationCid,
     'Allocation_Cancel',
-    { extraArgs: emptyExtraArgsWire() },
+    { actors: actAs.map((party) => ({ party })), extraArgs: emptyExtraArgsWire() },
     actAs,
   );
   return { version: 'v2', result };
@@ -353,19 +464,14 @@ export async function buildBatchSettlement(
   caps: AssetCapabilities,
   settlementFactoryCid: string,
   templateIdSettlementFactory: TemplateId,
-  allocationCids: Readonly<Record<string, string>>,
+  params: BatchSettlementParams,
   actAs: string[],
   logger: Logger,
 ): Promise<{ readonly version: 'v2'; readonly result: unknown }> {
   assertActionSupported(caps, 'allocation-batch');
 
-  const allocationCidsWire: Record<string, { contractId: string }> = {};
-  for (const [legId, cid] of Object.entries(allocationCids)) {
-    allocationCidsWire[legId] = { contractId: cid };
-  }
-
   logger.info(
-    { settlementFactoryCid, legCount: Object.keys(allocationCids).length },
+    { settlementFactoryCid, legCount: params.transferLegs.length },
     'Exercising SettlementFactory_SettleBatch (V2)',
   );
   const result = await transport.exercise(
@@ -373,7 +479,27 @@ export async function buildBatchSettlement(
     settlementFactoryCid,
     'SettlementFactory_SettleBatch',
     {
-      allocationCids: allocationCidsWire,
+      settlement: {
+        executors: resolveExecutors(params.settlement).map((party) => ({ party })),
+        id: { text: params.settlement.settlementRefId },
+        cid: optionalWire(
+          params.settlement.settlementRefCid !== undefined
+            ? { contract_id: params.settlement.settlementRefCid }
+            : undefined,
+        ),
+        meta: metaToWire(params.settlement.meta),
+      },
+      transferLegs: params.transferLegs.map(encodeTransferLegForBatch),
+      allocations: params.allocations.map((allocation) => ({
+        allocationCid: { contract_id: allocation.allocationCid },
+        extraTransferLegSides: (allocation.extraTransferLegSides ?? []).map(encodeTransferLegSideForChoice),
+        nextIterationFunding: optionalWire(
+          allocation.nextIterationFunding !== undefined
+            ? decimalTextMapWire(allocation.nextIterationFunding.amounts)
+            : undefined,
+        ),
+      })),
+      actors: actAs.map((party) => ({ party })),
       extraArgs: emptyExtraArgsWire(),
     },
     actAs,
@@ -385,9 +511,52 @@ export async function buildBatchSettlement(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+export interface BatchTransferLegV2 {
+  readonly transferLegId: string;
+  readonly sender: AccountV2;
+  readonly receiver: AccountV2;
+  readonly amount: Decimal;
+  readonly instrumentId: string;
+  readonly meta?: AllocationMetadata | undefined;
+}
+
+export interface FinalizedAllocationV2 {
+  readonly allocationCid: string;
+  readonly extraTransferLegSides?: ReadonlyArray<TransferLegSideV2> | undefined;
+  readonly nextIterationFunding?: NextIterationFunding | undefined;
+}
+
+export interface BatchSettlementParams {
+  readonly settlement: AllocationSettlementInfo;
+  readonly transferLegs: ReadonlyArray<BatchTransferLegV2>;
+  readonly allocations: ReadonlyArray<FinalizedAllocationV2>;
+}
+
+function encodeTransferLegSideForChoice(leg: TransferLegSideV2): Record<string, unknown> {
+  return {
+    transferLegId: { text: leg.transferLegId },
+    side: damlVariant(leg.side),
+    otherside: encodeAccountV2(leg.otherside),
+    amount: damlNumeric(leg.amount),
+    instrumentId: { text: leg.instrumentId },
+    meta: metaToWire(leg.meta),
+  };
+}
+
+function encodeTransferLegForBatch(leg: BatchTransferLegV2): Record<string, unknown> {
+  return {
+    transferLegId: { text: leg.transferLegId },
+    sender: encodeAccountV2(leg.sender),
+    receiver: encodeAccountV2(leg.receiver),
+    amount: damlNumeric(leg.amount),
+    instrumentId: { text: leg.instrumentId },
+    meta: metaToWire(leg.meta),
+  };
+}
+
 function emptyExtraArgsWire(): Record<string, unknown> {
   return {
-    context: { contextValues: {} },
-    meta: {},
+    context: { values: textMapWire({}) },
+    meta: metaToWire(undefined),
   };
 }

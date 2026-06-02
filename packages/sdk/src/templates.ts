@@ -4,9 +4,10 @@
  * All template IDs are defined here, eliminating duplication across command
  * files and providing a single place to update when DARs are redeployed.
  *
- * Package IDs are read from environment variables with hardcoded fallbacks
- * for local dev. When a new DAR is deployed, update the env var or the
- * fallback here — not in every command file.
+ * Package references are read from environment variables with stable
+ * package-name fallbacks for local dev. Canton 3.4 resolves package names
+ * on template identifiers; explicit package hashes can still be supplied
+ * by deployment environments that pin vetted DARs.
  *
  * @module templates
  */
@@ -15,19 +16,20 @@ import type { TemplateId } from './transport/base.js';
 import { SettlementMode } from './types/stream.js';
 
 // ---------------------------------------------------------------------------
-// Package IDs — configurable via environment
+// Package references — configurable via environment
 // ---------------------------------------------------------------------------
 
+const DEFAULT_STREAMS_PACKAGE_REF = 'canton-streams';
+
 /**
- * Main Canton Streams package ID (numeric escrow + utility holding escrow).
+ * Main Canton Streams package reference (name by default, hash when pinned).
  * Override: CANTON_STREAMS_PACKAGE_ID
  */
 const MAIN_PACKAGE_ID: string =
-  process.env['CANTON_STREAMS_PACKAGE_ID'] ??
-  '233dc1f8da8813ccf14e4b03adf09e9cdb2cb792f6e709edcc33453a5927a739';
+  process.env['CANTON_STREAMS_PACKAGE_ID'] ?? DEFAULT_STREAMS_PACKAGE_REF;
 
 /**
- * Utility/CIP custody package ID (Phase 2 — utility holding escrow + workflows).
+ * Utility/CIP custody package reference (Phase 2 — utility holding escrow + workflows).
  * Override: CANTON_STREAMS_UTILITY_PACKAGE_ID
  *
  * Set this when the utility holding custody DAR is deployed in a separate package
@@ -37,15 +39,15 @@ const UTILITY_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_UTILITY_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 /**
- * Token-standard custody package ID (Phase 2 — externally funded escrow).
+ * Token-standard custody package reference (Phase 2 — externally funded escrow).
  * Override: CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID
  *
  * On deployments where TokenStandardEscrow and its workflow templates are in
  * a separate DAR from the main streams package (e.g. testnet/devnet with
- * incremental DAR uploads), set this to the correct package ID.
+ * incremental DAR uploads), set this to the correct package reference.
  *
  * Example override:
- *   export CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID="<package-id>"
+ *   export CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID="<package-name-or-hash>"
  *
  * Defaults to MAIN_PACKAGE_ID for local dev (where TokenStandard is in the main DAR).
  */
@@ -53,14 +55,14 @@ const TOKEN_STANDARD_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 /**
- * Local asset custody package ID (Phase 2 — AMM AssetHolding escrow).
+ * Local asset custody package reference (Phase 2 — AMM AssetHolding escrow).
  * Override: CANTON_STREAMS_LOCAL_ASSET_PACKAGE_ID
  */
 const LOCAL_ASSET_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_LOCAL_ASSET_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 /**
- * Phase 3 policy package ID.
+ * Phase 3 policy package reference.
  * Override: CANTON_STREAMS_POLICY_PACKAGE_ID
  *
  * Some environments deploy the policy modules in a separate DAR from the
@@ -348,6 +350,7 @@ export const CHOICE_REVOKE_POLICY = 'RevokePolicy';
  * Each entry includes the template ID and its settlement mode for tagging.
  */
 export const ESCROW_TEMPLATES = [
+  { templateId: TEMPLATE_STREAM_ADMIN, settlementMode: SettlementMode.TokenStandardCustody },
   { templateId: TEMPLATE_STREAM_ESCROW, settlementMode: SettlementMode.NumericLegacy },
   { templateId: TEMPLATE_UTILITY_ESCROW, settlementMode: SettlementMode.UtilityHoldingCustody },
   {
@@ -381,11 +384,11 @@ export const CREATE_REQUEST_TEMPLATES = [
 // ---------------------------------------------------------------------------
 
 /**
- * Validate that all required template IDs have non-empty package IDs.
+ * Validate that all required template IDs have usable package references.
  *
  * Call this at client startup to fail fast if environment variables are
  * misconfigured or DARs are not deployed. Throws an Error listing all
- * templates with missing package IDs.
+ * templates with missing package references.
  *
  * @param options.requireUtility — if true, validate utility custody templates
  * @param options.requireLocalAsset — if true, validate local asset templates
@@ -398,8 +401,12 @@ export function validateTemplateRegistry(options?: {
 }): void {
   const missing: string[] = [];
 
+  const isPackageHash = (value: string): boolean => /^[a-f0-9]{64}$/i.test(value);
+  const isPackageName = (value: string): boolean => /^[A-Za-z][A-Za-z0-9_.-]*$/.test(value);
+
   const check = (label: string, tmpl: TemplateId) => {
-    if (!tmpl.packageId || tmpl.packageId.length < 16) {
+    const packageRef = tmpl.packageId.trim();
+    if (!packageRef || (!isPackageHash(packageRef) && !isPackageName(packageRef))) {
       missing.push(
         `${label}: packageId="${tmpl.packageId}" (${tmpl.moduleName}:${tmpl.entityName})`,
       );
@@ -432,10 +439,10 @@ export function validateTemplateRegistry(options?: {
 
   if (missing.length > 0) {
     throw new Error(
-      `Template registry validation failed — missing or invalid package IDs:\n` +
+      `Template registry validation failed — missing or invalid package references:\n` +
         missing.map((m) => `  • ${m}`).join('\n') +
         `\n\nSet the correct CANTON_STREAMS_*_PACKAGE_ID environment variables ` +
-        `or deploy the required DARs.`,
+        `to a Daml package name or vetted package hash, or deploy the required DARs.`,
     );
   }
 }

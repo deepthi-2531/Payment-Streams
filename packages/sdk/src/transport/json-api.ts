@@ -36,7 +36,9 @@ export interface JsonApiConfig {
 
 /**
  * Format a TemplateId object as the Canton JSON API string format.
- * Canton JSON API expects "packageId:ModuleName:EntityName".
+ * Canton JSON API expects "packageRef:ModuleName:EntityName"; packageRef
+ * may be a package name or a concrete package ID hash depending on the
+ * participant/runtime.
  */
 function formatTemplateId(t: TemplateId): string {
   return `${t.packageId}:${t.moduleName}:${t.entityName}`;

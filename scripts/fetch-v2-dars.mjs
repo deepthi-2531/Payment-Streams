@@ -17,10 +17,11 @@
  * The script supports three fetch modes, picked via `--mode`:
  *
  *   `--mode source-build` (default)
- *     Clone the Splice repo at the given ref, run `daml build` against
- *     each of the 6 V2 token-standard source packages, copy the
+ *     Clone the Splice repo at the given ref, run `dpm build` (or
+ *     legacy `daml build`) against
+ *     each V2 token-standard source package, copy the
  *     resulting DARs into `packages/daml/main/.lib/`. Requires `git`
- *     and a `daml` SDK ≥ the version pinned by the Splice repo to be
+ *     and DPM/Daml SDK ≥ the version pinned by the Splice repo to be
  *     on PATH.
  *
  *   `--mode binary-release`
@@ -45,7 +46,7 @@
  *      MilestoneEscrow, AllocationBridge to import from the real
  *      `Splice.Api.Token.*` modules instead of `Settlement.Stubs.*`
  *   5. Remove `-Wno-upgrade-interfaces` from `daml.yaml`
- *   6. Run `daml build --all` to verify
+ *   6. Run `dpm build --all` to verify
  *   7. Run `scripts/build-template-manifest.mjs` to refresh the
  *      template-id manifest
  *
@@ -73,6 +74,26 @@ const REPO_ROOT = resolve(__dirname, '..');
 const TARGET_DIR = resolve(REPO_ROOT, 'packages/daml/main/.lib');
 
 const SPLICE_REPO_URL = 'https://github.com/canton-network/splice.git';
+
+/**
+ * Pinned upstream commit on `token-standard-v2-upcoming` that this repo's
+ * V2 surface was last verified against. Maintainers should:
+ *
+ *   1. Run `git ls-remote $SPLICE_REPO_URL refs/heads/token-standard-v2-upcoming`
+ *      before a release to capture the current branch tip.
+ *   2. Bump SPLICE_PINNED_COMMIT to that hash.
+ *   3. Re-run `node scripts/fetch-v2-dars.mjs --mode source-build` to
+ *      rebuild the V2 DARs.
+ *   4. Run `pnpm -r run lint && pnpm --filter @canton-streams/sdk test`
+ *      and `bash scripts/check-v2-conformance.sh` to catch any
+ *      payload-shape regressions.
+ *   5. Update the SHA in this constant and in V2_DAR_HASHES.json.
+ *
+ * Recording the pin prevents silent drift if the upstream branch moves
+ * between this repo's build and a downstream consumer's build.
+ */
+export const SPLICE_PINNED_COMMIT = '2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea';
+export const SPLICE_PINNED_AS_OF = '2026-06-02';
 
 /**
  * Per the CIP-0112 update (May 2026), V2 packages are versioned
@@ -141,9 +162,51 @@ const V1_BUILD_ONLY_DARS = [
  */
 const POST_V2_BUILD_ONLY_DARS = [
   {
-    name: 'splice-util-token-standard-wallet',
+    name: 'splice-util',
+    version: '0.1.6',
+    filename: 'splice-util-0.1.6.dar',
+    location: 'daml/splice-util',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-api-reward-assignment-v1',
     version: '1.0.0',
-    filename: 'splice-util-token-standard-wallet-1.0.0.dar',
+    filename: 'splice-api-reward-assignment-v1-1.0.0.dar',
+    location: 'daml/splice-api-reward-assignment-v1',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-amulet',
+    version: '0.1.20',
+    filename: 'splice-amulet-0.1.20.dar',
+    location: 'daml/splice-amulet',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-test-token-v1',
+    version: '1.0.0',
+    filename: 'splice-test-token-v1-1.0.0.dar',
+    location: 'token-standard/examples/splice-test-token-v1',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-token-test-trading-app',
+    version: '1.0.2',
+    filename: 'splice-token-test-trading-app-1.0.2.dar',
+    location: 'token-standard/examples/splice-token-test-trading-app',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-token-standard-v1-test',
+    version: '1.0.14',
+    filename: 'splice-token-standard-v1-test-1.0.14.dar',
+    location: 'token-standard/splice-token-standard-v1-test',
+    role: 'build-only',
+  },
+  {
+    name: 'splice-util-token-standard-wallet',
+    version: '1.1.0',
+    filename: 'splice-util-token-standard-wallet-1.1.0.dar',
     location: 'daml/splice-util-token-standard-wallet',
     role: 'build-only',
   },
@@ -258,6 +321,7 @@ const DAR_SOURCES = [
   ...POST_V2_BUILD_ONLY_DARS,
   ...V2_TEST_INFRASTRUCTURE_DARS,
 ].filter(Boolean);
+const EXPECTED_WRITTEN_DAR_COUNT = DAR_SOURCES.filter((dar) => dar.role !== 'build-only').length;
 
 function parseArgs(argv) {
   const args = {
@@ -286,7 +350,7 @@ function printUsage() {
   console.error('Usage: fetch-v2-dars.mjs [options]');
   console.error('');
   console.error('Options:');
-  console.error('  --mode source-build    Clone Splice + daml build each V2 package (default)');
+  console.error('  --mode source-build    Clone Splice + dpm/daml build each V2 package (default)');
   console.error('  --mode binary-release  Try GitHub release artifacts (currently not published)');
   console.error('  --mode local           Use a local Splice checkout (requires --splice-checkout)');
   console.error('  --ref <branch>         Splice branch/tag (default: token-standard-v2-upcoming)');
@@ -335,6 +399,16 @@ function checkToolAvailable(cmd) {
   return !r2.error && r2.status === 0;
 }
 
+function resolveDamlBuildCommand() {
+  if (checkToolAvailable('dpm')) {
+    return { cmd: 'dpm', args: ['build'], label: 'dpm build' };
+  }
+  if (checkToolAvailable('daml')) {
+    return { cmd: 'daml', args: ['build'], label: 'daml build' };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Mode: source-build
 // ---------------------------------------------------------------------------
@@ -343,10 +417,11 @@ async function modeSourceBuild(args) {
   if (!checkToolAvailable('git')) {
     throw new Error('source-build mode requires `git` on PATH');
   }
-  if (!checkToolAvailable('daml')) {
+  const buildCommand = resolveDamlBuildCommand();
+  if (!buildCommand) {
     throw new Error(
-      'source-build mode requires `daml` SDK on PATH. Install via ' +
-      'https://docs.digitalasset.com/build/3.4/getting-started/installation.html ' +
+      'source-build mode requires DPM or the legacy `daml` SDK on PATH. Install via ' +
+      'https://docs.digitalasset.com/build/3.4/dpm/dpm.html ' +
       'or use --mode local with a pre-built checkout.',
     );
   }
@@ -364,7 +439,7 @@ async function modeSourceBuild(args) {
   }
 
   try {
-    return await buildAndCollect(tmpDir, args);
+    return await buildAndCollect(tmpDir, args, buildCommand);
   } finally {
     if (!args.keepClone && !args.dryRun && existsSync(tmpDir)) {
       execSync('rm', ['-rf', tmpDir]);
@@ -419,14 +494,20 @@ async function modeLocal(args) {
   if (!existsSync(checkout)) {
     throw new Error(`splice checkout does not exist: ${checkout}`);
   }
-  return buildAndCollect(checkout, args);
+  const buildCommand = resolveDamlBuildCommand();
+  if (!buildCommand) {
+    throw new Error(
+      '--mode local requires DPM or the legacy `daml` SDK on PATH so missing local DARs can be rebuilt.',
+    );
+  }
+  return buildAndCollect(checkout, args, buildCommand);
 }
 
 // ---------------------------------------------------------------------------
 // Build + collect (shared between source-build and local modes)
 // ---------------------------------------------------------------------------
 
-async function buildAndCollect(spliceRoot, args) {
+async function buildAndCollect(spliceRoot, args, buildCommand = resolveDamlBuildCommand()) {
   if (args.dryRun) {
     log('(dry-run) Would build each of these packages from ' + spliceRoot + ':');
     for (const dar of DAR_SOURCES) {
@@ -459,12 +540,12 @@ async function buildAndCollect(spliceRoot, args) {
       // `--output` here would rename the produced DAR and break the
       // build of subsequent packages that resolve dependencies from
       // sibling `.daml/dist/` directories.
-      execSync('daml', ['build'], { cwd: pkgRoot });
+      execSync(buildCommand.cmd, buildCommand.args, { cwd: pkgRoot });
     } catch (err) {
-      log(`  ✗ daml build failed for ${dar.name}: ${err.message ?? err}`);
+      log(`  ✗ ${buildCommand.label} failed for ${dar.name}: ${err.message ?? err}`);
       continue;
     }
-    // Find the produced DAR. daml writes to `.daml/dist/<name>-<version>.dar`
+    // Find the produced DAR. DPM/Daml writes to `.daml/dist/<name>-<version>.dar`
     // where <version> comes from the package's own daml.yaml. Upstream
     // splice packages use `version: 1.0.0` but their dependents reference
     // `<name>-current.dar` (the DPM-tool default for in-development builds).
@@ -493,6 +574,14 @@ async function buildAndCollect(spliceRoot, args) {
     if (!existsSync(currentAlias)) {
       writeFileSync(currentAlias, bytes);
     }
+
+    // Some Splice utility packages resolve token-standard dependencies from
+    // `daml/dars/<name>-<version>.dar` instead of sibling `.daml/dist`
+    // aliases. Mirror every built DAR into that cache so source-build and
+    // local modes are both self-contained.
+    const darsCache = resolve(spliceRoot, 'daml/dars');
+    mkdirSync(darsCache, { recursive: true });
+    writeFileSync(resolve(darsCache, dar.filename), bytes);
 
     // Key results by the manifest filename (our normalized name), but
     // record both names in the hashes file for traceability.
@@ -585,28 +674,26 @@ async function main() {
 
   const fetchedCount = writeDars(results, args);
   log('');
-  log(`Summary: ${fetchedCount} of ${DAR_SOURCES.length} DARs fetched.`);
+  log(`Summary: ${fetchedCount} of ${EXPECTED_WRITTEN_DAR_COUNT} publishable DARs fetched.`);
 
-  if (fetchedCount === DAR_SOURCES.length) {
+  if (fetchedCount === EXPECTED_WRITTEN_DAR_COUNT) {
     log('');
     log('Next steps (V2-only per STR-79):');
     log('');
     log(' Interface adoption (unblocks STR-86 / STR-87 / STR-88):');
-    log('  1. Add V2 interface DARs to packages/daml/main/daml.yaml dependencies:');
+    log('  1. Add only the V2 interface DARs directly imported by the main Daml package:');
     log('       - .lib/splice-api-token-metadata-v1-1.0.0.dar');
     log('       - .lib/splice-api-token-holding-v2-1.0.0.dar');
     log('       - .lib/splice-api-token-allocation-v2-1.0.0.dar');
     log('       - .lib/splice-api-token-allocation-request-v2-1.0.0.dar');
-    log('       - .lib/splice-api-token-allocation-instruction-v2-1.0.0.dar');
-    log('       - .lib/splice-api-token-transfer-events-v2-1.0.0.dar');
-    log('       - .lib/splice-token-standard-utils-1.0.0.dar');
+    log('     Keep transfer-instruction/allocation-instruction/transfer-events DARs fetched');
+    log('     for SDK/proxy package-id checks, but do not add unused Daml dependencies.');
     log('  2. Delete packages/daml/main/daml/CantonStreams/Settlement/Stubs/');
     log('  3. Update imports in StreamEscrow / StreamFlow / MilestoneEscrow / AllocationBridge:');
     log('       - import qualified CantonStreams.Settlement.Stubs.AllocationRequestV2 as AR2');
     log('       + import qualified Splice.Api.Token.AllocationRequestV2 as AR2');
-    log('  4. Remove -Wno-upgrade-interfaces from packages/daml/main/daml.yaml build-options');
-    log('  5. Run `daml build --all` to verify');
-    log('  6. Run `scripts/build-template-manifest.mjs` to refresh the manifest');
+    log('  4. Run `dpm build --all` to verify');
+    log('  5. Run `scripts/build-template-manifest.mjs` to refresh the manifest');
     log('');
     log(' Test infrastructure adoption (unblocks STR-89 + STR-101):');
     log('  7. Add test DARs to packages/daml/test/daml.yaml dependencies:');

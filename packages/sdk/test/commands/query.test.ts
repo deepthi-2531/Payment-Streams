@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { getStream, getStreamHistory } from '../../src/commands/query.js';
+import { getStream, getStreamHistory, listStreams } from '../../src/commands/query.js';
 import {
+  TEMPLATE_STREAM_ADMIN,
   TEMPLATE_STREAM_ESCROW,
   TEMPLATE_TOKEN_STANDARD_ESCROW,
   TEMPLATE_UTILITY_ESCROW,
@@ -216,6 +217,48 @@ function makeTransport() {
 }
 
 describe('query archived streams', () => {
+  it('lists and fetches active V2 StreamAdmin contracts', async () => {
+    const adminPayload = {
+      contractId: '#stream-admin-1',
+      streamId: 'v2-admin-stream',
+      sender,
+      recipient,
+      operator: escrowOperator,
+      instrumentRef: {
+        depository: 'AmuletAdmin::party',
+        issuer: 'AmuletAdmin::party',
+        instrumentId: 'Amulet',
+        instrumentVersion: 'v2',
+      },
+      totalDeposited: '12.0000000000',
+      totalWithdrawn: '2.0000000000',
+      vestingMode: { tag: 'Linear', value: undefined },
+      startTime: '2026-04-02T03:00:00.000Z',
+      endTime: '2026-04-02T04:00:00.000Z',
+      cancellable: true,
+      status: { tag: StreamStatus.Active, value: undefined },
+      numIterations: '3',
+      currentAllocationCid: '#alloc-current',
+      originalAllocationId: '#alloc-original',
+    };
+    const transport = {
+      query: vi.fn(async (templateId: any) =>
+        templateKey(templateId) === templateKey(TEMPLATE_STREAM_ADMIN) ? [adminPayload] : [],
+      ),
+    } as any;
+
+    const streams = await listStreams(transport, undefined, [sender], undefined, logger);
+    expect(streams).toHaveLength(1);
+    expect(streams[0]!.config.streamId).toBe('v2-admin-stream');
+    expect(streams[0]!.config.settlementMode).toBe(SettlementMode.TokenStandardCustody);
+    expect(streams[0]!.escrowRef?.escrowHoldingCid).toBe('#alloc-current');
+    expect(streams[0]!.escrowRef?.escrowAmount).toBe('10.0000000000');
+
+    const stream = await getStream(transport, sender, 'v2-admin-stream', [sender], logger);
+    expect(stream.contractId).toBe('#stream-admin-1');
+    expect(stream.state.renewalCount).toBe(3);
+  });
+
   it('reconstructs a completed token-standard stream from recent history', async () => {
     const transport = makeTransport();
 

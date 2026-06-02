@@ -69,7 +69,7 @@ const v2Leg: TransferLegV2 = {
 };
 
 describe('buildAllocationRequest (V2)', () => {
-  it('emits an AllocationRequestV2 payload with transferLegs map', () => {
+  it('emits an AllocationRequestV2 payload with allocations list', () => {
     const result = buildAllocationRequest(
       v2Caps,
       { settlement, legs: [{ legId: 'leg-1', leg: v2Leg }] },
@@ -77,8 +77,11 @@ describe('buildAllocationRequest (V2)', () => {
     );
     expect(result.version).toBe('v2');
     expect(result.templateId).toBe(TEMPLATE_V2);
-    const transferLegs = result.argument['transferLegs'] as Record<string, unknown>;
-    expect(transferLegs['leg-1']).toBeDefined();
+    const settlementArg = result.argument['settlement'] as { executors: unknown[] };
+    expect(settlementArg.executors).toEqual([{ party: 'EscrowOperator::1' }]);
+    const allocations = result.argument['allocations'] as Array<{ transferLegSides: unknown[] }>;
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0]!.transferLegSides).toHaveLength(1);
   });
 
   it('accepts multi-leg requests', () => {
@@ -94,8 +97,8 @@ describe('buildAllocationRequest (V2)', () => {
       TEMPLATE_V2,
     );
     expect(result.version).toBe('v2');
-    const transferLegs = result.argument['transferLegs'] as Record<string, unknown>;
-    expect(Object.keys(transferLegs)).toHaveLength(2);
+    const allocations = result.argument['allocations'] as unknown[];
+    expect(allocations).toHaveLength(2);
   });
 
   it('serializes amounts in decimal notation (no scientific)', () => {
@@ -105,8 +108,8 @@ describe('buildAllocationRequest (V2)', () => {
       { settlement, legs: [{ legId: 'leg-1', leg: tinyLeg }] },
       TEMPLATE_V2,
     );
-    const transferLegs = result.argument['transferLegs'] as Record<string, { amount: { numeric: string } }>;
-    const amt = transferLegs['leg-1']!.amount.numeric;
+    const allocations = result.argument['allocations'] as Array<{ transferLegSides: Array<{ amount: { numeric: string } }> }>;
+    const amt = allocations[0]!.transferLegSides[0]!.amount.numeric;
     expect(amt).not.toContain('e');
     expect(amt).toBe('0.0000000100');
   });
@@ -121,8 +124,8 @@ describe('buildAllocationRequest (V2)', () => {
       { settlement, legs: [{ legId: 'leg-1', leg: v2LegWithProvider }] },
       TEMPLATE_V2,
     );
-    const transferLegs = result.argument['transferLegs'] as Record<string, { receiver: { provider: { optional: unknown } } }>;
-    expect(transferLegs['leg-1']!.receiver.provider.optional).toEqual({ party: 'Custodian::bank' });
+    const allocations = result.argument['allocations'] as Array<{ transferLegSides: Array<{ otherside: { provider: { optional: unknown } } }> }>;
+    expect(allocations[0]!.transferLegSides[0]!.otherside.provider.optional).toEqual({ party: 'Custodian::bank' });
   });
 
   it('encodes Account.owner as Some when supplied (per the CIP-0112 update — Optional Party)', () => {
@@ -131,8 +134,8 @@ describe('buildAllocationRequest (V2)', () => {
       { settlement, legs: [{ legId: 'leg-1', leg: v2Leg }] },
       TEMPLATE_V2,
     );
-    const transferLegs = result.argument['transferLegs'] as Record<string, { receiver: { owner: { optional: unknown } } }>;
-    expect(transferLegs['leg-1']!.receiver.owner.optional).toEqual({ party: 'Recipient::alice' });
+    const allocations = result.argument['allocations'] as Array<{ transferLegSides: Array<{ otherside: { owner: { optional: unknown } } }> }>;
+    expect(allocations[0]!.transferLegSides[0]!.otherside.owner.optional).toEqual({ party: 'Recipient::alice' });
   });
 
   it('encodes Account.owner as None for ownerless registry burn/mint accounts', () => {
@@ -146,8 +149,8 @@ describe('buildAllocationRequest (V2)', () => {
       { settlement, legs: [{ legId: 'leg-1', leg: burnLeg }] },
       TEMPLATE_V2,
     );
-    const transferLegs = result.argument['transferLegs'] as Record<string, { receiver: { owner: { optional: unknown } } }>;
-    expect(transferLegs['leg-1']!.receiver.owner.optional).toBeNull();
+    const allocations = result.argument['allocations'] as Array<{ transferLegSides: Array<{ otherside: { owner: { optional: unknown } } }> }>;
+    expect(allocations[0]!.transferLegSides[0]!.otherside.owner.optional).toBeNull();
   });
 
   it('throws PausedInstrumentError when caps.paused = true', () => {
@@ -180,7 +183,11 @@ describe('buildAllocationSettle (V2)', () => {
       TEMPLATE_V2,
       'alloc-1',
       'Allocation_Settle',
-      expect.objectContaining({ nextIterationFunding: { optional: null } }),
+      expect.objectContaining({
+        actors: [{ party: 'exec' }],
+        extraTransferLegSides: [],
+        nextIterationFunding: { optional: null },
+      }),
       ['exec'],
     );
   });
@@ -189,14 +196,16 @@ describe('buildAllocationSettle (V2)', () => {
     const transport = mockTransport();
     await buildAllocationSettle(transport, v2Caps, 'alloc-1', TEMPLATE_V2, ['exec'], logger, {
       nextIterationFunding: {
-        amount: new Decimal('50'),
-        holdingCids: ['h-1', 'h-2'],
-        nextSettleBefore: new Date('2026-02-01T00:00:00Z'),
+        amounts: { 'v2-test': new Decimal('50') },
       },
     });
     const call = (transport.exercise as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const arg = call[3] as { nextIterationFunding: { optional: { holdingCids: unknown[] } } };
-    expect(arg.nextIterationFunding.optional.holdingCids).toHaveLength(2);
+    const arg = call[3] as {
+      nextIterationFunding: { optional: { text_map: { entries: Array<{ key: string }> } } };
+    };
+    expect(arg.nextIterationFunding.optional.text_map.entries).toEqual([
+      { key: 'v2-test', value: { numeric: '50.0000000000' } },
+    ]);
   });
 
   it('throws PausedInstrumentError when caps.paused = true', async () => {
@@ -226,7 +235,7 @@ describe('buildAllocationCancel (V2)', () => {
       TEMPLATE_V2,
       'alloc-1',
       'Allocation_Cancel',
-      expect.objectContaining({ extraArgs: expect.any(Object) }),
+      expect.objectContaining({ actors: [{ party: 'actor' }], extraArgs: expect.any(Object) }),
       ['actor'],
     );
   });
@@ -244,27 +253,221 @@ describe('buildBatchSettlement (V2)', () => {
 
   const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as never;
 
-  it('serializes per-leg allocation cids', async () => {
+  it('serializes standard batch settlement arguments', async () => {
     const transport = mockTransport();
     await buildBatchSettlement(
       transport,
       v2Caps,
       'sf-1',
       TEMPLATE_SF,
-      { 'leg-1': 'a-1', 'leg-2': 'a-2' },
+      {
+        settlement,
+        transferLegs: [
+          {
+            transferLegId: 'leg-1',
+            sender: { owner: 'EscrowOperator::1', id: '' },
+            receiver: { owner: 'Recipient::alice', id: '' },
+            amount: new Decimal('100'),
+            instrumentId: 'v2-test',
+          },
+        ],
+        allocations: [
+          {
+            allocationCid: 'a-1',
+            nextIterationFunding: { amounts: { 'v2-test': new Decimal('50') } },
+          },
+        ],
+      },
       ['exec'],
       logger,
     );
     const call = (transport.exercise as ReturnType<typeof vi.fn>).mock.calls[0]!;
-    const arg = call[3] as { allocationCids: Record<string, { contractId: string }> };
-    expect(arg.allocationCids['leg-1']).toEqual({ contractId: 'a-1' });
-    expect(arg.allocationCids['leg-2']).toEqual({ contractId: 'a-2' });
+    const arg = call[3] as {
+      settlement: { executors: unknown[] };
+      transferLegs: unknown[];
+      allocations: Array<{ allocationCid: { contract_id: string } }>;
+      actors: unknown[];
+    };
+    expect(arg.settlement.executors).toEqual([{ party: 'EscrowOperator::1' }]);
+    expect(arg.transferLegs).toHaveLength(1);
+    expect(arg.allocations[0]!.allocationCid).toEqual({ contract_id: 'a-1' });
+    expect(arg.actors).toEqual([{ party: 'exec' }]);
   });
 
   it('throws PausedInstrumentError when caps.paused = true', async () => {
     const transport = mockTransport();
     await expect(
-      buildBatchSettlement(transport, pausedCaps, 'sf-1', TEMPLATE_SF, { 'leg-1': 'a-1' }, ['exec'], logger),
+      buildBatchSettlement(
+        transport,
+        pausedCaps,
+        'sf-1',
+        TEMPLATE_SF,
+        { settlement, transferLegs: [], allocations: [] },
+        ['exec'],
+        logger,
+      ),
     ).rejects.toThrow(PausedInstrumentError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// STR-125 — upstream V2 conformance lock-in
+//
+// These tests pin the exact wire-field names against upstream V2 spec at
+// SPLICE_PINNED_COMMIT (recorded in scripts/fetch-v2-dars.mjs). If
+// upstream renames a field, these tests fail loudly and the maintainer
+// must update both this fixture and the SDK builder in lockstep.
+//
+// Reference sources (read at commit 2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea):
+//   - splice-api-token-allocation-v2 / AllocationV2.daml
+//   - splice-api-token-allocation-request-v2 / AllocationRequestV2.daml
+//   - splice-api-token-allocation-instruction-v2 / AllocationInstructionV2.daml
+// ---------------------------------------------------------------------------
+
+describe('V2 upstream conformance (STR-125)', () => {
+  it('AllocationRequest argument carries upstream field names', () => {
+    const result = buildAllocationRequest(
+      v2Caps,
+      {
+        settlement,
+        legs: [{ legId: 'leg-1', leg: v2Leg }],
+        originalRequestCid: 'prior-request-cid',
+      },
+      TEMPLATE_V2,
+    );
+
+    const arg = result.argument as Record<string, unknown>;
+    // Required upstream fields
+    expect(arg).toHaveProperty('settlement');
+    expect(arg).toHaveProperty('allocations');
+    expect(arg).toHaveProperty('requestedAt');
+    expect(arg).toHaveProperty('settleAt');
+    expect(arg).toHaveProperty('availableActions');
+    expect(arg).toHaveProperty('meta');
+    // The renamed-from-V1 field — upstream uses `originalRequestCid`,
+    // NOT `originalRequestId`. STR-125 audit explicitly called this out.
+    expect(arg).toHaveProperty('originalRequestCid');
+    expect(arg).not.toHaveProperty('originalRequestId');
+
+    // `settlement.executors` (plural list), NOT `settlement.executor` (single).
+    const settlementArg = arg['settlement'] as Record<string, unknown>;
+    expect(settlementArg).toHaveProperty('executors');
+    expect(settlementArg).not.toHaveProperty('executor');
+    expect(Array.isArray(settlementArg['executors'])).toBe(true);
+
+    // `allocations` is an array of records, NOT a map keyed by legId.
+    // (STR-125 noted the older builder emitted a `transferLegs` map.)
+    expect(Array.isArray(arg['allocations'])).toBe(true);
+    expect(arg).not.toHaveProperty('transferLegs');
+
+    // originalRequestCid encodes via `optional` + `contract_id`
+    expect(arg['originalRequestCid']).toEqual({
+      optional: { contract_id: 'prior-request-cid' },
+    });
+  });
+
+  it('Allocation_Settle argument matches upstream V2 choice signature', async () => {
+    const transport = {
+      create: vi.fn(),
+      exercise: vi.fn().mockResolvedValue({}),
+      exerciseByKey: vi.fn(),
+      query: vi.fn(),
+      queryByContractId: vi.fn(),
+      fetchLatestEvents: vi.fn(),
+    } as unknown as Transport;
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as never;
+
+    await buildAllocationSettle(transport, v2Caps, 'alloc-1', TEMPLATE_V2, ['exec'], logger, {
+      nextIterationFunding: { amounts: { 'inst-A': new Decimal('99.5') } },
+    });
+
+    const call = (transport.exercise as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const choiceName = call[2];
+    const arg = call[3] as Record<string, unknown>;
+
+    // Choice name must be V2's Allocation_Settle (not the V1 name).
+    expect(choiceName).toBe('Allocation_Settle');
+
+    // Upstream V2 choice fields:
+    //   actors             : [Party]
+    //   extraTransferLegSides : [TransferLegSide]
+    //   nextIterationFunding : Optional (TextMap Decimal)
+    //   extraArgs          : ExtraArgs
+    expect(Object.keys(arg).sort()).toEqual(
+      ['actors', 'extraArgs', 'extraTransferLegSides', 'nextIterationFunding'].sort(),
+    );
+
+    // nextIterationFunding is `Optional (TextMap Decimal)` — the wire
+    // shape is `{ optional: { text_map: { entries: [{key, value: {numeric}}] } } }`.
+    expect(arg['nextIterationFunding']).toEqual({
+      optional: {
+        text_map: { entries: [{ key: 'inst-A', value: { numeric: '99.5000000000' } }] },
+      },
+    });
+  });
+
+  it('SettlementFactory_SettleBatch argument matches upstream V2 choice signature', async () => {
+    const transport = {
+      create: vi.fn(),
+      exercise: vi.fn().mockResolvedValue({}),
+      exerciseByKey: vi.fn(),
+      query: vi.fn(),
+      queryByContractId: vi.fn(),
+      fetchLatestEvents: vi.fn(),
+    } as unknown as Transport;
+    const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() } as never;
+
+    await buildBatchSettlement(
+      transport,
+      v2Caps,
+      'sf-1',
+      TEMPLATE_SF,
+      {
+        settlement,
+        transferLegs: [
+          {
+            transferLegId: 'leg-1',
+            sender: { owner: 'EscrowOperator::1', id: '' },
+            receiver: { owner: 'Recipient::alice', id: '' },
+            amount: new Decimal('100'),
+            instrumentId: 'inst-A',
+          },
+        ],
+        allocations: [{ allocationCid: 'a-1' }],
+      },
+      ['exec'],
+      logger,
+    );
+
+    const call = (transport.exercise as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[2]).toBe('SettlementFactory_SettleBatch');
+
+    const arg = call[3] as Record<string, unknown>;
+    // Upstream V2 choice fields:
+    //   settlement    : SettlementInfo
+    //   transferLegs  : [TransferLeg]      -- top-level list, not a map
+    //   allocations   : [FinalizedAllocation]
+    //   actors        : [Party]
+    //   extraArgs     : ExtraArgs
+    expect(Object.keys(arg).sort()).toEqual(
+      ['actors', 'allocations', 'extraArgs', 'settlement', 'transferLegs'].sort(),
+    );
+
+    expect(Array.isArray(arg['transferLegs'])).toBe(true);
+    expect(Array.isArray(arg['allocations'])).toBe(true);
+
+    // The older builder shape called out in STR-125 used `allocationCids`
+    // (a map). Make sure we no longer emit that.
+    expect(arg).not.toHaveProperty('allocationCids');
+  });
+
+  it('AllocationRequest does NOT emit the legacy `executor` singular field', () => {
+    const result = buildAllocationRequest(
+      v2Caps,
+      { settlement, legs: [{ legId: 'leg-1', leg: v2Leg }] },
+      TEMPLATE_V2,
+    );
+    const settlementArg = result.argument['settlement'] as Record<string, unknown>;
+    expect(settlementArg).not.toHaveProperty('executor');
   });
 });
