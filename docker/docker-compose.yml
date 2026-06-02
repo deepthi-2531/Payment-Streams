@@ -33,6 +33,9 @@ services:
       - PROXY_PORT=4000
       - CANTON_HOST=canton
       - CANTON_PORT=6865
+      # Main package id from the Docker-built canton-streams DAR.
+      # Required because Ledger API gRPC template identifiers use package hashes.
+      - CANTON_STREAMS_PACKAGE_ID=e7761a44781d89616e98f3a521cf6bc3095b37bd5343b219dc9a996424f3319a
       - PROXY_AUTH_MODE=dev
       - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
     healthcheck:

@@ -55,6 +55,22 @@ function optionalText(value: string | undefined): { optional: { text: string } |
   return value !== undefined ? { optional: { text: value } } : { optional: null };
 }
 
+function damlVariant(
+  variantConstructor: string,
+  value: Record<string, unknown> = { unit: {} },
+): Record<string, unknown> {
+  return {
+    variant: {
+      variant_constructor: variantConstructor,
+      value,
+    },
+  };
+}
+
+function damlEnum(enumConstructor: string): Record<string, unknown> {
+  return { enum: { enum_constructor: enumConstructor } };
+}
+
 // ---------------------------------------------------------------------------
 // Vesting mode encoding — mirrors `CantonStreams.Interface.Types.VestingMode`
 // ---------------------------------------------------------------------------
@@ -68,22 +84,18 @@ export type VestingMode =
 function encodeVestingMode(vm: VestingMode): Record<string, unknown> {
   switch (vm.tag) {
     case 'Linear':
-      return { Linear: {} };
+      return damlVariant('Linear');
     case 'CliffLinear':
-      return { CliffLinear: { cliffTime: damlTimestamp(vm.cliffTime) } };
+      return damlVariant('CliffLinear', { cliffTime: damlTimestamp(vm.cliffTime) });
     case 'Stepped':
-      return {
-        Stepped: {
-          stepInterval: { microseconds: vm.stepIntervalMicros.toString() },
-          amountPerStep: damlNumeric(vm.amountPerStep),
-        },
-      };
+      return damlVariant('Stepped', {
+        stepInterval: { microseconds: vm.stepIntervalMicros.toString() },
+        amountPerStep: damlNumeric(vm.amountPerStep),
+      });
     case 'RenewableTerm':
-      return {
-        RenewableTerm: {
-          termDuration: { microseconds: vm.termDurationMicros.toString() },
-        },
-      };
+      return damlVariant('RenewableTerm', {
+        termDuration: { microseconds: vm.termDurationMicros.toString() },
+      });
   }
 }
 
@@ -123,8 +135,9 @@ export interface StreamAdminCreatePayload {
 
 /**
  * Build the create payload for a new `StreamAdmin` contract. Caller
- * dispatches this via the transport with all three signatories
- * (`sender`, `recipient`, `operator`) as `actAs`.
+ * dispatches this via the transport with the sender as `actAs`. Recipient
+ * consent and operator settlement authority live in the V2 token-standard
+ * allocation contracts.
  */
 export function buildStreamAdminCreate(
   params: CreateStreamAdminParams,
@@ -149,12 +162,12 @@ export function buildStreamAdminCreate(
       cancellable: { bool: params.cancellable },
       totalWithdrawn: damlNumeric(0),
       numIterations: { int64: '0' },
-      status: { Active: {} },
+      status: damlEnum('Active'),
       currentAllocationCid: { optional: null },
       originalAllocationId: { optional: null },
       observers: (params.observers ?? []).map((p) => ({ party: p })),
     },
-    signatories: [params.sender, params.recipient, params.operator],
+    signatories: [params.sender],
   };
 }
 
