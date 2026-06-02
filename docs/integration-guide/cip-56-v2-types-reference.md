@@ -2,14 +2,13 @@
 
 > **Source of truth** (user-confirmed, May 2026):
 >
-> * **V1**: published spec at `https://docs.sync.global/app_dev/api/splice-api-token-allocation-v1/` (and sibling pages for AllocationRequestV1, AllocationInstructionV1, MetadataV1, HoldingV1).
 > * **V2**: the `token-standard-v2-upcoming` branch of `canton-network/splice` — there is no V2 page on docs.sync.global yet. Direct file URLs:
 >   * `https://raw.githubusercontent.com/canton-network/splice/token-standard-v2-upcoming/token-standard/splice-api-token-allocation-v2/daml/Splice/Api/Token/AllocationV2.daml`
 >   * `https://raw.githubusercontent.com/canton-network/splice/token-standard-v2-upcoming/token-standard/splice-api-token-allocation-request-v2/daml/Splice/Api/Token/AllocationRequestV2.daml`
 >
 > When this reference disagrees with upstream, upstream wins. Re-verify before any release.
 >
-> **V1 ≠ V2 vocabulary** — the same logical operation has different choice names in V1 and V2 (e.g. settle = V1 `Allocation_Settle` / V2 `Allocation_Settle`). See STR-89 for the full V1-vs-V2 contrast table.
+> **V2 vocabulary boundary** — verify choice names against the upstream branch before release. V2 settlement uses `Allocation_Settle` and `SettlementFactory_SettleBatch`; `Allocation_ExecuteTransfer` is not part of the V2 surface.
 
 ## Why this matters
 
@@ -17,12 +16,10 @@ Yesterday's STR-66/68/69 work added stub modules at `Settlement/Stubs/Allocation
 
 ## Files in scope
 
-| File on splice repo | Our stub | Status |
+| File on splice repo | Historical stub | Status |
 |---|---|---|
 | `token-standard/splice-api-token-allocation-request-v2/daml/Splice/Api/Token/AllocationRequestV2.daml` | `Settlement/Stubs/AllocationRequestV2.daml` | **shape diverges; rewrite needed** |
 | `token-standard/splice-api-token-allocation-v2/daml/Splice/Api/Token/AllocationV2.daml` | `Settlement/Stubs/AllocationV2.daml` | **shape diverges; rewrite needed** |
-| `token-standard/splice-api-token-allocation-request-v1/daml/Splice/Api/Token/AllocationRequestV1.daml` | `Settlement/Stubs/AllocationRequestV1.daml` | re-verify against V1 spec |
-| `token-standard/splice-api-token-allocation-v1/daml/Splice/Api/Token/AllocationV1.daml` | `Settlement/Stubs/AllocationV1.daml` | re-verify |
 
 ## V2 — verified shapes
 
@@ -135,7 +132,7 @@ data TransferSide = SenderSide | ReceiverSide
 | `TransferLegSide.sender/receiver` | both fields present | `side` + `otherside : Account` (the relative-side model) |
 | `availableActions` | absent from view | required: `Map ARA [[Party]]` |
 | Action types | none | `AllocationRequestAction` (ARA_*) + `AllocationAction` (AA_*) |
-| `nextIterationFunding` | on `Allocation_Settle` choice arg | on `AllocationSpecification` itself |
+| `nextIterationFunding` | older stubs mixed incompatible shapes | on `AllocationSpecification` and `Allocation_Settle` / `FinalizedAllocation` as `Optional (TextMap Decimal)` |
 | `numIterations` | manually tracked by StreamFlow | built into `AllocationView` |
 
 ## Implications for our existing code

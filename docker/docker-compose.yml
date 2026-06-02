@@ -1,26 +1,46 @@
-version: "3.8"
-
 services:
   # Canton sandbox participant node
   canton:
     build:
-      context: .
-      dockerfile: Dockerfile.canton
+      context: ..
+      dockerfile: docker/Dockerfile.canton
     ports:
-      - "6865:6865"   # Ledger API (gRPC)
-      - "7575:7575"   # JSON API (optional, Phase 3)
-      - "10011:10011" # Admin API
+      - '5001:6865' # Ledger API (gRPC)
+      - '5002:10011' # Admin API
     volumes:
       - canton-data:/canton/data
       - ../packages/daml:/daml-packages:ro
     environment:
       - CANTON_LOG_LEVEL=INFO
     healthcheck:
-      test: ["CMD", "grpcurl", "-plaintext", "localhost:6865", "grpc.health.v1.Health/Check"]
+      test: ['CMD', 'grpcurl', '-plaintext', 'localhost:6865', 'grpc.health.v1.Health/Check']
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 30s
+
+  # Streams REST proxy
+  proxy:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.proxy
+    ports:
+      - '4000:4000'
+    depends_on:
+      canton:
+        condition: service_healthy
+    environment:
+      - PROXY_PORT=4000
+      - CANTON_HOST=canton
+      - CANTON_PORT=6865
+      - PROXY_AUTH_MODE=dev
+      - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:4000/api/health']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   # Dashboard web UI
   dashboard:
@@ -28,13 +48,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.dashboard
     ports:
-      - "3000:80"
+      - '3000:80'
     depends_on:
-      canton:
+      proxy:
         condition: service_healthy
     environment:
-      - VITE_CANTON_HOST=canton
-      - VITE_CANTON_PORT=6865
+      - VITE_WALLET_GATEWAY_URL=http://localhost:3030/api/v0/dapp
 
 volumes:
   canton-data:

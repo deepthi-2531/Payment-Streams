@@ -33,19 +33,16 @@ export enum StreamStatus {
 /**
  * Settlement mode — determines how the stream's escrow is backed.
  *
- * Each mode maps to a different on-ledger template and custody path:
- * - NumericLegacy: Phase 1 numeric bookkeeping (no real holdings)
- * - UtilityHoldingCustody: Phase 2 Utility/CIP holdings (Holding_Lock/Split/Transfer)
- * - TokenStandardCustody: Phase 2 external-token custody via chunked token-standard transfers
- * - LocalAssetCustody: host-app local asset custody via a deployment adapter
- * - Delegated: Phase 3 executor-delegated settlement (no prefunded escrow)
+ * New streams are V2-only and must use `TokenStandardCustody`.
+ * The other enum values remain so old persisted contracts can be read
+ * and migration tools can report them explicitly.
  */
 export enum SettlementMode {
   /** Phase 1 numeric bookkeeping — no real holdings move. */
   NumericLegacy = 'NumericLegacy',
   /** Phase 2 Utility/CIP custody — real holdings locked/split/transferred. */
   UtilityHoldingCustody = 'UtilityHoldingCustody',
-  /** Phase 2 external-token custody — sender/escrow/recipient transfers happen via token-standard flows. */
+  /** CIP-56 V2 / CIP-0112 AllocationRequest custody. */
   TokenStandardCustody = 'TokenStandardCustody',
   /** Host-app local asset custody via a deployment-specific adapter. */
   LocalAssetCustody = 'LocalAssetCustody',
@@ -335,8 +332,8 @@ export interface StreamConfig {
   /** Whether the sender may cancel this stream before completion. */
   readonly cancellable: boolean;
   /**
-   * Settlement mode — determines how the escrow is backed.
-   * Defaults to NumericLegacy for backward compatibility with Phase 1 streams.
+   * Settlement mode. New streams default to TokenStandardCustody; legacy
+   * modes are read-only compatibility labels.
    */
   readonly settlementMode?: SettlementMode;
 }
@@ -447,14 +444,13 @@ export interface CreateStreamParams {
   /** Whether the sender may cancel the stream. */
   readonly cancellable: boolean;
   /**
-   * Settlement mode for the new stream.
-   * Determines which on-ledger template and custody path to use.
-   * Defaults to UtilityHoldingCustody if omitted.
+   * Settlement mode for the new stream. Defaults to TokenStandardCustody.
+   * Non-token-standard modes are rejected for new stream creation.
    */
   readonly settlementMode?: SettlementMode;
   /** Escrow operator party. Required for holding-backed settlement modes. */
   readonly escrowOperator?: string;
-  /** Escrow operator's custody account. Required for UtilityHoldingCustody. */
+  /** Escrow operator's custody account. Retained for legacy custody reads. */
   readonly escrowAccount?: LedgerRecord;
 }
 
@@ -572,12 +568,7 @@ export interface PendingStreamRequestFilter {
 }
 
 /** Types of stream lifecycle events. */
-export type StreamEventType =
-  | 'created'
-  | 'withdrawn'
-  | 'cancelled'
-  | 'completed'
-  | 'renewed';
+export type StreamEventType = 'created' | 'withdrawn' | 'cancelled' | 'completed' | 'renewed';
 
 /**
  * Where the event data came from.

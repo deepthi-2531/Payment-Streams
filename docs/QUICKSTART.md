@@ -17,13 +17,17 @@ docker compose -f docker/docker-compose.yml up -d
 
 Brings up:
 
-| Service | URL | Purpose |
-|---|---|---|
-| Dashboard | http://localhost:3000 | React UI |
-| REST proxy | http://localhost:4000 | Streams REST API |
-| Canton gRPC ledger API | localhost:5001 | SDK + proxy gRPC connection |
-| Canton JSON API | http://localhost:7575 | Browser / JSON-API queries |
-| Canton Admin API | localhost:5002 | DAR upload, party allocation |
+| Service                | URL                   | Purpose                      |
+| ---------------------- | --------------------- | ---------------------------- |
+| Dashboard              | http://localhost:3000 | React UI                     |
+| REST proxy             | http://localhost:4000 | Streams REST API             |
+| Canton gRPC ledger API | localhost:5001        | SDK + proxy gRPC connection  |
+| Canton Admin API       | localhost:5002        | DAR upload, party allocation |
+
+Wallet-backed E2E requires a separate Splice validator LocalNet built
+from `canton-network/splice@token-standard-v2-upcoming`. The Amulet
+wallet gateway from that LocalNet should expose the CIP-103 dapp API at
+`http://localhost:3030/api/v0/dapp`.
 
 Watch readiness:
 
@@ -57,17 +61,17 @@ pnpm dev
 
 ## Connect a wallet
 
-The dashboard uses [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md) for end-user wallet authentication via `@canton-network/dapp-sdk`.
+The dashboard uses [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md) for end-user wallet authentication via `@canton-network/dapp-sdk`. New stream flows target the **CIP-56 V2 / CIP-0112 AllocationRequest** path and should be tested with the Amulet wallet on a Splice LocalNet built from `token-standard-v2-upcoming`.
 
 1. Open http://localhost:3000
 2. Click **Connect wallet** on the landing page
-3. The dapp-sdk wallet picker opens — select your CIP-103 wallet (e.g. [Splice Wallet Kernel](https://github.com/canton-network/splice-wallet-kernel) running locally at `:3030`)
+3. The dapp-sdk wallet picker opens — select the Amulet wallet gateway running locally at `:3030`
 4. Complete the IDP sign-in in the wallet popup
 5. Dashboard transitions to the authenticated layout
 
 For a local SWK setup, see [SWK-WALLET-RUNBOOK.md](SWK-WALLET-RUNBOOK.md).
 
-**Skip the wallet picker for local dev:** set `VITE_SKIP_WALLET_PICKER=true` in `packages/dashboard/.env.local` to auto-select the configured remote wallet. Template: `packages/dashboard/.env.example`.
+**Skip the wallet picker for local dev:** set `VITE_SKIP_WALLET_PICKER=true` in `packages/dashboard/.env.local` to auto-select the configured Amulet remote wallet. Template: `packages/dashboard/.env.example`.
 
 **Dev fallback without a wallet:** the landing page has a "Use dev-mode credentials" toggle. Paste a JWT and party id to bypass the wallet flow. Only works against a proxy running in `PROXY_AUTH_MODE=dev`.
 
@@ -86,9 +90,9 @@ For a local SWK setup, see [SWK-WALLET-RUNBOOK.md](SWK-WALLET-RUNBOOK.md).
    - **Amount**: e.g. `100.0`
    - **Vesting**: Linear / Cliff / Stepped / RenewableTerm
    - **Start / End**: now → +1h, or any window
-4. Click **Create** → the wallet picker pops up for sender signature → stream lands on-ledger as an `AllocationRequest`
+4. Click **Create** → the wallet signs the V2 token-standard command path → stream metadata lands on-ledger and funding is driven through the Amulet AllocationRequest flow
 
-The recipient sees the request in their **Inbox** tab. They click **Accept** → their wallet signs → the funding `AllocationFactory_Allocate(committed=True)` settles atomically.
+The V2 flow follows the Amulet iterated-settlement pattern: sender funding is committed with `AllocationFactory_Allocate(committed=True)` and the executor advances accrual with `SettlementFactory_SettleBatch` / `Allocation_Settle` using `nextIterationFunding`.
 
 ### From the REST API (server-side)
 
@@ -111,6 +115,10 @@ curl -X POST $PROXY/api/streams \
     "endTime": "'"$(date -u -v+1H +%FT%TZ)"'",
     "settlementMode": "TokenStandardCustody",
     "asset": { "instrumentId": "MyAsset", "admin": "MyAssetAdmin::1220..." },
+    "fundingReference": "source-allocation",
+    "escrowOperator": "EscrowOperator::1220...",
+    "senderAccount": { "owner": "Alice::1220...", "id": "" },
+    "recipientAccount": { "owner": "Bob::1220...", "id": "" },
     "cancellable": true
   }'
 
@@ -126,11 +134,7 @@ curl -X POST "$PROXY/api/streams/SenderParty::1220.../first-stream/withdraw" \
 
 ```typescript
 import { dappSDK } from '@canton-network/dapp-sdk';
-import {
-  buildAllocationRequest,
-  VestingMode,
-  SettlementMode,
-} from '@canton-streams/sdk';
+import { buildAllocationRequest, VestingMode, SettlementMode } from '@canton-streams/sdk';
 import Decimal from 'decimal.js';
 
 await dappSDK.init();
@@ -180,7 +184,16 @@ const { streamId } = await client.createStream({
   endTime: new Date(Date.now() + 3_600_000),
   cancellable: true,
   settlementMode: SettlementMode.TokenStandardCustody,
-  asset: { instrumentId: 'MyAsset', admin: 'MyAssetAdmin::1220...' },
+  instrumentRef: {
+    depository: 'MyAssetAdmin::1220...',
+    issuer: 'MyAssetAdmin::1220...',
+    instrumentId: 'MyAsset',
+    instrumentVersion: 'v2',
+  },
+  fundingReference: 'source-allocation',
+  escrowOperator: 'EscrowOperator::1220...',
+  senderAccount: { owner: 'Alice::1220...', id: '' },
+  recipientAccount: { owner: 'Bob::1220...', id: '' },
 });
 
 await client.close();

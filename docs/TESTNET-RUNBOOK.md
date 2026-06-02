@@ -13,14 +13,13 @@ but operator discipline is the primary defense.
 
 | Probe                                | Asset(s)    | Settlement path                  | Network |
 |--------------------------------------|-------------|----------------------------------|---------|
-| `testnet-cc-stream-probe.mjs`        | CC (sandbox) | NumericLegacy (accrual math only) | DevNet  |
-| `testnet-usdcx-stream-probe.mjs`     | **Any V1 asset** (USDCx, CC, ...) | TokenStandardCustody | DevNet, TestNet |
-| `testnet-v2-stream-probe.mjs`        | V2-native    | V2 AllocationRequest (scaffolded; blocked on STR-65) | V2-DevNet |
-| `testnet-v1v2-mixed-probe.mjs`       | Mixed V1+V2  | TokenDvP_V1V2Mixed (scaffolded; blocked on STR-65)   | DevNet+V2-DevNet |
+| `testnet-v2-stream-probe.mjs`        | V2-native asset | V2 AllocationRequest / Allocation_Settle | V2-DevNet |
+| `testnet-token-standard-stream-probe.mjs` | Registered V2 token-standard asset | V2 AllocationRequest | DevNet, TestNet |
+| `testnet-cc-stream-probe.mjs`        | CC sandbox fixture | Legacy smoke only; not a production V2 gate | DevNet |
 
-The production probe is `testnet-usdcx-stream-probe.mjs` — despite the
-name, it handles any V1 TokenStandardCustody asset. The CC probe is the
-M1 sandbox path for accrual math verification only.
+The production path is V2-only. Legacy V1/TokenStandardCustody probes
+are retained only as historical smoke tooling and should not be treated
+as acceptance evidence for this release.
 
 ---
 

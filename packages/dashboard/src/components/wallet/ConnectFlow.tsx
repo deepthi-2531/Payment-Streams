@@ -13,12 +13,7 @@
  */
 
 import { useState, type CSSProperties } from 'react';
-import {
-  AlertCircle,
-  ChevronRight,
-  KeyRound,
-  Wallet,
-} from 'lucide-react';
+import { AlertCircle, ChevronRight, KeyRound, Wallet } from 'lucide-react';
 import { useAuth } from '../../store/auth.js';
 import { Signing } from './Signing.js';
 
@@ -158,9 +153,8 @@ export function ConnectFlow() {
               margin: 0,
             }}
           >
-            Time-locked, vesting-aware payment rails on the Canton ledger.
-            Linear, cliff, stepped, or renewable — every choice settles on
-            real custody, every accrual is real-time.
+            Time-locked, vesting-aware payment rails on the Canton ledger. Linear, cliff, stepped,
+            or renewable — every choice settles on real custody, every accrual is real-time.
           </p>
         </div>
 
@@ -173,8 +167,8 @@ export function ConnectFlow() {
           }}
         >
           <Stat label="Settlement" value="On ledger" sub="atomic" />
-          <Stat label="Standard" value="CIP-56 V1/V2" sub="capability-aware" />
-          <Stat label="Auth" value="CIP-103" sub="wallet gateway" />
+          <Stat label="Standard" value="CIP-56 V2" sub="AllocationRequest" />
+          <Stat label="Auth" value="CIP-103" sub="Amulet wallet" />
         </div>
       </div>
 
@@ -194,8 +188,7 @@ export function ConnectFlow() {
                 width: 36,
                 height: 36,
                 borderRadius: 10,
-                background:
-                  'color-mix(in oklab, var(--accent) 14%, var(--card))',
+                background: 'color-mix(in oklab, var(--accent) 14%, var(--card))',
                 color: 'var(--accent)',
                 display: 'flex',
                 alignItems: 'center',
@@ -222,7 +215,7 @@ export function ConnectFlow() {
                   color: 'var(--fg-4)',
                 }}
               >
-                Splice Wallet Kernel · CIP-103
+                Splice Amulet Wallet · CIP-103
               </p>
             </div>
           </div>
@@ -252,10 +245,8 @@ export function ConnectFlow() {
                 display: 'flex',
                 gap: 8,
                 padding: '10px 12px',
-                background:
-                  'color-mix(in oklab, var(--danger) 8%, var(--bg-elev))',
-                border:
-                  '1px solid color-mix(in oklab, var(--danger) 30%, var(--line))',
+                background: 'color-mix(in oklab, var(--danger) 8%, var(--bg-elev))',
+                border: '1px solid color-mix(in oklab, var(--danger) 30%, var(--line))',
                 borderRadius: 'var(--r-md)',
                 fontSize: 11.5,
                 color: 'var(--danger)',
@@ -329,8 +320,8 @@ export function ConnectFlow() {
                   Connect dev session
                 </button>
                 <p style={{ margin: 0, fontSize: 10.5, color: 'var(--fg-4)' }}>
-                  Dev mode bypasses the wallet — use it only against a local
-                  proxy with `unsafe_jwt` enabled.
+                  Dev mode bypasses the wallet — use it only against a local proxy with `unsafe_jwt`
+                  enabled.
                 </p>
               </form>
             )}
@@ -404,9 +395,7 @@ function Stat({
       >
         {value}
       </div>
-      <div style={{ fontSize: 10.5, color: 'var(--fg-4)', marginTop: 2 }}>
-        {sub}
-      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--fg-4)', marginTop: 2 }}>{sub}</div>
     </div>
   );
 }

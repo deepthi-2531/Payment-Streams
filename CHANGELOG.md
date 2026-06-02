@@ -7,10 +7,10 @@ All notable changes to Canton Payment Streams are documented here. The format is
 ### Changed
 
 - **V2-only pivot.** Removed all V1/V0 Daml stubs (`StreamEscrow`, `UtilityHoldingEscrow`, `LocalAssetEscrow`, `CreateUtilityHoldingStream`, etc.) and their SDK wrappers. The single supported settlement path is now CIP-56 V2 Token Standard via the CIP-0112 `AllocationRequest` pattern. The `SettlementMode` enum retains the legacy names for backwards compatibility with persisted requests, but only `TokenStandardCustody` is exercised by the live code path.
-- **AllocationRequest dual-interface migration.** Stream-admin templates (`StreamAdmin`, `StreamFlow` + `StreamFlowAdmin`, `MilestoneAdmin`) now implement both `AllocationRequestV1` and `AllocationRequestV2` per CIP-0112 §5. The shared view-builder helpers live in `Settlement.AllocationBridge`.
+- **AllocationRequest V2 migration.** Stream-admin templates (`StreamAdmin`, `StreamFlow` + `StreamFlowAdmin`, `MilestoneAdmin`) now expose the V2 `AllocationRequest` shape. The shared view-builder helpers live in `Settlement.AllocationBridge`.
 - **Dashboard auth: CIP-103 wallet flow.** The dashboard now uses `@canton-network/dapp-sdk` for end-user authentication; JWT-paste remains as a dev fallback only. The proxy reads identity from the JWT `party`/`sub` claim and no longer requires the `X-Canton-Party` header from browser clients.
 - **Auto-withdraw rewritten** as an event-driven `TransferEventsV2` subscriber (`packages/proxy/src/transfer-events-subscriber.ts`), replacing the poll-based path. Falls back to interactive submission when a participant cannot stream the event directly.
-- **Per-asset registry** (`config/asset-registry.json`) drives all V1/V2 capability negotiation. The SDK call `getAssetCapabilities(instrumentRef)` reads the registry; library selects the correct adapter at runtime, with no per-asset branching in application code.
+- **Per-asset registry** (`config/asset-registry.json`) drives V2 capability gating. The SDK call `getAssetCapabilities(instrumentRef)` reads the registry; library rejects assets without required V2 allocation support, with no per-asset branching in application code.
 - **CC and USDCx run through the same code path.** Both validated end-to-end on TestNet via the same SDK shape; only the registry entry differs.
 
 ### Added

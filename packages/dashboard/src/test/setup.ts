@@ -25,8 +25,7 @@ if (typeof globalThis.crypto?.randomUUID !== 'function') {
   let counter = 0;
   globalThis.crypto = (globalThis.crypto ?? {}) as Crypto;
   Object.assign(globalThis.crypto, {
-    randomUUID: () =>
-      `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`,
+    randomUUID: () => `00000000-0000-4000-8000-${String(++counter).padStart(12, '0')}`,
   });
 }
 
@@ -55,5 +54,37 @@ vi.mock('@canton-network/dapp-sdk', () => {
     removeOnConnected: vi.fn().mockResolvedValue(undefined),
     removeOnTxChanged: vi.fn().mockResolvedValue(undefined),
   };
-  return { dappSDK };
+  class RemoteAdapter {
+    readonly providerId: string;
+    readonly name: string;
+    readonly type = 'remote';
+    readonly rpcUrl: string;
+
+    constructor(config: { providerId?: string; name: string; rpcUrl: string }) {
+      this.providerId = config.providerId ?? `remote:${config.rpcUrl}`;
+      this.name = config.name;
+      this.rpcUrl = config.rpcUrl;
+    }
+
+    async detect() {
+      return true;
+    }
+
+    getInfo() {
+      return {
+        providerId: this.providerId,
+        name: this.name,
+        type: this.type,
+        url: this.rpcUrl,
+      };
+    }
+  }
+
+  class DappSDK {
+    constructor() {
+      return dappSDK;
+    }
+  }
+
+  return { dappSDK, DappSDK, RemoteAdapter };
 });

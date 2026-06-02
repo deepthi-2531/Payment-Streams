@@ -13,33 +13,14 @@
  * `trigger(stepFields)` and only advance if it passes). Final submit
  * uses the real `useCreateStream` mutation — no mock fixtures.
  *
- * STR-103: `TokenStandardCustody` is rendered as a disabled option
- * with a tooltip pointing at STR-86, matching the schema rejection.
+ * The settlement surface is V2-only: TokenStandardCustody via the
+ * CIP-0112 AllocationRequest pattern.
  */
 
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type CSSProperties,
-  type ReactNode,
-} from 'react';
-import {
-  useForm,
-  FormProvider,
-  useFormContext,
-  type Resolver,
-} from 'react-hook-form';
+import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useForm, FormProvider, useFormContext, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import {
-  Check,
-  ChevronLeft,
-  ChevronRight,
-  Sparkles,
-  X,
-  Loader2,
-  Info,
-} from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Sparkles, X, Loader2, Info } from 'lucide-react';
 import Decimal from 'decimal.js';
 import {
   AssetType,
@@ -83,34 +64,27 @@ const STEPS: readonly StepDef[] = [
 function stepFields(
   stepIdx: number,
   vestingMode: VestingMode,
-  settlementMode: SettlementMode,
 ): Array<keyof CreateStreamSchemaValues> {
   if (stepIdx === 0) {
-    return ['recipient', 'totalDeposited', 'assetType'] as Array<
+    return ['recipient', 'totalDeposited', 'assetType', 'instrumentAdmin', 'instrumentId'] as Array<
       keyof CreateStreamSchemaValues
     >;
   }
   if (stepIdx === 1) {
     const base = ['startTime', 'endTime', 'vestingMode', 'cancellable'];
     if (vestingMode === VestingMode.CliffLinear) base.push('cliffTime');
-    if (vestingMode === VestingMode.Stepped)
-      base.push('stepInterval', 'amountPerStep');
+    if (vestingMode === VestingMode.Stepped) base.push('stepInterval', 'amountPerStep');
     if (vestingMode === VestingMode.RenewableTerm) base.push('termDuration');
     return base as Array<keyof CreateStreamSchemaValues>;
   }
   if (stepIdx === 2) {
-    const base = ['settlementMode'];
-    if (
-      settlementMode === SettlementMode.UtilityHoldingCustody ||
-      settlementMode === SettlementMode.LocalAssetCustody
-    ) {
-      base.push(
-        'holdingCid',
-        'escrowOperator',
-        'senderAccount',
-        'recipientAccount',
-      );
-    }
+    const base = [
+      'settlementMode',
+      'fundingReference',
+      'escrowOperator',
+      'senderAccount',
+      'recipientAccount',
+    ];
     return base as Array<keyof CreateStreamSchemaValues>;
   }
   return [];
@@ -144,7 +118,7 @@ function toDatetimeLocal(d: Date): string {
 const defaults: Partial<CreateStreamSchemaValues> = {
   assetType: AssetType.GlobalCip56,
   vestingMode: VestingMode.Linear,
-  settlementMode: SettlementMode.UtilityHoldingCustody,
+  settlementMode: SettlementMode.TokenStandardCustody,
   cancellable: true,
   startTime: defaultStartTime(),
   endTime: defaultEndTime(),
@@ -171,10 +145,9 @@ export function CreateStreamWizard() {
   });
 
   const vestingMode = methods.watch('vestingMode');
-  const settlementMode = methods.watch('settlementMode');
 
   const onNext = async () => {
-    const fields = stepFields(stepIdx, vestingMode, settlementMode);
+    const fields = stepFields(stepIdx, vestingMode);
     const ok = await methods.trigger(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       fields as any,
@@ -198,24 +171,16 @@ export function CreateStreamWizard() {
       await createStream.mutateAsync(buildCreateParams(party, data));
       setSubmitted(true);
     } catch (err) {
-      setSubmitError(
-        err instanceof Error ? err.message : 'Failed to create stream',
-      );
+      setSubmitError(err instanceof Error ? err.message : 'Failed to create stream');
     }
   });
 
   return (
     <FormProvider {...methods}>
       <div style={{ paddingTop: 28 }}>
-        <Stepper
-          stepIdx={stepIdx}
-          onJump={(i) => i <= stepIdx && setStepIdx(i)}
-        />
+        <Stepper stepIdx={stepIdx} onJump={(i) => i <= stepIdx && setStepIdx(i)} />
 
-        <form
-          onSubmit={onSubmit}
-          style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
-        >
+        <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
           <div className="card" style={{ padding: 28, marginTop: 24 }}>
             {stepIdx === 0 && <StepRecipient />}
             {stepIdx === 1 && <StepSchedule />}
@@ -255,11 +220,7 @@ export function CreateStreamWizard() {
               </button>
 
               {stepIdx < STEPS.length - 1 ? (
-                <button
-                  type="button"
-                  className="btn btn-primary"
-                  onClick={onNext}
-                >
+                <button type="button" className="btn btn-primary" onClick={onNext}>
                   Continue <ChevronRight size={14} />
                 </button>
               ) : (
@@ -274,10 +235,7 @@ export function CreateStreamWizard() {
                     </>
                   ) : createStream.isPending ? (
                     <>
-                      <Loader2
-                        size={14}
-                        style={{ animation: 'spin 800ms linear infinite' }}
-                      />{' '}
+                      <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />{' '}
                       Signing…
                     </>
                   ) : (
@@ -329,9 +287,7 @@ function Stepper({
             disabled={i > stepIdx}
             style={stepButtonStyle(active, done, i <= stepIdx)}
           >
-            <div style={stepBadgeStyle(active, done)}>
-              {done ? <Check size={11} /> : i + 1}
-            </div>
+            <div style={stepBadgeStyle(active, done)}>{done ? <Check size={11} /> : i + 1}</div>
             <span style={{ fontSize: 12.5, fontWeight: 500 }}>{step.label}</span>
           </button>
         );
@@ -340,20 +296,14 @@ function Stepper({
   );
 }
 
-const stepButtonStyle = (
-  active: boolean,
-  done: boolean,
-  clickable: boolean,
-): CSSProperties => ({
+const stepButtonStyle = (active: boolean, done: boolean, clickable: boolean): CSSProperties => ({
   flex: 1,
   display: 'flex',
   alignItems: 'center',
   gap: 10,
   padding: '8px 12px',
   borderRadius: 8,
-  background: active
-    ? 'color-mix(in oklab, var(--accent) 12%, var(--card-2))'
-    : 'transparent',
+  background: active ? 'color-mix(in oklab, var(--accent) 12%, var(--card-2))' : 'transparent',
   color: active ? 'var(--accent)' : done ? 'var(--fg-2)' : 'var(--fg-4)',
   cursor: clickable ? 'pointer' : 'default',
   border: 'none',
@@ -369,11 +319,9 @@ const stepBadgeStyle = (active: boolean, done: boolean): CSSProperties => ({
     (active
       ? 'var(--accent)'
       : done
-      ? 'color-mix(in oklab, var(--accent) 50%, var(--line))'
-      : 'var(--line-2)'),
-  background: done
-    ? 'color-mix(in oklab, var(--accent) 12%, transparent)'
-    : 'transparent',
+        ? 'color-mix(in oklab, var(--accent) 50%, var(--line))'
+        : 'var(--line-2)'),
+  background: done ? 'color-mix(in oklab, var(--accent) 12%, transparent)' : 'transparent',
   color: active ? 'var(--accent)' : done ? 'var(--accent)' : 'var(--fg-4)',
   display: 'flex',
   alignItems: 'center',
@@ -454,11 +402,7 @@ function StepRecipient() {
       />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
         <FormField name="recipient" label="Recipient party" required>
-          <input
-            className={inputClass}
-            style={inputStyle}
-            placeholder="alice::1220abcd…"
-          />
+          <input className={inputClass} style={inputStyle} placeholder="alice::1220abcd…" />
         </FormField>
 
         <div
@@ -479,16 +423,25 @@ function StepRecipient() {
             />
           </FormField>
           <FormField name="assetType" label="Asset type">
-            <select
-              className={inputClass}
-              style={inputStyle}
-            >
-              <option value={AssetType.GlobalCip56}>Global CIP-56</option>
-              <option value={AssetType.LocalCip56}>Local CIP-56</option>
-              <option value={AssetType.ValidatorLocalAsset}>
-                Validator-local
-              </option>
+            <select className={inputClass} style={inputStyle}>
+              <option value={AssetType.GlobalCip56}>Global CIP-56 V2</option>
+              <option value={AssetType.LocalCip56}>Local CIP-56 V2</option>
             </select>
+          </FormField>
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: '1fr 180px',
+            gap: 14,
+          }}
+        >
+          <FormField name="instrumentAdmin" label="Instrument admin" required>
+            <input className={inputClass} style={inputStyle} placeholder="AmuletAdmin::1220…" />
+          </FormField>
+          <FormField name="instrumentId" label="Instrument id" required>
+            <input className={inputClass} style={inputStyle} placeholder="Amulet" />
           </FormField>
         </div>
       </div>
@@ -533,22 +486,12 @@ function StepSchedule() {
         subtitle="When the stream starts, when it ends, and how funds vest."
       />
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}
-        >
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
           <FormField name="startTime" label="Start time" required>
-            <input
-              className={inputClass}
-              style={inputStyle}
-              type="datetime-local"
-            />
+            <input className={inputClass} style={inputStyle} type="datetime-local" />
           </FormField>
           <FormField name="endTime" label="End time" required>
-            <input
-              className={inputClass}
-              style={inputStyle}
-              type="datetime-local"
-            />
+            <input className={inputClass} style={inputStyle} type="datetime-local" />
           </FormField>
         </div>
 
@@ -566,30 +509,17 @@ function StepSchedule() {
         </div>
 
         <FormField name="vestingMode" label="Vesting mode">
-          <select
-            className={inputClass}
-            style={inputStyle}
-          >
+          <select className={inputClass} style={inputStyle}>
             <option value={VestingMode.Linear}>Linear — continuous</option>
-            <option value={VestingMode.CliffLinear}>
-              Cliff + Linear — locked until cliff
-            </option>
-            <option value={VestingMode.Stepped}>
-              Stepped — fixed unlock chunks
-            </option>
-            <option value={VestingMode.RenewableTerm}>
-              Renewable Term — sender extends
-            </option>
+            <option value={VestingMode.CliffLinear}>Cliff + Linear — locked until cliff</option>
+            <option value={VestingMode.Stepped}>Stepped — fixed unlock chunks</option>
+            <option value={VestingMode.RenewableTerm}>Renewable Term — sender extends</option>
           </select>
         </FormField>
 
         {vestingMode === VestingMode.CliffLinear && (
           <FormField name="cliffTime" label="Cliff date" required>
-            <input
-              className={inputClass}
-              style={inputStyle}
-              type="datetime-local"
-            />
+            <input className={inputClass} style={inputStyle} type="datetime-local" />
           </FormField>
         )}
 
@@ -610,18 +540,8 @@ function StepSchedule() {
                 placeholder="86400000000"
               />
             </FormField>
-            <FormField
-              name="amountPerStep"
-              label="Amount per step"
-              required
-            >
-              <input
-                className={inputClass}
-                style={inputStyle}
-                type="number"
-                step="any"
-                min="0"
-              />
+            <FormField name="amountPerStep" label="Amount per step" required>
+              <input className={inputClass} style={inputStyle} type="number" step="any" min="0" />
             </FormField>
           </div>
         )}
@@ -676,40 +596,16 @@ const presetChipStyle: CSSProperties = {
 
 const SETTLEMENT_OPTIONS = [
   {
-    id: SettlementMode.UtilityHoldingCustody,
-    label: 'Utility holding custody',
-    blurb:
-      'Lock a CC/USDCx holding into an escrow operator. Recommended for V1 assets.',
-    tag: 'Recommended',
-    disabled: false,
-  },
-  {
     id: SettlementMode.TokenStandardCustody,
-    label: 'Token Standard custody',
-    blurb:
-      'CIP-56 V2 AllocationRequest. Disabled until STR-86 lands the V2-native lifecycle.',
-    tag: 'STR-86',
-    disabled: true,
-  },
-  {
-    id: SettlementMode.LocalAssetCustody,
-    label: 'Local asset custody',
-    blurb: 'App-local Daml Finance asset with a custom adapter.',
-    tag: 'Adapter',
-    disabled: false,
-  },
-  {
-    id: SettlementMode.NumericLegacy,
-    label: 'Numeric (dev only)',
-    blurb: 'Sandbox-only bookkeeping. No real assets move.',
-    tag: 'Dev',
+    label: 'Token Standard V2 custody',
+    blurb: 'CIP-56 V2 AllocationRequest signed through the Amulet wallet.',
+    tag: 'V2 only',
     disabled: false,
   },
 ] as const;
 
 function StepSettlement() {
-  const { watch, setValue, register } =
-    useFormContext<CreateStreamSchemaValues>();
+  const { watch, setValue, register } = useFormContext<CreateStreamSchemaValues>();
   const settlementMode = watch('settlementMode');
 
   return (
@@ -717,7 +613,7 @@ function StepSettlement() {
       <StepHeader
         number="3"
         title="Settlement & custody"
-        subtitle="How the escrow holds funds and pays them out."
+        subtitle="New streams use the CIP-0112 AllocationRequest path only."
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -729,16 +625,12 @@ function StepSettlement() {
               type="button"
               disabled={s.disabled}
               onClick={() =>
-                !s.disabled &&
-                setValue('settlementMode', s.id, { shouldValidate: true })
+                !s.disabled && setValue('settlementMode', s.id, { shouldValidate: true })
               }
               title={s.disabled ? s.blurb : undefined}
               style={settlementOptionStyle(selected, s.disabled)}
             >
-              <div
-                style={radioStyle(selected, s.disabled)}
-                aria-hidden="true"
-              >
+              <div style={radioStyle(selected, s.disabled)} aria-hidden="true">
                 {selected && (
                   <span
                     style={{
@@ -755,11 +647,7 @@ function StepSettlement() {
                   style={{
                     fontSize: 13.5,
                     fontWeight: 500,
-                    color: s.disabled
-                      ? 'var(--fg-4)'
-                      : selected
-                      ? 'var(--fg)'
-                      : 'var(--fg-2)',
+                    color: s.disabled ? 'var(--fg-4)' : selected ? 'var(--fg)' : 'var(--fg-2)',
                   }}
                 >
                   {s.label}
@@ -775,9 +663,7 @@ function StepSettlement() {
                 </div>
               </div>
               <span
-                className={`badge ${
-                  s.disabled ? 'muted' : selected ? 'accent' : 'muted'
-                }`}
+                className={`badge ${s.disabled ? 'muted' : selected ? 'accent' : 'muted'}`}
                 style={{ fontSize: 10.5 }}
               >
                 {s.tag}
@@ -790,8 +676,7 @@ function StepSettlement() {
       {/* hidden register so RHF tracks the field even though we set it via setValue */}
       <input type="hidden" {...register('settlementMode')} />
 
-      {(settlementMode === SettlementMode.UtilityHoldingCustody ||
-        settlementMode === SettlementMode.LocalAssetCustody) && (
+      {settlementMode === SettlementMode.TokenStandardCustody && (
         <div
           style={{
             display: 'flex',
@@ -800,19 +685,15 @@ function StepSettlement() {
             marginTop: 20,
           }}
         >
-          <FormField name="holdingCid" label="Funding holding CID" required>
+          <FormField name="fundingReference" label="Funding reference" required>
             <input
               className={inputClass}
               style={inputStyle}
-              placeholder="00abc…"
+              placeholder="allocation-request/source-holding"
             />
           </FormField>
           <FormField name="escrowOperator" label="Escrow operator" required>
-            <input
-              className={inputClass}
-              style={inputStyle}
-              placeholder="EscrowOperator::1220…"
-            />
+            <input className={inputClass} style={inputStyle} placeholder="EscrowOperator::1220…" />
           </FormField>
           <div
             style={{
@@ -828,11 +709,7 @@ function StepSettlement() {
                 placeholder='{"custodian":"…","owner":"…","id":"…"}'
               />
             </FormField>
-            <FormField
-              name="recipientAccount"
-              label="Recipient account"
-              required
-            >
+            <FormField name="recipientAccount" label="Recipient account" required>
               <input
                 className={inputClass}
                 style={inputStyle}
@@ -842,52 +719,20 @@ function StepSettlement() {
           </div>
         </div>
       )}
-
-      {settlementMode === SettlementMode.TokenStandardCustody && (
-        <div
-          style={{
-            marginTop: 20,
-            padding: '12px 14px',
-            borderRadius: 'var(--r-md)',
-            background: 'color-mix(in oklab, var(--warn) 8%, var(--bg-elev))',
-            border:
-              '1px solid color-mix(in oklab, var(--warn) 30%, var(--line))',
-            fontSize: 12,
-            color: 'var(--fg-2)',
-            display: 'flex',
-            gap: 8,
-            alignItems: 'flex-start',
-          }}
-        >
-          <Info size={14} style={{ color: 'var(--warn)', flexShrink: 0 }} />
-          <span>
-            TokenStandardCustody is disabled until STR-86 lands the V2-native
-            AllocationRequest lifecycle. Pick UtilityHoldingCustody for V1
-            assets (CC, USDCx) today.
-          </span>
-        </div>
-      )}
     </>
   );
 }
 
-const settlementOptionStyle = (
-  selected: boolean,
-  disabled: boolean,
-): CSSProperties => ({
+const settlementOptionStyle = (selected: boolean, disabled: boolean): CSSProperties => ({
   padding: 14,
   background: disabled
     ? 'var(--bg-elev)'
     : selected
-    ? 'color-mix(in oklab, var(--accent) 8%, var(--bg-elev))'
-    : 'var(--bg-elev)',
+      ? 'color-mix(in oklab, var(--accent) 8%, var(--bg-elev))'
+      : 'var(--bg-elev)',
   border:
     '1px solid ' +
-    (disabled
-      ? 'var(--line)'
-      : selected
-      ? 'var(--accent-line, var(--line-2))'
-      : 'var(--line-2)'),
+    (disabled ? 'var(--line)' : selected ? 'var(--accent-line, var(--line-2))' : 'var(--line-2)'),
   borderRadius: 10,
   display: 'flex',
   alignItems: 'flex-start',
@@ -896,20 +741,11 @@ const settlementOptionStyle = (
   opacity: disabled ? 0.6 : 1,
 });
 
-const radioStyle = (
-  selected: boolean,
-  disabled: boolean,
-): CSSProperties => ({
+const radioStyle = (selected: boolean, disabled: boolean): CSSProperties => ({
   width: 18,
   height: 18,
   borderRadius: '50%',
-  border:
-    '1px solid ' +
-    (disabled
-      ? 'var(--line)'
-      : selected
-      ? 'var(--accent)'
-      : 'var(--line-2)'),
+  border: '1px solid ' + (disabled ? 'var(--line)' : selected ? 'var(--accent)' : 'var(--line-2)'),
   background: selected && !disabled ? 'var(--accent)' : 'transparent',
   flexShrink: 0,
   display: 'flex',
@@ -958,10 +794,8 @@ function StepReview({
           style={{
             padding: 18,
             marginBottom: 16,
-            background:
-              'color-mix(in oklab, var(--accent) 14%, var(--card-2))',
-            border:
-              '1px solid color-mix(in oklab, var(--accent) 35%, var(--line-2))',
+            background: 'color-mix(in oklab, var(--accent) 14%, var(--card-2))',
+            border: '1px solid color-mix(in oklab, var(--accent) 35%, var(--line-2))',
             borderRadius: 12,
             display: 'flex',
             alignItems: 'center',
@@ -985,8 +819,7 @@ function StepReview({
           <div>
             <div style={{ fontWeight: 500 }}>Stream proposed</div>
             <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-              The recipient will see this in their inbox and accept to
-              activate.
+              The recipient will see this in their inbox and accept to activate.
             </div>
           </div>
         </div>
@@ -1000,9 +833,7 @@ function StepReview({
           padding: 20,
         }}
       >
-        <div
-          style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}
-        >
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
           <ReviewRow label="Recipient" value={shortenParty(d.recipient)} />
           <ReviewRow
             label="Total"
@@ -1015,13 +846,8 @@ function StepReview({
           <ReviewRow
             label="Stream rate"
             value={
-              <span
-                className="mono"
-                style={{ fontSize: 12.5, color: 'var(--accent)' }}
-              >
-                {ratePerSec
-                  ? `+${ratePerSec.toFixed(6)}/s`
-                  : '—'}
+              <span className="mono" style={{ fontSize: 12.5, color: 'var(--accent)' }}>
+                {ratePerSec ? `+${ratePerSec.toFixed(6)}/s` : '—'}
               </span>
             }
           />
@@ -1094,13 +920,9 @@ function StepReview({
           }}
         >
           <li>You sign the propose-stream command in your wallet.</li>
+          <li>The proposal appears in the recipient's inbox; they accept to activate.</li>
           <li>
-            The proposal appears in the recipient's inbox; they accept to
-            activate.
-          </li>
-          <li>
-            Once active, accruals tick continuously and the recipient can
-            withdraw what's vested.
+            Once active, accruals tick continuously and the recipient can withdraw what's vested.
           </li>
         </ol>
       </div>
@@ -1119,13 +941,7 @@ function StepReview({
   );
 }
 
-function ReviewRow({
-  label,
-  value,
-}: {
-  readonly label: string;
-  readonly value: ReactNode;
-}) {
+function ReviewRow({ label, value }: { readonly label: string; readonly value: ReactNode }) {
   return (
     <div>
       <div
@@ -1169,10 +985,7 @@ function parseLedgerRecord(input: string): LedgerRecord {
   throw new Error('Account ref must be a JSON object');
 }
 
-function buildCreateParams(
-  party: string,
-  data: CreateStreamSchemaValues,
-): CreateStreamParams {
+function buildCreateParams(party: string, data: CreateStreamSchemaValues): CreateStreamParams {
   const baseConfig = {
     streamId: crypto.randomUUID(),
     sender: party,
@@ -1181,6 +994,12 @@ function buildCreateParams(
     startTime: new Date(data.startTime),
     endTime: new Date(data.endTime),
     assetType: data.assetType,
+    instrumentRef: {
+      depository: data.instrumentAdmin,
+      issuer: data.instrumentAdmin,
+      instrumentId: data.instrumentId,
+      instrumentVersion: 'v2',
+    },
     settlementMode: data.settlementMode,
     cancellable: data.cancellable,
   };
@@ -1189,28 +1008,25 @@ function buildCreateParams(
     data.vestingMode === VestingMode.Linear
       ? { mode: VestingMode.Linear as const }
       : data.vestingMode === VestingMode.CliffLinear
-      ? {
-          mode: VestingMode.CliffLinear as const,
-          cliffTime: new Date(data.cliffTime),
-        }
-      : data.vestingMode === VestingMode.Stepped
-      ? {
-          mode: VestingMode.Stepped as const,
-          stepInterval: data.stepInterval,
-          amountPerStep: new Decimal(data.amountPerStep),
-        }
-      : {
-          mode: VestingMode.RenewableTerm as const,
-          termDuration: data.termDuration,
-        };
+        ? {
+            mode: VestingMode.CliffLinear as const,
+            cliffTime: new Date(data.cliffTime),
+          }
+        : data.vestingMode === VestingMode.Stepped
+          ? {
+              mode: VestingMode.Stepped as const,
+              stepInterval: data.stepInterval,
+              amountPerStep: new Decimal(data.amountPerStep),
+            }
+          : {
+              mode: VestingMode.RenewableTerm as const,
+              termDuration: data.termDuration,
+            };
 
   const settlementExtras: Partial<CreateStreamParams> = {};
-  if (
-    data.settlementMode === SettlementMode.UtilityHoldingCustody ||
-    data.settlementMode === SettlementMode.LocalAssetCustody
-  ) {
+  if (data.settlementMode === SettlementMode.TokenStandardCustody) {
     Object.assign(settlementExtras, {
-      holdingCid: data.holdingCid,
+      fundingReference: data.fundingReference,
       escrowOperator: data.escrowOperator,
       senderAccount: parseLedgerRecord(data.senderAccount),
       recipientAccount: parseLedgerRecord(data.recipientAccount),

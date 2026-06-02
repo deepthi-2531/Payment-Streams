@@ -59,7 +59,7 @@ const AMULET_INSTRUMENT_IDS = new Set(['AMULET', 'CC']);
  * **Two layers of deprecation apply here**:
  *
  * 1. The settlement-reference path (prepare-action / execute-action via
- *    the wallet-gateway) is replaced by the V1/V2 AllocationRequest
+ *    the wallet-gateway) is replaced by the V2 AllocationRequest
  *    pattern. Use `dispatchSettlement` from
  *    `settlement/allocation-dispatch.ts` instead.
  *
@@ -96,21 +96,20 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
   constructor(config: AmuletWalletGatewayAdapterConfig = {}) {
     this.baseUrl = trimToUndefined(
       config.baseUrl ??
-      process.env['CANTON_STREAMS_WALLET_GATEWAY_URL'] ??
-      process.env['WALLET_GATEWAY_URL'],
+        process.env['CANTON_STREAMS_WALLET_GATEWAY_URL'] ??
+        process.env['WALLET_GATEWAY_URL'],
     )?.replace(/\/+$/, '');
     this.synchronizerId = trimToUndefined(
       config.synchronizerId ??
-      process.env['CANTON_STREAMS_WALLET_GATEWAY_SYNCHRONIZER_ID'] ??
-      process.env['SYNCHRONIZER_ID'],
+        process.env['CANTON_STREAMS_WALLET_GATEWAY_SYNCHRONIZER_ID'] ??
+        process.env['SYNCHRONIZER_ID'],
     );
     this.action =
       trimToUndefined(
         config.action ??
-        process.env['CANTON_STREAMS_WALLET_GATEWAY_ACTION_CC'] ??
-        process.env['CANTON_STREAMS_WALLET_GATEWAY_ACTION'],
-      ) ??
-      'transfer_cc';
+          process.env['CANTON_STREAMS_WALLET_GATEWAY_ACTION_CC'] ??
+          process.env['CANTON_STREAMS_WALLET_GATEWAY_ACTION'],
+      ) ?? 'transfer_cc';
     this.credentials = {
       ...readHostedWalletCredentialMapFromEnv(),
       ...(config.credentials ?? {}),
@@ -131,7 +130,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
     if (!this.baseUrl) {
       throw new Error(
         'Amulet/CC settlement requires CANTON_STREAMS_WALLET_GATEWAY_URL ' +
-        '(or WALLET_GATEWAY_URL) to point at a validator app exposing /api/wallet-gateway/*.',
+          '(or WALLET_GATEWAY_URL) to point at a validator app exposing /api/wallet-gateway/*.',
       );
     }
 
@@ -177,7 +176,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
     if (expectedPublicKey && expectedPublicKey !== credentials.publicKey) {
       throw new Error(
         `wallet-gateway expected public key ${expectedPublicKey}, ` +
-        `but the configured signer for ${params.from} uses ${credentials.publicKey}.`,
+          `but the configured signer for ${params.from} uses ${credentials.publicKey}.`,
       );
     }
 
@@ -196,7 +195,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
     if (execute._retryRequired) {
       throw new Error(
         `wallet-gateway transfer for ${params.from.split('::')[0]} requires a follow-up ` +
-        `${trimToUndefined(execute._retryAction) ?? 'action'} before it can complete.`,
+          `${trimToUndefined(execute._retryAction) ?? 'action'} before it can complete.`,
       );
     }
 
@@ -219,7 +218,11 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
 
   private resolveCredentials(party: string): WalletGatewayPartyCredentials {
     const credentials = this.credentials[party];
-    if (credentials?.appToken && credentials.publicKey && (credentials.privateKey || credentials.privateKeyFile)) {
+    if (
+      credentials?.appToken &&
+      credentials.publicKey &&
+      (credentials.privateKey || credentials.privateKeyFile)
+    ) {
       return {
         ...credentials,
         appToken: credentials.appToken,
@@ -229,7 +232,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
 
     throw new Error(
       `No wallet-gateway signer configured for party ${party}. ` +
-      `Provide CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON or legacy sender/recipient/escrow operator env vars.`,
+        `Provide CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON or legacy sender/recipient/escrow operator env vars.`,
     );
   }
 
@@ -258,8 +261,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
     }
 
     if (!response.ok) {
-      const rendered =
-        typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
+      const rendered = typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
       throw new Error(`HTTP ${response.status} wallet-gateway ${path}: ${rendered}`);
     }
 
@@ -268,5 +270,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
 }
 
 function normalizeInstrumentId(value: string): string {
-  return String(value ?? '').trim().toUpperCase();
+  return String(value ?? '')
+    .trim()
+    .toUpperCase();
 }

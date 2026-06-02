@@ -6,10 +6,11 @@
 
 ## What the library does
 
-The `FeaturedAppActivity` Daml template
+The `FeaturedAppActivity` Daml module
 (`packages/daml/main/daml/CantonStreams/FeaturedApp/Activity.daml`)
-emits a `FeaturedAppActivityMarker` on a per-stream basis when the
-stream config sets the relevant flags.
+builds the marker-emission record that an integration can use to emit
+`FeaturedAppActivityMarker` contracts when the target network still
+supports the CIP-0047 marker path.
 
 ## What the library does not do
 
@@ -20,7 +21,8 @@ stream config sets the relevant flags.
 
 ## Opting in
 
-Per-stream config flag at create time:
+Per-stream config flag at create time, after confirming the active
+reward/marker regime for the target network:
 
 ```ts
 const params = buildIncentiveStream({
@@ -32,7 +34,9 @@ const params = buildIncentiveStream({
 });
 ```
 
-The flag is opt-in. Default behaviour emits no markers.
+The flag is opt-in. Default behaviour emits no markers. The SDK does
+not provide a default reward projection; callers must supply current
+network economics explicitly if they choose to show projections.
 
 ## Where to verify the current state
 

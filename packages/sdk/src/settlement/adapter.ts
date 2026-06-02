@@ -1,14 +1,18 @@
 /**
  * @module settlement/adapter
  *
- * SettlementAdapter — pluggable token-transfer backend for TokenStandardCustody streams.
+ * Legacy SettlementAdapter — deprecated pluggable token-transfer backend.
  *
- * Each adapter knows how to move tokens for a specific registrar/protocol:
+ * Current stream settlement is V2 AllocationRequest / Allocation_Settle
+ * through `settlement/allocation-dispatch.ts`. This interface remains for
+ * old adapter code until the hard-delete cleanup lands.
+ *
+ * Each legacy adapter knew how to move tokens for a specific registrar/protocol:
  *   - TransferRuleAdapter: local tokens with a provider-owned TransferRule on ledger
  *   - TransferOfferAdapter: external tokens (CBTC etc.) via TransferOffer flow
  *
- * The orchestrator selects the right adapter by matching the stream instrument's
- * registrar (issuer party) against what each adapter declares it can handle.
+ * New code should not select adapters by registrar; it should use the
+ * V2 capability gate and allocation dispatcher.
  */
 
 import type { Logger } from 'pino';
