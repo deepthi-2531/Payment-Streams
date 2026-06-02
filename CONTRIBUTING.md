@@ -81,7 +81,33 @@ Canton-Streams/
 ```bash
 pnpm test           # run all TypeScript tests (vitest)
 pnpm daml:test      # run all Daml scenario tests
+bash scripts/check-v2-conformance.sh    # block forbidden V1 identifiers
 ```
+
+### V2 upstream conformance
+
+`scripts/check-v2-conformance.sh` runs on every push + PR. It blocks
+identifiers that don't exist in the upstream
+[canton-network/splice@token-standard-v2-upcoming](https://github.com/canton-network/splice/tree/token-standard-v2-upcoming)
+surface — typically V1 names from a deleted code path. Run it locally
+before pushing.
+
+Before cutting a release, maintainers should also confirm the pin in
+`scripts/fetch-v2-dars.mjs` (`SPLICE_PINNED_COMMIT`) still matches the
+upstream branch head:
+
+```bash
+# capture current upstream tip
+git ls-remote https://github.com/canton-network/splice.git refs/heads/token-standard-v2-upcoming
+
+# compare with our pin
+grep -E "SPLICE_PINNED_(COMMIT|AS_OF)" scripts/fetch-v2-dars.mjs
+```
+
+If upstream has moved, bump the pin, re-run
+`node scripts/fetch-v2-dars.mjs --mode source-build`, update
+`packages/daml/main/.lib/V2_DAR_HASHES.json`, and verify SDK payloads
+still align (`pnpm --filter @canton-streams/sdk test`).
 
 ### Writing tests
 

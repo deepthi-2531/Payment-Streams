@@ -75,6 +75,26 @@ const TARGET_DIR = resolve(REPO_ROOT, 'packages/daml/main/.lib');
 const SPLICE_REPO_URL = 'https://github.com/canton-network/splice.git';
 
 /**
+ * Pinned upstream commit on `token-standard-v2-upcoming` that this repo's
+ * V2 surface was last verified against. Maintainers should:
+ *
+ *   1. Run `git ls-remote $SPLICE_REPO_URL refs/heads/token-standard-v2-upcoming`
+ *      before a release to capture the current branch tip.
+ *   2. Bump SPLICE_PINNED_COMMIT to that hash.
+ *   3. Re-run `node scripts/fetch-v2-dars.mjs --mode source-build` to
+ *      rebuild the V2 DARs.
+ *   4. Run `pnpm -r run lint && pnpm --filter @canton-streams/sdk test`
+ *      and `bash scripts/check-v2-conformance.sh` to catch any
+ *      payload-shape regressions.
+ *   5. Update the SHA in this constant and in V2_DAR_HASHES.json.
+ *
+ * Recording the pin prevents silent drift if the upstream branch moves
+ * between this repo's build and a downstream consumer's build.
+ */
+export const SPLICE_PINNED_COMMIT = '2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea';
+export const SPLICE_PINNED_AS_OF = '2026-06-02';
+
+/**
  * Per the CIP-0112 update (May 2026), V2 packages are versioned
  * 1.0.0 (consistent with splice-api-featured-app-v2). We pin to that
  * version. If Splice ships a later 1.x revision, bump here and re-run.
