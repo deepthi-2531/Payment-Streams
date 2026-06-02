@@ -16,7 +16,7 @@ import { Icons } from '../primitives/Icons.js';
 import { Avatar } from '../primitives/Avatar.js';
 import { partyShort } from '../primitives/PartyChip.js';
 import { useAuth } from '../../store/auth.js';
-import { usePendingStreamRequests } from '../../hooks/useStreams.js';
+import { useStreams } from '../../hooks/useStreams.js';
 
 interface NavItem {
   readonly route: string;
@@ -49,10 +49,13 @@ export function Sidebar() {
   const auth = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Real pending count — Inbox badge surfaces unread incoming requests.
-  // Hook returns `data` undefined when unauthenticated; default to 0.
-  const pending = usePendingStreamRequests();
-  const pendingCount = pending.data?.length ?? 0;
+  // Inbox badge shows the count of incoming streams (streams where the
+  // connected party is the recipient). The dashboard does not run a
+  // propose/accept ceremony today — funding approval happens in the
+  // wallet — so a "pending requests" count would always be zero and
+  // misleading. Switched to the active-streams hook.
+  const incoming = useStreams(auth.party ? { recipient: auth.party } : undefined);
+  const pendingCount = incoming.data?.length ?? 0;
 
   return (
     <>

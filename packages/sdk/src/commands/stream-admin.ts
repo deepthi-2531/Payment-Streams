@@ -88,13 +88,18 @@ function encodeVestingMode(vm: VestingMode): Record<string, unknown> {
     case 'CliffLinear':
       return damlVariant('CliffLinear', { cliffTime: damlTimestamp(vm.cliffTime) });
     case 'Stepped':
+      // RelTime is `{ microseconds : Int }`; the inner field must be
+      // wrapped with the `{ int64: ... }` tag so the transport's
+      // `encodeValue` emits a `Value.int64` rather than falling through
+      // to the default `string → text` branch (the bug the ledger
+      // surfaces as "mismatching type: Int64 and value: ValueText").
       return damlVariant('Stepped', {
-        stepInterval: { microseconds: vm.stepIntervalMicros.toString() },
+        stepInterval: { microseconds: { int64: vm.stepIntervalMicros.toString() } },
         amountPerStep: damlNumeric(vm.amountPerStep),
       });
     case 'RenewableTerm':
       return damlVariant('RenewableTerm', {
-        termDuration: { microseconds: vm.termDurationMicros.toString() },
+        termDuration: { microseconds: { int64: vm.termDurationMicros.toString() } },
       });
   }
 }

@@ -15,7 +15,7 @@
 import { Link } from 'react-router';
 import { Plus, Inbox, ArrowUpRight, TrendingUp } from 'lucide-react';
 import { useMemo } from 'react';
-import { usePendingStreamRequests, useStreams } from '../hooks/useStreams.js';
+import { useStreams } from '../hooks/useStreams.js';
 import { useAuth } from '../store/auth.js';
 import { StreamStatus } from '@canton-streams/sdk/browser';
 import {
@@ -32,10 +32,16 @@ import {
 export function DashboardPage() {
   const { party } = useAuth();
   const streamsQ = useStreams();
-  const pendingQ = usePendingStreamRequests();
+  // "Inbox preview" surfaces streams where this party is the recipient.
+  // The dashboard does not run a propose/accept ceremony today (V2
+  // funding approval happens in the wallet), so showing
+  // `usePendingStreamRequests()` here always rendered zero and
+  // implied a non-existent acceptance step. Switched to active streams
+  // filtered by recipient.
+  const incomingQ = useStreams(party ? { recipient: party } : undefined);
 
   const streams = streamsQ.data;
-  const pendingRequests = pendingQ.data;
+  const pendingRequests = incomingQ.data;
 
   // Aggregate by asset for the asset cards.
   const byAsset = useMemo(() => {
@@ -152,7 +158,7 @@ export function DashboardPage() {
       {pendingCount > 0 && pendingRequests && (
         <div style={{ marginTop: 8, marginBottom: 32 }}>
           <SectionHeader
-            title="Awaiting your acceptance"
+            title="Incoming streams"
             count={pendingCount}
             action={
               <Link to="/inbox" className="btn btn-ghost btn-sm">

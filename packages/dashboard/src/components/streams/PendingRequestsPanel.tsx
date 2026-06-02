@@ -1,9 +1,17 @@
 /**
- * PendingRequestsPanel — STR-116 Phase 5 reskin to cc-streams dark theme.
+ * PendingRequestsPanel.
  *
- * Shows pending stream requests (incoming proposals awaiting accept).
- * Card-wrapped rows with mono stream id, party arrow, vesting badge, and
- * accept button gated on `party === request.config.recipient`.
+ * Reserved for the future V2 `StreamAdminRequest` propose/accept
+ * template. The SDK currently creates `StreamAdmin` directly (no
+ * intermediate request contract), so `usePendingStreamRequests`
+ * always returns `[]` and this panel never renders — callers gate on
+ * `requests.length > 0`.
+ *
+ * The panel + the underlying SDK query path are kept so the future
+ * feature can plug back in without rebuilding the UI shell. If you are
+ * implementing that feature, update the copy below ("Pending requests"
+ * is fine, "Awaiting recipient acceptance" only becomes truthful once
+ * the recipient genuinely has a dashboard accept step).
  */
 
 import type { CSSProperties } from 'react';
