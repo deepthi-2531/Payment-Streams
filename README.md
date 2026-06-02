@@ -41,7 +41,7 @@ Do not use this repo if you need:
 | ---------------- | ---------------------------------------------------- |
 | Token standard   | CIP-56 V2 / CIP-0112 only for new streams            |
 | Wallet path      | CIP-103 via `@canton-network/dapp-sdk`               |
-| Reference wallet | Splice Amulet wallet on `token-standard-v2-upcoming` |
+| Reference wallet | Splice Amulet wallet with Token Standard V2 support  |
 | Local app stack  | Docker starts Canton, proxy, and dashboard           |
 | Full wallet E2E  | Requires a separate Splice LocalNet validator wallet |
 | Legacy modes     | Kept only for parsing/migration compatibility        |
@@ -108,8 +108,8 @@ This starts:
 | Canton admin API        | `localhost:5002`        |
 
 This does not start the Splice Amulet wallet. For wallet-backed E2E, run a
-Splice LocalNet validator wallet from `canton-network/splice` on the
-`token-standard-v2-upcoming` branch and expose the dapp gateway at:
+Splice LocalNet validator wallet with Token Standard V2 support and expose the
+dapp gateway at:
 
 ```text
 http://localhost:3030/api/v0/dapp
