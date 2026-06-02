@@ -278,10 +278,19 @@ export const TEMPLATE_DELEGATED_POLICY: TemplateId = {
   entityName: 'DelegatedPolicy',
 };
 
-/** ExecutionLog — immutable audit trail per delegated execution. */
+/**
+ * ExecutionLog — immutable audit trail per delegated execution.
+ *
+ * Note the module name: the `ExecutionLog` template is defined alongside
+ * `DelegatedPolicy` inside `CantonStreams/Policy/DelegatedPolicy.daml`, NOT
+ * in a separate `CantonStreams.Policy.ExecutionLog` module. Earlier
+ * revisions of this file pointed at the latter and silently returned an
+ * empty list, hiding successful `ExecutePolicy` events from the proxy
+ * and dashboard. Verified against the canton-streams DAR contents.
+ */
 export const TEMPLATE_EXECUTION_LOG: TemplateId = {
   packageId: POLICY_PACKAGE_ID,
-  moduleName: 'CantonStreams.Policy.ExecutionLog',
+  moduleName: 'CantonStreams.Policy.DelegatedPolicy',
   entityName: 'ExecutionLog',
 };
 
