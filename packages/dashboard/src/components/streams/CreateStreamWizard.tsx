@@ -160,7 +160,29 @@ export function CreateStreamWizard() {
 
   const onBack = () => setStepIdx((i) => Math.max(0, i - 1));
 
+  // The previous build attached `methods.handleSubmit(...)` to
+  // `<form onSubmit={...}>`, which let an implicit form submission
+  // (Enter key on any text input, browser-native click delegation from
+  // a focused button being replaced mid-transition, etc.) trigger the
+  // create mutation BEFORE the user reached the Review step's
+  // deliberate "Create stream" button. The reviewer hit exactly that:
+  // Step 3 → Step 4 landed on Step 4 already showing "Created".
+  //
+  // Hardening:
+  //   1. `<form>` no longer wires `onSubmit`. The Review step's button
+  //      is `type="button"` with an explicit `onClick={onSubmit}` so
+  //      there is no implicit-submit surface left on the form at all.
+  //   2. `onSubmit` is guarded: a call from any state other than the
+  //      review step is a no-op. Defensive even if a future contributor
+  //      reintroduces form-level submission.
+  //   3. Re-entering the wizard from a "Created" state resets the
+  //      `submitted` flag so the badge can't leak across navigations.
   const onSubmit = methods.handleSubmit(async (data) => {
+    if (stepIdx !== STEPS.length - 1) {
+      // Never run the mutation from anywhere but the explicit Review
+      // step Create button. See block comment above.
+      return;
+    }
     if (!party) {
       setSubmitError('Wallet not connected');
       return;
@@ -175,12 +197,32 @@ export function CreateStreamWizard() {
     }
   });
 
+  // If the user navigates back from a completed Review step (e.g. to
+  // tweak the schedule and re-submit), drop the success badge so they
+  // do not see a stale "Created" state on the next pass.
+  useEffect(() => {
+    if (stepIdx !== STEPS.length - 1 && submitted) {
+      setSubmitted(false);
+    }
+  }, [stepIdx, submitted]);
+
   return (
     <FormProvider {...methods}>
       <div style={{ paddingTop: 28 }}>
         <Stepper stepIdx={stepIdx} onJump={(i) => i <= stepIdx && setStepIdx(i)} />
 
-        <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/*
+         * `<form>` here is purely a layout container — `onSubmit` is
+         * intentionally NOT wired so neither Enter-key submission from
+         * a text input nor a stray `type="submit"` button can fire the
+         * mutation outside the Review step. The Create stream button
+         * below uses an explicit `onClick={onSubmit}` instead.
+         */}
+        <form
+          noValidate
+          onSubmit={(e) => e.preventDefault()}
+          style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
+        >
           <div className="card" style={{ padding: 28, marginTop: 24 }}>
             {stepIdx === 0 && <StepRecipient />}
             {stepIdx === 1 && <StepSchedule />}
@@ -225,8 +267,9 @@ export function CreateStreamWizard() {
                 </button>
               ) : (
                 <button
-                  type="submit"
+                  type="button"
                   className="btn btn-primary"
+                  onClick={() => void onSubmit()}
                   disabled={createStream.isPending || submitted}
                 >
                   {submitted ? (
