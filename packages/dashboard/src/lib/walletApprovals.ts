@@ -9,7 +9,7 @@
  *     → sees Alice's incoming CC stream
  *     → clicks "Approve in Amulet wallet"
  *     → the dashboard calls into `@canton-network/dapp-sdk`
- *     → the wallet renders the Amulet preapproval prompt
+ *     → the wallet renders the Amulet acceptance prompt
  *     → Bob signs in the wallet
  *     → the dashboard refreshes the stored approval state
  *
@@ -17,32 +17,38 @@
  * -------------------------
  * - A real CIP-103 round-trip: clicking the button invokes
  *   `walletSdk.open()` so the Amulet wallet surface comes forward and
- *   the recipient completes the preapproval there.
+ *   the recipient completes the acceptance there.
  * - Per-stream approval-intent state, persisted in `sessionStorage` so
  *   the badge state survives reload and is scoped to the current
  *   session.
  * - A single `requestStreamWalletApproval` entry-point — the place a
  *   future contributor swaps in `walletSdk.prepareExecuteAndWait` with
- *   the real Amulet `TransferPreapproval` command, replacing the
- *   `walletSdk.open()` call. The on-screen status copy is already
- *   ready for that swap.
+ *   the real V2 `AllocationRequest_Accept` (committed-iterated)
+ *   command, replacing the `walletSdk.open()` call. The on-screen
+ *   status copy is already ready for that swap.
  *
  * What this module IS NOT today
  * -----------------------------
- * The dashboard does not (yet) construct the Amulet
- * `TransferPreapproval` Daml command from the dapp. That command lives
- * in `splice-amulet-*.dar`, which is not bundled in
- * `packages/daml/main/.lib/` — only the V2 token-standard interface
- * DARs (allocation / holding / transfer-instruction / transfer-events)
- * are. So we cannot yet pass `prepareExecuteAndWait` a
- * fully-qualified Daml command, and we cannot verify approval state
- * via `walletSdk.ledgerApi(...)` filtering on Amulet template ids.
+ * The dashboard does not yet *construct* the recipient-side accept
+ * command for the V2 AllocationRequest. The required interface DARs
+ * are already in `packages/daml/main/.lib/`
+ * (`splice-api-token-allocation-v2`,
+ * `splice-api-token-allocation-request-v2`,
+ * `splice-api-token-allocation-instruction-v2`), and the Amulet wallet
+ * that ships on every validator node supports CIP-56 V2 on the
+ * `token-standard-v2-upcoming` branch we pin against. So the
+ * impediment is implementation, not missing bindings: someone needs
+ * to wire the AllocationRequest contract id + the accept choice
+ * payload through to `walletSdk.prepareExecuteAndWait(...)`. Upstream
+ * support for iterated settlement in the Amulet wallet UX is tracked
+ * in canton-network/splice#5498 — read it before committing to a
+ * specific shape.
  *
- * Tracking that work as a separate follow-up: pull the Amulet TS
- * binding into the asset registry, then swap the `walletSdk.open()`
- * call below for `walletSdk.prepareExecuteAndWait({ commands: [...] })`
- * and replace the `mark*` helpers with a real
- * `walletSdk.ledgerApi`-driven status query.
+ * Until that swap lands the button still does the right CIP-103
+ * thing: it brings the wallet forward via `walletSdk.open()`, the
+ * recipient completes the acceptance in the wallet's own UI, and the
+ * dashboard records the local intent so the inbox badge stays
+ * truthful across reloads.
  */
 
 import type { Stream } from '@canton-streams/sdk/browser';

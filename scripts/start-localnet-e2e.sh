@@ -105,29 +105,23 @@ build_localnet_amulet_wallet() {
   # three React wallet UIs (on 2000/3000/4000), plus participant JSON-Ledger
   # APIs on x975 ports.
   #
-  # Critically, that stack does NOT expose a CIP-103 JSON-RPC wallet
-  # gateway at :3030/api/v0/dapp. That endpoint is provided by the separate
-  # Splice Wallet Kernel (historically "SWK"), now canonically hosted at
-  # canton-network/wallet. The operator must run it alongside LocalNet:
+  # The Amulet wallet that ships on every validator node supports the
+  # CIP-56 V2 token standard on the token-standard-v2-upcoming branch we
+  # pin against (full iterated-settlement support tracked upstream in
+  # canton-network/splice#5498). So once LocalNet is running, the wallet
+  # half of the V2 flow can be exercised end-to-end.
   #
-  #   git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
-  #   cd .splice-wallet-kernel && yarn install && yarn build:all && yarn start:all
-  #
-  # Point its CANTON_NODE_URL at the app-user validator JSON API on :2975
-  # or the app-provider on :3975, and add this dashboard's origin to
-  # allowedOrigins. The gateway daemon is published as
-  # `@canton-network/wallet-gateway-remote`; the in-page client this
-  # dashboard imports is `@canton-network/dapp-sdk` (same monorepo).
-  #
-  # There is therefore no honest one-command path from a stock CI runner to
-  # a working $WALLET_GATEWAY_URL at the pinned commit. We print the verified
-  # upstream startup steps for transparency, then refuse to fake readiness.
+  # The LocalNet stack does NOT expose a CIP-103 JSON-RPC wallet gateway
+  # at :3030/api/v0/dapp directly. That endpoint comes from the separate
+  # Splice Wallet Kernel (canton-network/wallet), published on npm as
+  # @canton-network/wallet-gateway-remote. The fastest path is to run it
+  # from npx — no clone or build required.
 
   local compose_wrapper="$SPLICE_CHECKOUT_DIR/build-tools/splice-localnet-compose.sh"
 
   cat <<EOF
 
-    Splice LocalNet stack (verified upstream commands at $SPLICE_PINNED_COMMIT):
+    Splice LocalNet stack (verified upstream command at $SPLICE_PINNED_COMMIT):
 
       cd "$SPLICE_CHECKOUT_DIR"
       ./build-tools/splice-localnet-compose.sh start
@@ -137,33 +131,37 @@ build_localnet_amulet_wallet() {
       - app-provider wallet UI: http://localhost:3000
       - SV wallet UI          : http://localhost:4000
       - participant JSON APIs : :2975 / :3975 / :4975
+      - Amulet wallet (V2-capable on the token-standard-v2-upcoming
+        branch this commit lives on; full iterated-settlement tracked
+        in canton-network/splice#5498)
 
-    HONEST GAP: the pinned commit does NOT publish a CIP-103 JSON-RPC
-    wallet gateway at $WALLET_GATEWAY_URL as part of LocalNet. That
-    endpoint comes from the separate Splice Wallet Kernel (historically
-    "SWK"), now canonically hosted at canton-network/wallet
-    (https://github.com/canton-network/wallet). It must be run alongside
-    LocalNet by the operator. There is no canonical one-command path at
-    $SPLICE_PINNED_COMMIT that yields :3030.
+    HONEST GAP: the LocalNet stack does NOT publish a CIP-103 JSON-RPC
+    wallet gateway at $WALLET_GATEWAY_URL on its own. The dashboard
+    talks to the wallet through the Splice Wallet Kernel, run as a
+    separate process. Fastest path (no clone needed):
 
-    Verified upstream startup (from canton-network/wallet README):
+      npx @canton-network/wallet-gateway-remote@1.4.0 --config-example \\
+        > wallet-gateway.localnet.json
+      # Edit wallet-gateway.localnet.json:
+      #   ledgerApi.baseUrl   = http://127.0.0.1:2975   (LocalNet app-user JSON API)
+      #   allowedOrigins      += http://localhost:3000
+      #   allowedOrigins      += http://127.0.0.1:3000
+      npx @canton-network/wallet-gateway-remote@1.4.0 \\
+        -c wallet-gateway.localnet.json -p 3030
 
-      git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
-      cd .splice-wallet-kernel
-      yarn install
-      yarn build:all
-      yarn start:all
+    (To target the app-provider validator instead, use
+    http://127.0.0.1:3975. The Splice Wallet Kernel can also be built
+    from source — clone canton-network/wallet, yarn install &&
+    yarn build:all && yarn start:all — same endpoint, same config.)
 
-    Then probe the CIP-103 gateway (port is the documented default; the
-    upstream quickstart does not pin it):
+    Probe the CIP-103 gateway:
 
       curl -fsS -X POST $WALLET_GATEWAY_URL \\
+        -H 'Origin: http://localhost:3000' \\
         -H 'content-type: application/json' \\
         --data '{"jsonrpc":"2.0","id":"probe","method":"status","params":{}}'
 
-    To proceed, bring up the wallet by whatever path your environment
-    uses (LocalNet + Splice Wallet Kernel, an externally-managed CIP-103
-    gateway, or a mock), then re-run this script with:
+    Once that responds, re-run this script with:
 
       SKIP_LOCALNET_BUILD=1 bash scripts/start-localnet-e2e.sh
 
