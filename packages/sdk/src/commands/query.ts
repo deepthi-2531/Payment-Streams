@@ -643,6 +643,10 @@ export function deserializeStreamView(raw: any): Stream {
  * For custody-backed streams, escrowRef is populated from the contract payload.
  */
 function deserializeActiveContract(raw: any, settlementMode: SettlementMode = SettlementMode.NumericLegacy): Stream {
+  if (isStreamAdminPayload(raw)) {
+    return deserializeStreamAdminContract(raw);
+  }
+
   const stream: Stream = {
     contractId: raw.contractId ?? raw.contract_id ?? '',
     config: {
@@ -706,6 +710,56 @@ function deserializeActiveContract(raw: any, settlementMode: SettlementMode = Se
   return stream;
 }
 
+function isStreamAdminPayload(raw: any): boolean {
+  return raw?.streamId !== undefined &&
+    raw?.sender !== undefined &&
+    raw?.recipient !== undefined &&
+    raw?.operator !== undefined &&
+    raw?.instrumentRef !== undefined &&
+    raw?.currentAllocationCid !== undefined;
+}
+
+function deserializeStreamAdminContract(raw: any): Stream {
+  const instrumentRef = deserializeInstrumentRef(raw.instrumentRef) ?? {
+    depository: '',
+    issuer: '',
+    instrumentId: '',
+    instrumentVersion: '',
+  };
+  return {
+    contractId: raw.contractId ?? raw.contract_id ?? '',
+    config: {
+      streamId: raw.streamId,
+      sender: raw.sender,
+      recipient: raw.recipient,
+      totalDeposited: new Decimal(raw.totalDeposited),
+      startTime: deserializeTime(raw.startTime),
+      endTime: deserializeTime(raw.endTime),
+      vestingMode: deserializeVestingMode(raw.vestingMode),
+      assetType: AssetType.GlobalCip56,
+      instrumentRef,
+      cancellable: raw.cancellable ?? true,
+      settlementMode: SettlementMode.TokenStandardCustody,
+    },
+    state: {
+      totalWithdrawn: new Decimal(raw.totalWithdrawn ?? '0'),
+      status: deserializeStreamStatus(raw.status),
+      renewalCount: Number(raw.numIterations ?? 0),
+    },
+    escrowRef: {
+      escrowHoldingCid: raw.currentAllocationCid ?? '',
+      escrowAmount: new Decimal(raw.totalDeposited ?? '0')
+        .minus(new Decimal(raw.totalWithdrawn ?? '0'))
+        .toFixed(10),
+      escrowOperator: raw.operator ?? '',
+      instrumentRef,
+      recipientAccount: {},
+      fundingReference: raw.originalAllocationId,
+      lastSettlementReference: raw.currentAllocationCid,
+    },
+  };
+}
+
 function deserializeConfig(raw: any): StreamConfig {
   return {
     streamId: raw.streamId,
@@ -724,10 +778,19 @@ function deserializeConfig(raw: any): StreamConfig {
 function deserializeState(raw: any): StreamState {
   return {
     totalWithdrawn: new Decimal(raw.totalWithdrawn ?? '0'),
-    status: (raw.status as StreamStatus) ?? StreamStatus.Active,
+    status: deserializeStreamStatus(raw.status),
     lastWithdrawTime: raw.lastWithdrawTime ? deserializeTime(raw.lastWithdrawTime) : undefined,
     renewalCount: Number(raw.renewalCount ?? 0),
   };
+}
+
+function deserializeStreamStatus(raw: any): StreamStatus {
+  if (typeof raw === 'string') return raw as StreamStatus;
+  if (raw?.tag && typeof raw.tag === 'string') return raw.tag as StreamStatus;
+  if (raw?.variant_constructor && typeof raw.variant_constructor === 'string') {
+    return raw.variant_constructor as StreamStatus;
+  }
+  return StreamStatus.Active;
 }
 
 /**
@@ -778,10 +841,7 @@ async function findActiveStreamMatch(
         undefined,
       );
 
-      const match = results.find(
-        (raw: any) =>
-          raw?.config?.sender === sender && raw?.config?.streamId === streamId,
-      );
+      const match = results.find((raw: any) => streamPayloadMatches(raw, sender, streamId));
 
       if (match) {
         return {
@@ -796,6 +856,14 @@ async function findActiveStreamMatch(
   }
 
   return undefined;
+}
+
+function streamPayloadMatches(raw: any, sender: string, streamId: string): boolean {
+  return (
+    raw?.config?.sender === sender && raw?.config?.streamId === streamId
+  ) || (
+    raw?.sender === sender && raw?.streamId === streamId
+  );
 }
 
 async function findHistoricalStreamSnapshot(

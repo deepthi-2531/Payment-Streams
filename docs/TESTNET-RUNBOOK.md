@@ -150,9 +150,9 @@ no longer flags placeholders.
 
 ## 3. Running the CC probe (sandbox accrual verification)
 
-This probe exercises the M1 NumericLegacy path — useful for verifying
-that the accrual math is correct on the deployed DAR. It does NOT move
-real CC.
+This probe creates a stream on the deployed DAR and verifies the
+accrual math against the V2 `Allocation_Settle` chain. It does NOT
+move real CC by itself; the V2 settle exercises do.
 
 ```bash
 # Local DevNet (default endpoint from config/local.testnet.json)

@@ -5,6 +5,12 @@ FROM node:22-alpine AS builder
 RUN corepack enable pnpm
 
 WORKDIR /app
+ARG VITE_WALLET_GATEWAY_URL=http://localhost:3030/api/v0/dapp
+ARG VITE_SKIP_WALLET_PICKER=false
+ARG VITE_WALLET_NAME="Splice Amulet Wallet (LocalNet V2)"
+ENV VITE_WALLET_GATEWAY_URL=${VITE_WALLET_GATEWAY_URL}
+ENV VITE_SKIP_WALLET_PICKER=${VITE_SKIP_WALLET_PICKER}
+ENV VITE_WALLET_NAME=${VITE_WALLET_NAME}
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/dashboard/package.json packages/dashboard/

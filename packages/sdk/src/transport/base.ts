@@ -19,7 +19,7 @@ export interface CreateResult<T> {
  * Identifier for a Daml template on the ledger.
  */
 export interface TemplateId {
-  /** Daml package ID (hex hash). */
+  /** Daml package name or package ID hash. */
   readonly packageId: string;
   /** Fully qualified module name (e.g. "CantonStreams.Stream"). */
   readonly moduleName: string;

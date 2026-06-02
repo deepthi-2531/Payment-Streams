@@ -19,9 +19,8 @@ Brings up:
 | Proxy          | 4000                  | Express REST API                        |
 
 Wallet-backed V2 E2E is tested against the Amulet wallet running on a
-separate Splice validator LocalNet built from
-`canton-network/splice@token-standard-v2-upcoming`. That wallet gateway
-should expose `http://localhost:3030/api/v0/dapp`.
+separate Splice validator LocalNet with Token Standard V2 support. That
+wallet gateway should expose `http://localhost:3030/api/v0/dapp`.
 
 Data persists in the `canton-data` Docker volume. Reset:
 
@@ -215,11 +214,11 @@ Template: `packages/dashboard/.env.example`. Never commit `.env.local` (gitignor
 The dashboard talks to any [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md)-compliant wallet via `@canton-network/dapp-sdk`. The reference implementation is the [Splice Wallet Kernel](https://github.com/canton-network/splice-wallet-kernel). To run SWK locally:
 
 For Token Standard V2 flows, use the Amulet wallet that runs on a
-Splice validator LocalNet built from `token-standard-v2-upcoming`.
+Splice validator LocalNet with Token Standard V2 support.
 Issue [canton-network/splice#5498](https://github.com/canton-network/splice/issues/5498)
 tracks the iterated-settlement wallet support this app depends on.
 
-1. Build/start the Splice LocalNet from `token-standard-v2-upcoming`
+1. Build/start a Splice LocalNet with the validator Amulet wallet enabled
 2. Confirm the Amulet wallet gateway is listening on `:3030`
 3. Allow the dashboard origin (`http://localhost:3000`) in the wallet gateway config
 4. Open the dashboard — Connect Wallet → Amulet login → authenticated
