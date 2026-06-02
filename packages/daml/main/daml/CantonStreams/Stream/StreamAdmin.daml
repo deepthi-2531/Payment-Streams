@@ -67,10 +67,10 @@ import CantonStreams.Interface.Types
 
 -- | A V2-only payment-stream admin/observability contract.
 --
--- Signatories are sender + recipient + operator (three-of-three).
--- The operator records iteration advances; the sender + recipient
--- co-sign so the admin contract is visible to both parties and
--- neither can be locked out of state queries.
+-- The sender signs the admin metadata contract. Recipient consent and
+-- custody authorization live in the V2 AllocationRequest/Allocation
+-- contracts; recipient + operator observe this admin surface so both
+-- can query state and the operator can drive settlement choices.
 template StreamAdmin
   with
     streamId : StreamId
@@ -92,7 +92,8 @@ template StreamAdmin
     endTime : Time
     cancellable : Bool
       -- ^ Whether the sender can unilaterally exercise `Allocation_Cancel`.
-      -- If False, only mutual cancel (both parties co-sign) is allowed.
+      -- If False, only the underlying V2 allocation's configured
+      -- cancellation path should be used.
     -- ----- mutable state -----
     totalWithdrawn : Decimal
       -- ^ Cumulative recipient receipts across all iterations.
@@ -114,8 +115,8 @@ template StreamAdmin
       -- all transfers belonging to a single stream.
     observers : [Party]
   where
-    signatory sender, recipient, operator
-    observer observers
+    signatory sender
+    observer recipient, operator, observers
 
     ensure totalDeposited > 0.0
       && startTime < endTime
@@ -177,8 +178,7 @@ template StreamAdmin
     -- for UX + Foundation adoption-metrics queries.
     --
     -- Controller is `operator` because they observe the on-chain
-    -- `Allocation_Cancel` event and react. Sender + recipient see the
-    -- archive via the signatory set so cannot be surprised.
+    -- `Allocation_Cancel` event and react.
     nonconsuming choice Mark_Cancelled : ContractId StreamAdmin
       with
         cancelTime : Time

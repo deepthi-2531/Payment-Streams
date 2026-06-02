@@ -52,10 +52,8 @@ import { dirname, resolve } from 'node:path';
 /**
  * V2 settlement choice name (V2-only per STR-79).
  *
- * Per `canton-network/splice@token-standard-v2-upcoming/token-standard/splice-api-token-allocation-v2`,
- * the V2 settle choice is `Allocation_Settle`. V1 was dropped from this
- * library — V1 fires `Allocation_Settle` but we never subscribe
- * to it.
+ * The V2 settle choice is `Allocation_Settle`. V1 was dropped from this
+ * library; this subscriber only follows configured Token Standard V2 assets.
  */
 const SETTLEMENT_CHOICES = new Set<string>([
   'Allocation_Settle',
@@ -785,8 +783,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
 
   /**
    * Try to interpret a raw update record as a settlement exercise.
-   * V2 settlement uses `Allocation_Settle` per
-   * `canton-network/splice@token-standard-v2-upcoming`.
+   * V2 settlement uses `Allocation_Settle`.
    *
    * Returns undefined if the update doesn't match our filter.
    */

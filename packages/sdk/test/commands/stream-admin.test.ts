@@ -73,9 +73,9 @@ describe('buildStreamAdminCreate', () => {
     expect(payload.templateId).toEqual(TEMPLATE_STREAM_ADMIN);
   });
 
-  it('includes sender + recipient + operator as signatories', () => {
+  it('includes the sender as the create signatory', () => {
     const payload = buildStreamAdminCreate(commonCreateParams());
-    expect(payload.signatories).toEqual(['alice', 'bob', 'carol']);
+    expect(payload.signatories).toEqual(['alice']);
   });
 
   it('initializes mutable state correctly', () => {
@@ -83,7 +83,7 @@ describe('buildStreamAdminCreate', () => {
     const arg = payload.argument as Record<string, unknown>;
     expect(arg.totalWithdrawn).toEqual({ numeric: '0.0000000000' });
     expect(arg.numIterations).toEqual({ int64: '0' });
-    expect(arg.status).toEqual({ Active: {} });
+    expect(arg.status).toEqual({ enum: { enum_constructor: 'Active' } });
     expect(arg.currentAllocationCid).toEqual({ optional: null });
     expect(arg.originalAllocationId).toEqual({ optional: null });
   });
@@ -91,7 +91,9 @@ describe('buildStreamAdminCreate', () => {
   it('encodes Linear vesting mode', () => {
     const payload = buildStreamAdminCreate(commonCreateParams());
     const arg = payload.argument as Record<string, unknown>;
-    expect(arg.vestingMode).toEqual({ Linear: {} });
+    expect(arg.vestingMode).toEqual({
+      variant: { variant_constructor: 'Linear', value: { unit: {} } },
+    });
   });
 
   it('encodes CliffLinear vesting mode', () => {
@@ -100,7 +102,10 @@ describe('buildStreamAdminCreate', () => {
     const payload = buildStreamAdminCreate(commonCreateParams({ vestingMode: vm }));
     const arg = payload.argument as Record<string, unknown>;
     expect(arg.vestingMode).toEqual({
-      CliffLinear: { cliffTime: { timestamp: (BigInt(cliffAt.getTime()) * 1000n).toString() } },
+      variant: {
+        variant_constructor: 'CliffLinear',
+        value: { cliffTime: { timestamp: (BigInt(cliffAt.getTime()) * 1000n).toString() } },
+      },
     });
   });
 
@@ -113,9 +118,12 @@ describe('buildStreamAdminCreate', () => {
     const payload = buildStreamAdminCreate(commonCreateParams({ vestingMode: vm }));
     const arg = payload.argument as Record<string, unknown>;
     expect(arg.vestingMode).toEqual({
-      Stepped: {
-        stepInterval: { microseconds: '86400000000' },
-        amountPerStep: { numeric: '10.0000000000' },
+      variant: {
+        variant_constructor: 'Stepped',
+        value: {
+          stepInterval: { microseconds: '86400000000' },
+          amountPerStep: { numeric: '10.0000000000' },
+        },
       },
     });
   });
@@ -128,7 +136,10 @@ describe('buildStreamAdminCreate', () => {
     const payload = buildStreamAdminCreate(commonCreateParams({ vestingMode: vm }));
     const arg = payload.argument as Record<string, unknown>;
     expect(arg.vestingMode).toEqual({
-      RenewableTerm: { termDuration: { microseconds: '2592000000000' } },
+      variant: {
+        variant_constructor: 'RenewableTerm',
+        value: { termDuration: { microseconds: '2592000000000' } },
+      },
     });
   });
 
