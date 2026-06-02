@@ -18,6 +18,7 @@ import {
 } from '../components/common/index.js';
 import { Icons } from '../components/primitives/Icons.js';
 import { Copyable } from '../components/primitives/Copyable.js';
+import { formatCantonDate } from '../lib/cantonTime.js';
 
 export function PoliciesPage() {
   const client = useCantonClient();
@@ -184,7 +185,7 @@ function PolicyRow({
         className="mono"
         style={{ fontSize: 12, color: 'var(--fg-3)' }}
       >
-        {new Date(policy.expiresAt).toLocaleDateString()}
+        {formatCantonDate(policy.expiresAt)}
       </td>
       <td>
         {policy.active && (

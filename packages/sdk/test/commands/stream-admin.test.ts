@@ -121,7 +121,7 @@ describe('buildStreamAdminCreate', () => {
       variant: {
         variant_constructor: 'Stepped',
         value: {
-          stepInterval: { microseconds: '86400000000' },
+          stepInterval: { microseconds: { int64: '86400000000' } },
           amountPerStep: { numeric: '10.0000000000' },
         },
       },
@@ -138,7 +138,7 @@ describe('buildStreamAdminCreate', () => {
     expect(arg.vestingMode).toEqual({
       variant: {
         variant_constructor: 'RenewableTerm',
-        value: { termDuration: { microseconds: '2592000000000' } },
+        value: { termDuration: { microseconds: { int64: '2592000000000' } } },
       },
     });
   });
