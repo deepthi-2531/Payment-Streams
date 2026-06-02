@@ -13,7 +13,7 @@ services:
     environment:
       - CANTON_LOG_LEVEL=INFO
     healthcheck:
-      test: ['CMD', 'grpcurl', '-plaintext', 'localhost:6865', 'grpc.health.v1.Health/Check']
+      test: ['CMD-SHELL', 'bash -lc "echo > /dev/tcp/127.0.0.1/6865"']
       interval: 10s
       timeout: 5s
       retries: 10
@@ -47,13 +47,15 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.dashboard
+      args:
+        VITE_WALLET_GATEWAY_URL: http://localhost:3030/api/v0/dapp
+        VITE_SKIP_WALLET_PICKER: 'true'
+        VITE_WALLET_NAME: Splice Amulet Wallet (LocalNet V2)
     ports:
       - '3000:80'
     depends_on:
       proxy:
         condition: service_healthy
-    environment:
-      - VITE_WALLET_GATEWAY_URL=http://localhost:3030/api/v0/dapp
 
 volumes:
   canton-data:

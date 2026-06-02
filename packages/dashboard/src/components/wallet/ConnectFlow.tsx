@@ -3,8 +3,8 @@
  * wallet session yet.
  *
  * Left: brand + tagline + a couple of stat badges.
- * Right: a connect card that calls `auth.connect()` (which opens the
- *        dapp-sdk wallet picker), plus a collapsible dev-mode fallback
+ * Right: a connect card that calls `auth.connect()` (picker or direct
+ *        LocalNet gateway, depending on config), plus a dev-mode fallback
  *        for environments without a real wallet.
  *
  * The actual provider/identity selection is handled inside dapp-sdk's

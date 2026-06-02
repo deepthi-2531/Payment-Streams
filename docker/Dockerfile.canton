@@ -1,35 +1,46 @@
-# Canton sandbox participant node
-# Multi-stage build: compile Daml packages, then deploy to Canton image
+# Canton sandbox participant node for the local Streams stack.
+#
+# The old image path used unavailable pinned Docker Hub tags. This image
+# installs DPM directly, fetches the Splice Token Standard V2 DARs, builds
+# the Streams DARs, then starts a DPM Canton sandbox with those DARs loaded.
 
-# Stage 1: Build Daml DARs
-FROM digitalasset/daml-sdk:3.4.10 AS builder
+FROM node:22-bookworm
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    openjdk-17-jdk-headless \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV DPM_HOME=/opt/dpm
+ENV DPM_SDK_VERSION=3.4.10
+ENV PATH="${DPM_HOME}/bin:${PATH}"
+
+RUN curl -sSL https://get.digitalasset.com/install/install.sh | sh \
+  && dpm install 3.4.10
 
 WORKDIR /build
 
-# Copy Daml source
-COPY packages/daml/ /build/packages/daml/
-COPY multi-package.yaml /build/
+COPY multi-package.yaml package.json ./
+COPY scripts/fetch-v2-dars.mjs scripts/fetch-v2-dars.mjs
+COPY packages/daml/ packages/daml/
 
-# Download Finance DAR dependencies
-RUN cd packages/daml && bash get-dependencies.sh
+RUN rm -rf packages/daml/*/.daml packages/daml/main/.lib
+RUN node scripts/fetch-v2-dars.mjs --mode source-build
+RUN cd packages/daml/interfaces && dpm build
+RUN cd packages/daml/main && dpm build
 
-# Build all Daml packages
-RUN dpm build --all
+RUN mkdir -p /canton/dars \
+  && cp packages/daml/main/.daml/dist/*.dar /canton/dars/ \
+  && cp packages/daml/interfaces/.daml/dist/*.dar /canton/dars/ \
+  && cp packages/daml/main/.lib/*.dar /canton/dars/
 
-# Stage 2: Canton runtime
-FROM digitalasset/canton-open-source:3.4.10
+COPY docker/canton-entrypoint.sh /canton/bin/canton-entrypoint.sh
+RUN chmod +x /canton/bin/canton-entrypoint.sh
 
-# Copy compiled DARs from builder stage
-COPY --from=builder /build/packages/daml/main/.daml/dist/*.dar /canton/dars/
-COPY --from=builder /build/packages/daml/interfaces/.daml/dist/*.dar /canton/dars/
+EXPOSE 6865 10011
 
-# Copy Finance DAR dependencies (needed at runtime for CIP-56 settlement)
-COPY --from=builder /build/packages/daml/main/.lib/*.dar /canton/dars/
-
-# Canton configuration for local sandbox mode
-COPY docker/canton.conf /canton/config/canton.conf
-COPY docker/bootstrap.canton /canton/config/bootstrap.canton
-
-EXPOSE 6865 7575 10011
-
-ENTRYPOINT ["bin/canton", "-c", "/canton/config/canton.conf", "--bootstrap", "/canton/config/bootstrap.canton"]
+ENTRYPOINT ["/canton/bin/canton-entrypoint.sh"]

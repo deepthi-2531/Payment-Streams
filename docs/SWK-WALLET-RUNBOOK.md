@@ -5,8 +5,7 @@ Companion to `TESTNET-RUNBOOK.md`. Covers wiring the dashboard's
 CIP-103 wallet flow (signup → sign-in → list accounts → prepareExecute).
 
 For Token Standard V2 stream testing, prefer the Amulet wallet that runs
-on a Splice validator LocalNet built from
-`canton-network/splice@token-standard-v2-upcoming`. Issue
+on a Splice validator LocalNet with Token Standard V2 support. Issue
 [`canton-network/splice#5498`](https://github.com/canton-network/splice/issues/5498)
 tracks the iterated-settlement Amulet wallet support this repo relies on.
 
@@ -44,8 +43,7 @@ set `VITE_WALLET_GATEWAY_URL` in `packages/dashboard/.env.local`.
 
 ## Prerequisites
 
-1. Splice LocalNet checked out from `token-standard-v2-upcoming` and
-   running with the validator Amulet wallet enabled. The older standalone
+1. Splice LocalNet running with the validator Amulet wallet enabled. The older standalone
    SWK run process is still useful for CIP-103 smoke tests, but it is
    not the target for Token Standard V2 iterated-settlement E2E.
 

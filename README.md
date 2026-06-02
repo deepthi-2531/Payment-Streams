@@ -250,6 +250,7 @@ names in the type system, they exist so older contracts can be read and migrated
 
 | If you want to...      | Read                                                                 |
 | ---------------------- | -------------------------------------------------------------------- |
+| Ship one working stream end-to-end | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
 | Run the app locally    | [docs/QUICKSTART.md](docs/QUICKSTART.md)                             |
 | Understand the design  | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                         |
 | Integrate as a dapp    | [docs/integration-guide/README.md](docs/integration-guide/README.md) |

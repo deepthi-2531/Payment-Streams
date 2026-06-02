@@ -6,11 +6,16 @@
 
 ## Wire protocol: JSON-RPC 2.0 (not REST)
 
-**Critical correction to our existing code**: the current `AmuletWalletGatewayAdapter`
-in `packages/sdk/src/settlement/adapters/amulet.ts` calls
-`/api/wallet-gateway/prepare-action` + `/execute-action` as REST POST endpoints.
-That is an **older API** (or a different gateway implementation). The current
-Wallet Gateway exposes:
+**Historical note (V1 settlement-reference path, no longer used).** The
+`AmuletWalletGatewayAdapter` in `packages/sdk/src/settlement/adapters/amulet.ts`
+calls `/api/wallet-gateway/prepare-action` + `/execute-action` as REST POST
+endpoints. That endpoint shape was the older V1 settlement-reference path
+that this library has since dropped. New stream creation goes through the
+CIP-103 wallet flow described below; the legacy adapter is retained only
+for parsing/migration compatibility and is not exercised by the live code
+path.
+
+The current Wallet Gateway exposes:
 
 | Endpoint | Purpose | Auth |
 |---|---|---|

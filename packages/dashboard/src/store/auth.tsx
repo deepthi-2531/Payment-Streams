@@ -14,8 +14,8 @@
  *   • `network` — connected canton network metadata
  *   • `provider` — the selected wallet provider descriptor
  *   • `isAuthenticated` — convenience boolean
- *   • `isConnecting` — flag while the picker is open
- *   • `connect()`  — opens the wallet picker (sdk.connect)
+ *   • `isConnecting` — flag while the wallet connection is in flight
+ *   • `connect()`  — opens the picker, or direct-connects when configured
  *   • `disconnect()` — clears the session (sdk.disconnect)
  *   • `clearCredentials()` — alias of disconnect, kept for older callers
  *
@@ -139,7 +139,7 @@ async function assertRemoteWalletReachable(): Promise<void> {
     const suffix = err instanceof Error ? ` (${err.message})` : '';
     throw new Error(
       `Amulet wallet gateway is not reachable at ${WALLET_GATEWAY_URL}${suffix}. ` +
-        'Start the Splice LocalNet validator wallet from token-standard-v2-upcoming, ' +
+        'Start the Splice LocalNet validator Amulet wallet gateway, ' +
         'then retry Connect wallet.',
     );
   }
