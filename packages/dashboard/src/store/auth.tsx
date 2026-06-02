@@ -114,7 +114,13 @@ const SKIP_PICKER_INIT_OPTIONS = SKIP_PICKER
 // dappSDK 1.1.0 only honors `walletPicker` in the DappSDK constructor;
 // passing it to `init()` is ignored. Use a dedicated SDK instance for
 // the automation/local-Amulet path so no popup picker is created.
-const walletSdk = SKIP_PICKER
+//
+// Exported so other dashboard modules (notably the Inbox wallet-
+// approval helper in `lib/walletApprovals.ts`) can issue CIP-103 calls
+// against the SAME SDK instance the AuthProvider connected with. Going
+// through a separate `dappSDK` import would race against this instance
+// when `VITE_SKIP_WALLET_PICKER=true`.
+export const walletSdk: DappSDK = SKIP_PICKER
   ? new DappSDK({ walletPicker: autoRemotePicker as unknown as WalletPickerFn })
   : dappSDK;
 
