@@ -503,12 +503,12 @@ function PreviewStep({
           >
             {submitting ? (
               <>
-                <Loader2 size={13} style={{ animation: 'spin 800ms linear infinite' }} /> Signing{' '}
+                <Loader2 size={13} style={{ animation: 'spin 800ms linear infinite' }} /> Creating{' '}
                 {submittedCount}/{stats.valid}…
               </>
             ) : (
               <>
-                <Check size={13} /> Sign & propose {stats.valid}
+                <Check size={13} /> Create {stats.valid} stream{stats.valid === 1 ? '' : 's'}
               </>
             )}
           </button>
@@ -656,7 +656,7 @@ function StatusCell({
           color: 'var(--accent)',
         }}
       >
-        <CheckCircle2 size={11} /> Proposed
+        <CheckCircle2 size={11} /> Created
       </span>
     );
   }
@@ -714,13 +714,13 @@ function DoneStep({
         </div>
         <div>
           <div style={{ fontSize: 18, fontWeight: 500, color: 'var(--fg)' }}>
-            {failed === 0 ? 'Batch submitted' : 'Batch partially submitted'}
+            {failed === 0 ? 'Batch created' : 'Batch partially created'}
           </div>
           <div style={{ fontSize: 12.5, color: 'var(--fg-3)', marginTop: 4 }}>
             <span className="mono" style={{ color: 'var(--accent)' }}>
               {success}
             </span>{' '}
-            proposed ·{' '}
+            created ·{' '}
             <span
               className="mono"
               style={{
