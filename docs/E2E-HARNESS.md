@@ -79,9 +79,14 @@ the participant JSON-Ledger-API on the `x975` ports
 > **Honest gap on `:3030`.** The upstream LocalNet stack at the pinned
 > commit `2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea` does **not** publish a
 > CIP-103 JSON-RPC wallet gateway at `http://localhost:3030/api/v0/dapp`.
-> That endpoint is provided by the **Splice Wallet Kit** (SWK), a
-> separate component published as `@canton-network/splice-wallet-kit` (or
-> built from [`canton-network/splice-wallet-kit`](https://github.com/canton-network/splice-wallet-kit)).
+> That endpoint is provided by the **Splice Wallet Kernel** (historically
+> "SWK"), a separate component whose canonical home today is
+> [`canton-network/wallet`](https://github.com/canton-network/wallet)
+> (the older `hyperledger-labs/splice-wallet-kernel` URL 301-redirects
+> there). The gateway daemon is published as
+> `@canton-network/wallet-gateway-remote`; the in-page client this
+> dashboard already imports is `@canton-network/dapp-sdk` (published
+> from the same monorepo).
 > The three legacy paths older revisions of this doc referenced
 > (`build-tools/local-canton/start-canton.sh`,
 > `build-tools/local-validator/start-validator.sh`,
@@ -89,16 +94,28 @@ the participant JSON-Ledger-API on the `x975` ports
 > `canton-network/splice` at any commit — `build-tools/` only contains
 > `splice-localnet-compose.sh` and `splice-compose.sh`.
 
-To get a working `:3030` CIP-103 endpoint, after LocalNet is up:
+To get a working `:3030` CIP-103 endpoint, after LocalNet is up, follow
+the verified upstream steps from the `canton-network/wallet` README:
 
-1. Clone the Splice Wallet Kit and `npm run start` it, pointing its
-   `CANTON_NODE_URL` at the LocalNet `app-user` validator
+1. Clone and start the Splice Wallet Kernel:
+
+   ```bash
+   git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
+   cd .splice-wallet-kernel
+   yarn install
+   yarn build:all
+   yarn start:all
+   ```
+
+   Point its `CANTON_NODE_URL` at the LocalNet `app-user` validator
    (`http://localhost:2975`) or `app-provider` (`http://localhost:3975`).
 2. Add the dashboard's origin (default `http://localhost:3000` — note
    this collides with the upstream `app-provider` wallet UI port; either
    change `STREAMS_DASHBOARD_PORT` for the Streams stack in Step 2 or
-   leave the upstream UI down) to the SWK `allowedOrigins`.
-3. Confirm the gateway is up with a CIP-103 status probe:
+   leave the upstream UI down) to the wallet kernel's `allowedOrigins`.
+3. Confirm the gateway is up with a CIP-103 status probe. Port `3030` is
+   the documented default repeatedly used by this repo's runbooks; the
+   upstream quickstart does not pin a port number, so probe to confirm:
 
 ```bash
 curl -fsS -X POST http://localhost:3030/api/v0/dapp \

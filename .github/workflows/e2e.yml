@@ -24,6 +24,10 @@ on:
         description: 'Override SPLICE_PINNED_COMMIT (leave empty to use scripts/fetch-v2-dars.mjs)'
         type: string
         default: ''
+      wallet_gateway_url:
+        description: 'Override the Amulet wallet gateway URL (default http://localhost:3030/api/v0/dapp)'
+        type: string
+        default: ''
       skip_localnet_build:
         description: 'Skip cloning + building Splice LocalNet (only useful when re-running just the Streams stack)'
         type: boolean
@@ -56,12 +60,25 @@ jobs:
           echo "Resolved SPLICE_PINNED_COMMIT: ${{ steps.splicepin.outputs.commit }}"
           echo "Dry run: ${{ inputs.dry_run }}"
           echo "Skip LocalNet build: ${{ inputs.skip_localnet_build }}"
+          echo "Wallet gateway override: ${{ inputs.wallet_gateway_url }}"
 
+      # Drives scripts/start-localnet-e2e.sh with the operator-provided
+      # overrides. SPLICE_PINNED_COMMIT, LOCALNET_DRY_RUN, and
+      # SKIP_LOCALNET_BUILD steer the Splice clone/build path; the new
+      # wallet_gateway_url input is forwarded as both WALLET_GATEWAY_URL
+      # (consumed by start-localnet-e2e.sh's CIP-103 probe) and
+      # VITE_WALLET_GATEWAY_URL (consumed by docker/docker-compose.yml's
+      # dashboard build arg). When the input is left empty, both env vars
+      # are empty strings and the `:-` defaults in the shell script and
+      # docker-compose substitution preserve the documented LocalNet
+      # default (http://localhost:3030/api/v0/dapp).
       - name: Run orchestration script
         env:
           SPLICE_PINNED_COMMIT: ${{ steps.splicepin.outputs.commit }}
           LOCALNET_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
           SKIP_LOCALNET_BUILD: ${{ inputs.skip_localnet_build && '1' || '0' }}
+          WALLET_GATEWAY_URL: ${{ inputs.wallet_gateway_url }}
+          VITE_WALLET_GATEWAY_URL: ${{ inputs.wallet_gateway_url }}
         run: bash scripts/start-localnet-e2e.sh
 
       - name: Run V2 conformance lint (defense in depth)
