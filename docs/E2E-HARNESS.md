@@ -44,6 +44,35 @@ The harness pins the Splice repository to the same commit as
 Override with `SPLICE_PINNED_COMMIT=<sha>` if you are testing an upstream
 patch before bumping the pin.
 
+### Opting into the Amulet wallet V2 iterated-settlement preview (PR #5697)
+
+For full V2 receiver-flow E2E (the Amulet wallet creating + accepting
+committed allocations with `nextIterationFunding`, plus the scan +
+wallet tx-log parser updates for the new V2 settlement tx shape) the
+upstream work lives on
+[`canton-network/splice#5697`](https://github.com/canton-network/splice/pull/5697)
+— branch `oriol/initialted-settlement-fe` at head
+`73c68d16ba93346a80418662f94a7877e3938f91`, open against
+`token-standard-v2-upcoming` (the base our main pin is cut from).
+
+Until #5697 merges, opt in explicitly rather than bumping the main pin:
+
+```bash
+# Either:
+export SPLICE_PINNED_COMMIT=73c68d16ba93346a80418662f94a7877e3938f91
+bash scripts/start-localnet-e2e.sh
+# Or on CI: pass it as the `splice_pinned_commit` workflow_dispatch
+# input on .github/workflows/e2e.yml.
+```
+
+The constants `SPLICE_PR5697_PREVIEW_COMMIT` and
+`SPLICE_PR5697_PREVIEW_BRANCH` in `scripts/fetch-v2-dars.mjs` carry
+the canonical values. When `start-localnet-e2e.sh` detects the
+operator is on the preview commit, it annotates the announce line so
+log-readers can see the harness is on the preview branch. On merge,
+bump `SPLICE_PINNED_COMMIT` to the merge sha and delete the preview
+constants.
+
 ## Step 1 — Bring up the Splice LocalNet and an Amulet wallet gateway
 
 The orchestration script clones the upstream Splice repo at the pinned
