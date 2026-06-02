@@ -46,6 +46,46 @@ const cancellableSchema = z
 
 const vestingModeSchema = z.enum(VestingMode);
 
+// Per-variant optional columns. CSV cells arrive as strings; empty
+// strings mean "not supplied" rather than "invalid". `z.preprocess`
+// normalizes the empty/undefined cases up-front so the inner schemas
+// can stay clean and the type inference stays honest.
+
+const emptyAsUndefined = (v: unknown): unknown =>
+  v === '' || v === undefined || v === null ? undefined : v;
+
+/** Optional positive-integer microsecond column (stepInterval, termDuration). */
+const optionalPositiveIntMicrosSchema = z.preprocess(
+  emptyAsUndefined,
+  z.coerce
+    .number()
+    .int('must be a whole number of microseconds')
+    .positive('must be > 0')
+    .optional(),
+);
+
+/** Optional decimal column (amountPerStep). */
+const optionalDecimalStringSchema = z.preprocess(
+  emptyAsUndefined,
+  z
+    .string()
+    .regex(/^\d+(\.\d+)?$/, 'must be a positive decimal')
+    .refine((s) => Number(s) > 0, { message: 'must be > 0' })
+    .optional(),
+);
+
+/** Optional ISO date column (cliffTime). */
+const optionalDateInputSchema = z.preprocess(
+  emptyAsUndefined,
+  z
+    .string()
+    .min(1)
+    .refine((s) => !Number.isNaN(new Date(s).getTime()), {
+      message: 'invalid ISO/date string',
+    })
+    .optional(),
+);
+
 const ledgerRecordJsonSchema = z.string().transform((value, ctx) => {
   try {
     const parsed = JSON.parse(value) as LedgerRecord;
@@ -85,10 +125,58 @@ export const batchRowSchema = z
     end: dateInputSchema,
     vesting: vestingModeSchema,
     cancellable: cancellableSchema.default(true),
+    /** Required when `vesting === CliffLinear`. ISO date string. */
+    cliffTime: optionalDateInputSchema,
+    /** Required when `vesting === Stepped`. Microseconds between steps. */
+    stepInterval: optionalPositiveIntMicrosSchema,
+    /** Required when `vesting === Stepped`. Decimal amount unlocked per step. */
+    amountPerStep: optionalDecimalStringSchema,
+    /** Required when `vesting === RenewableTerm`. Microseconds in one term. */
+    termDuration: optionalPositiveIntMicrosSchema,
   })
   .refine((row) => new Date(row.start).getTime() < new Date(row.end).getTime(), {
     message: 'end must be strictly after start',
     path: ['end'],
-  });
+  })
+  // Per-variant cross-field requirements. Linear has no extras; the
+  // other three variants must supply their config columns or the proxy
+  // would silently default to 1-day / 30-day shapes (which is what
+  // earlier batch behaviour did — a real reviewer finding).
+  .refine(
+    (row) => row.vesting !== VestingMode.CliffLinear || row.cliffTime !== undefined,
+    {
+      message: 'cliffTime is required when vesting=CliffLinear',
+      path: ['cliffTime'],
+    },
+  )
+  .refine(
+    (row) =>
+      row.vesting !== VestingMode.Stepped ||
+      (row.stepInterval !== undefined && row.amountPerStep !== undefined),
+    {
+      message: 'stepInterval AND amountPerStep are required when vesting=Stepped',
+      path: ['stepInterval'],
+    },
+  )
+  .refine(
+    (row) => row.vesting !== VestingMode.RenewableTerm || row.termDuration !== undefined,
+    {
+      message: 'termDuration is required when vesting=RenewableTerm',
+      path: ['termDuration'],
+    },
+  )
+  .refine(
+    (row) => {
+      if (row.vesting !== VestingMode.CliffLinear || row.cliffTime === undefined) return true;
+      const start = new Date(row.start).getTime();
+      const end = new Date(row.end).getTime();
+      const cliff = new Date(row.cliffTime).getTime();
+      return start <= cliff && cliff < end;
+    },
+    {
+      message: 'cliffTime must satisfy start ≤ cliffTime < end',
+      path: ['cliffTime'],
+    },
+  );
 
 export type BatchRow = z.infer<typeof batchRowSchema>;

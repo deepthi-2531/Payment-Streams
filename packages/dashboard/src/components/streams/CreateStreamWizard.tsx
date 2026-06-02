@@ -6,7 +6,7 @@
  *   1. Recipient & amount   (recipient, totalDeposited, assetType)
  *   2. Schedule & vesting   (start/end + vesting mode + mode-specific fields + cancellable)
  *   3. Settlement & custody (settlement mode + custody-specific fields)
- *   4. Review & sign        (read-only summary + submit)
+ *   4. Review & create      (read-only summary + submit)
  *
  * Same source-of-truth as the single-page form: `createStreamSchema`
  * drives every field's validation (per-step we just call
@@ -54,7 +54,7 @@ const STEPS: readonly StepDef[] = [
   { id: 'recipient', label: 'Recipient & amount' },
   { id: 'schedule', label: 'Schedule & vesting' },
   { id: 'settlement', label: 'Settlement' },
-  { id: 'review', label: 'Review & sign' },
+  { id: 'review', label: 'Review & create' },
 ];
 
 /**
@@ -160,7 +160,29 @@ export function CreateStreamWizard() {
 
   const onBack = () => setStepIdx((i) => Math.max(0, i - 1));
 
+  // The previous build attached `methods.handleSubmit(...)` to
+  // `<form onSubmit={...}>`, which let an implicit form submission
+  // (Enter key on any text input, browser-native click delegation from
+  // a focused button being replaced mid-transition, etc.) trigger the
+  // create mutation BEFORE the user reached the Review step's
+  // deliberate "Create stream" button. The reviewer hit exactly that:
+  // Step 3 → Step 4 landed on Step 4 already showing "Created".
+  //
+  // Hardening:
+  //   1. `<form>` no longer wires `onSubmit`. The Review step's button
+  //      is `type="button"` with an explicit `onClick={onSubmit}` so
+  //      there is no implicit-submit surface left on the form at all.
+  //   2. `onSubmit` is guarded: a call from any state other than the
+  //      review step is a no-op. Defensive even if a future contributor
+  //      reintroduces form-level submission.
+  //   3. Re-entering the wizard from a "Created" state resets the
+  //      `submitted` flag so the badge can't leak across navigations.
   const onSubmit = methods.handleSubmit(async (data) => {
+    if (stepIdx !== STEPS.length - 1) {
+      // Never run the mutation from anywhere but the explicit Review
+      // step Create button. See block comment above.
+      return;
+    }
     if (!party) {
       setSubmitError('Wallet not connected');
       return;
@@ -175,12 +197,32 @@ export function CreateStreamWizard() {
     }
   });
 
+  // If the user navigates back from a completed Review step (e.g. to
+  // tweak the schedule and re-submit), drop the success badge so they
+  // do not see a stale "Created" state on the next pass.
+  useEffect(() => {
+    if (stepIdx !== STEPS.length - 1 && submitted) {
+      setSubmitted(false);
+    }
+  }, [stepIdx, submitted]);
+
   return (
     <FormProvider {...methods}>
       <div style={{ paddingTop: 28 }}>
         <Stepper stepIdx={stepIdx} onJump={(i) => i <= stepIdx && setStepIdx(i)} />
 
-        <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+        {/*
+         * `<form>` here is purely a layout container — `onSubmit` is
+         * intentionally NOT wired so neither Enter-key submission from
+         * a text input nor a stray `type="submit"` button can fire the
+         * mutation outside the Review step. The Create stream button
+         * below uses an explicit `onClick={onSubmit}` instead.
+         */}
+        <form
+          noValidate
+          onSubmit={(e) => e.preventDefault()}
+          style={{ display: 'flex', flexDirection: 'column', gap: 20 }}
+        >
           <div className="card" style={{ padding: 28, marginTop: 24 }}>
             {stepIdx === 0 && <StepRecipient />}
             {stepIdx === 1 && <StepSchedule />}
@@ -225,22 +267,23 @@ export function CreateStreamWizard() {
                 </button>
               ) : (
                 <button
-                  type="submit"
+                  type="button"
                   className="btn btn-primary"
+                  onClick={() => void onSubmit()}
                   disabled={createStream.isPending || submitted}
                 >
                   {submitted ? (
                     <>
-                      <Check size={14} /> Proposed
+                      <Check size={14} /> Created
                     </>
                   ) : createStream.isPending ? (
                     <>
                       <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />{' '}
-                      Signing…
+                      Creating…
                     </>
                   ) : (
                     <>
-                      <Sparkles size={14} /> Sign &amp; propose
+                      <Sparkles size={14} /> Create stream
                     </>
                   )}
                 </button>
@@ -785,8 +828,8 @@ function StepReview({
     <>
       <StepHeader
         number="4"
-        title="Review & sign"
-        subtitle="Final check before sending the proposal to the recipient."
+        title="Review & create"
+        subtitle="Final check before submitting. The stream goes live on submit; recipient funding approval happens in the Amulet wallet."
       />
 
       {success && (
@@ -817,9 +860,11 @@ function StepReview({
             <Check size={18} />
           </div>
           <div>
-            <div style={{ fontWeight: 500 }}>Stream proposed</div>
+            <div style={{ fontWeight: 500 }}>Ready to create</div>
             <div style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-              The recipient will see this in their inbox and accept to activate.
+              The stream goes live as soon as you submit; the recipient sees it
+              in their Incoming view. V2 funding approval happens in the
+              Amulet wallet.
             </div>
           </div>
         </div>
@@ -919,10 +964,15 @@ function StepReview({
             lineHeight: 1.6,
           }}
         >
-          <li>You sign the propose-stream command in your wallet.</li>
-          <li>The proposal appears in the recipient's inbox; they accept to activate.</li>
+          <li>You submit; the stream is created on-ledger and starts accruing.</li>
           <li>
-            Once active, accruals tick continuously and the recipient can withdraw what's vested.
+            The recipient sees it in their Incoming view. V2 funding approval
+            (the Amulet TransferPreapproval) happens separately in the
+            recipient's wallet.
+          </li>
+          <li>
+            Accruals tick continuously and the recipient can withdraw what's
+            vested once the wallet approval is in place.
           </li>
         </ol>
       </div>
