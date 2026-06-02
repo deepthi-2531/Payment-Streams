@@ -34,7 +34,11 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SPLICE_CHECKOUT_DIR="${SPLICE_CHECKOUT_DIR:-$ROOT_DIR/.splice-localnet}"
 SPLICE_REPO_URL="${SPLICE_REPO_URL:-https://github.com/canton-network/splice}"
 SPLICE_PINNED_COMMIT="${SPLICE_PINNED_COMMIT:-}"
-WALLET_GATEWAY_URL="${WALLET_GATEWAY_URL:-http://localhost:3030/api/v0/dapp}"
+# Honor the repo-wide VITE_WALLET_GATEWAY_URL convention (used by the
+# dashboard, docker-compose substitution, .env.example, SWK runbook, and
+# DEPLOYMENT.md) as a fallback for callers who export only the VITE_-
+# prefixed variant. WALLET_GATEWAY_URL wins when both are set.
+WALLET_GATEWAY_URL="${WALLET_GATEWAY_URL:-${VITE_WALLET_GATEWAY_URL:-http://localhost:3030/api/v0/dapp}}"
 WALLET_PROBE_TIMEOUT="${WALLET_PROBE_TIMEOUT:-90}"
 DASHBOARD_URL="${DASHBOARD_URL:-http://localhost:3000}"
 PROXY_URL="${PROXY_URL:-http://localhost:4000/api/health}"
