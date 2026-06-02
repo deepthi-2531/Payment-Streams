@@ -38,6 +38,7 @@ import {
 import { PartyChip } from '../components/primitives/PartyChip.js';
 import { VestingBadge } from '../components/primitives/VestingBadge.js';
 import { SettlementBadge } from '../components/primitives/SettlementBadge.js';
+import { WalletApprovalControl } from '../components/streams/WalletApprovalControl.js';
 import type { Stream } from '@canton-streams/sdk/browser';
 
 export function InboxPage() {
@@ -184,6 +185,8 @@ function IncomingCard({ stream }: { readonly stream: Stream }) {
           marginTop: 12,
           paddingTop: 12,
           borderTop: '1px solid var(--line)',
+          gap: 12,
+          flexWrap: 'wrap',
         }}
       >
         <div style={{ fontSize: 11.5, color: 'var(--fg-4)' }}>
@@ -195,6 +198,16 @@ function IncomingCard({ stream }: { readonly stream: Stream }) {
         >
           View details <ArrowUpRight size={11} />
         </Link>
+      </div>
+
+      <div
+        style={{
+          marginTop: 12,
+          paddingTop: 12,
+          borderTop: '1px solid var(--line)',
+        }}
+      >
+        <WalletApprovalControl stream={stream} />
       </div>
     </div>
   );
