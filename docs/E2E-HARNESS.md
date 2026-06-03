@@ -221,21 +221,43 @@ In a browser at `http://localhost:3000`:
 1. Click **Connect wallet**. The dashboard sends the CIP-103 status
    preflight, then `connect()` on `@canton-network/dapp-sdk`. The wallet
    returns the available accounts.
+
 2. Open **Create stream**. Fill in:
    - Recipient party (one of the wallet's accounts).
    - Asset (a V2-capable instrument advertised by the wallet).
    - Amount, start, end, vesting mode.
-3. Submit. The Streams SDK emits an AllocationRequest and the wallet
-   prompts you to approve. Approval exercises
-   `AllocationFactory_Allocate` with `committed=True`.
-4. The Streams executor subsequently exercises `Allocation_Settle` per
-   accrual period. Batched advancement uses
-   `SettlementFactory_SettleBatch`.
+
+3. Submit. The dashboard's SDK creates a V2 `StreamAdmin` contract —
+   the metadata record the rest of the stack queries against. See
+   `packages/sdk/src/commands/create.ts`.
+
+   > **Honest gap.** Today the SDK creates `StreamAdmin` directly; it
+   > does **not** also emit a V2 `AllocationRequest` for the recipient
+   > to accept, and the dashboard's `walletSdk.open()` button only
+   > brings the wallet forward — it does not yet call
+   > `walletSdk.prepareExecuteAndWait(...)` with an
+   > `AllocationRequest_Accept` payload. So at this step in the
+   > current build, the wallet is connected but is not driving the
+   > recipient acceptance ceremony. Wiring that is the next focused
+   > implementation step (target wallet build: the PR #5697 preview
+   > documented above) — see
+   > [`packages/dashboard/src/lib/walletApprovals.ts`](../packages/dashboard/src/lib/walletApprovals.ts)
+   > and `lib/walletApprovals.ts`'s module-level docstring for the
+   > exact swap site.
+
+4. Approve in the Amulet wallet directly (open it through the wallet
+   gateway UI, not the dashboard inbox button). Approval exercises
+   `AllocationFactory_Allocate` with `committed=True`. The Streams
+   executor then exercises `Allocation_Settle` per accrual period;
+   batched advancement uses `SettlementFactory_SettleBatch`. None of
+   that requires further dashboard interaction — the choices are
+   issued by the wallet + executor against the on-ledger contracts.
 
 You can confirm the V2 choices from the participant transaction log
-(query the proxy's `/api/streams/:id/history` endpoint) or by running the
-matching SDK probe (`scripts/testnet-v2-stream-probe.mjs` against the
-LocalNet endpoint instead of TestNet).
+(query the proxy's `/api/streams/:id/history` endpoint) or by running
+the matching SDK probe
+(`scripts/testnet-v2-stream-probe.mjs` against the LocalNet endpoint
+instead of TestNet).
 
 ## Step 4 — Fail-closed verification (no popup when the wallet is gone)
 
