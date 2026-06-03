@@ -269,13 +269,23 @@ Drive the V2 allocation flow end-to-end through the wallet:
          --data '{"jsonrpc":"2.0","id":"a","method":"listAccounts","params":{}}'
 
   3. Create a V2 stream (recipient + amount + V2 instrument + funding ref)
-     through the dashboard "Create stream" wizard. Submission emits an
-     AllocationRequest the Amulet wallet renders.
+     through the dashboard "Create stream" wizard. Submission creates a
+     V2 StreamAdmin contract via packages/sdk/src/commands/create.ts.
 
-  4. Approve in the wallet. The wallet exercises
-     AllocationFactory_Allocate (committed=True). The Streams executor
-     then exercises Allocation_Settle (and SettlementFactory_SettleBatch
-     for batched advancement).
+     Honest gap: the SDK does NOT yet also emit a V2 AllocationRequest
+     for the recipient to accept, and the inbox "Approve in Amulet
+     wallet" button currently calls walletSdk.open() — it does not yet
+     call walletSdk.prepareExecuteAndWait(...) with an
+     AllocationRequest_Accept payload. Wiring that is the next
+     focused implementation step; target wallet build is the PR-5697
+     preview commit announced above. See
+     packages/dashboard/src/lib/walletApprovals.ts for the swap site.
+
+  4. Approve in the Amulet wallet directly (its own UI, through the
+     wallet gateway). Approval exercises AllocationFactory_Allocate
+     (committed=True). The Streams executor then exercises
+     Allocation_Settle (and SettlementFactory_SettleBatch for batched
+     advancement) against the on-ledger contracts.
 
   5. Sanity-check the choice names by running the CI guard locally:
        bash $ROOT_DIR/scripts/check-v2-conformance.sh
