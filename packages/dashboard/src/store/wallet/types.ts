@@ -44,6 +44,29 @@ export interface StreamsWalletAccount {
   readonly signingProviderId?: string | null;
 }
 
+/**
+ * Entry in a hosted-multi-wallet picker. Returned by
+ * `listWallets()` on layers with `capabilities.hostedMultiWallet`.
+ * On the partylayer client, each entry maps to a PartyLayer
+ * `WalletInfo` (Loop, Console, Cantor8, ...). The dapp-sdk client
+ * returns a single synthesised entry for the Amulet gateway it's
+ * already pointed at.
+ */
+export interface StreamsWalletEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly description?: string;
+  /** `true` if the underlying adapter detected the wallet is
+   * installed / reachable; `false` if it explicitly reported
+   * not-installed; `undefined` if the adapter has no opinion. */
+  readonly installed?: boolean;
+  /** Where to install the wallet if it isn't yet. */
+  readonly installUrl?: string;
+  /** PartyLayer's CIP-0103-native marker (informational; lets the
+   * UI badge "CIP-103 NATIVE" entries). */
+  readonly cip0103Native?: boolean;
+}
+
 export type StreamsWalletConnectResult = StreamsWalletConnection;
 export type StreamsWalletStatusHandler = (event: StreamsWalletStatus) => void;
 export type StreamsWalletAccountsHandler = (
@@ -107,10 +130,19 @@ export interface StreamsWalletClient {
   readonly supportsHostedMultiWallet: boolean;
 
   init(): Promise<void>;
-  connect(): Promise<StreamsWalletConnectResult>;
+  /** When `walletId` is provided and the layer supports it, the
+   * layer connects to that specific wallet (PartyLayer adapter id —
+   * `loop`, `console`, `cantor8`, ...). When omitted, the layer's
+   * native default flow runs (dapp-sdk: auto-remote-picker against
+   * the configured gateway; partylayer: prefer-installed if any). */
+  connect(walletId?: string): Promise<StreamsWalletConnectResult>;
   disconnect(): Promise<void>;
   status(): Promise<StreamsWalletStatus>;
   listAccounts(): Promise<readonly StreamsWalletAccount[]>;
+  /** Only present on hosted-multi-wallet layers
+   * (`capabilities.hostedMultiWallet === true`). Returns the
+   * adapter list for the dashboard's wallet picker. */
+  listWallets?(): Promise<readonly StreamsWalletEntry[]>;
   open(): Promise<void>;
 
   /** Only call when `capabilities.ledgerApi === true`. */

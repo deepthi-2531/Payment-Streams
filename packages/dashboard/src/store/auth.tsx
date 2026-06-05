@@ -58,7 +58,7 @@ interface AuthContextValue {
   readonly error: string | null;
 
   // Wallet-driven controls
-  readonly connect: () => Promise<void>;
+  readonly connect: (walletId?: string) => Promise<void>;
   readonly disconnect: () => Promise<void>;
   /** Alias of disconnect — kept so older callers compile. */
   readonly clearCredentials: () => void;
@@ -166,11 +166,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (walletId?: string) => {
     setIsConnecting(true);
     setError(null);
     try {
-      const result = await walletClient.connect();
+      const result = await walletClient.connect(walletId);
       if (!result.isConnected) {
         setError(result.reason ?? 'Wallet connection rejected');
         return;

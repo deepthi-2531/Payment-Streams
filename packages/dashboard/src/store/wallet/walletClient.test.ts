@@ -62,6 +62,22 @@ describe('StreamsWalletClient contract — dapp-sdk', () => {
   });
 });
 
+describe('capability ↔ method consistency (STR-132 contract)', () => {
+  // The point of the capability bag is that call-sites do not have
+  // to sniff `typeof method === 'function'`. These guards lock the
+  // invariant: when capability is true, method exists; when false,
+  // the method may or may not exist but call-sites must not invoke
+  // it. We assert the "if capability=false then method-undefined"
+  // direction for partylayer's `prepareExecuteAndWait` because the
+  // earlier build claimed the capability AND defined the method —
+  // the worst combination, because the method routed to an
+  // unsupported CIP-103 method name in the bridge.
+  it('partylayer omits prepareExecuteAndWait method now that capability is false', () => {
+    expect(partyLayerWalletClient.capabilities.prepareExecuteAndWait).toBe(false);
+    expect(partyLayerWalletClient.prepareExecuteAndWait).toBeUndefined();
+  });
+});
+
 describe('StreamsWalletClient contract — partylayer', () => {
   it('exposes every required method on the contract', () => {
     for (const k of CONTRACT_METHODS) {
@@ -79,12 +95,19 @@ describe('StreamsWalletClient contract — partylayer', () => {
       false,
     );
     expect(partyLayerWalletClient.capabilities.ledgerApi).toBe(true);
+    // `@partylayer/provider@0.1.7` does NOT implement
+    // `prepareExecuteAndWait` (only `prepareExecute`); the capability
+    // is honestly false until upstream adds it.
     expect(partyLayerWalletClient.capabilities.prepareExecuteAndWait).toBe(
-      true,
+      false,
     );
     expect(partyLayerWalletClient.capabilities.v2AllocationRequestUx).toBe(
       true,
     );
+  });
+
+  it('exposes listWallets so the dashboard picker can enumerate adapters', () => {
+    expect(typeof partyLayerWalletClient.listWallets).toBe('function');
   });
 
   it('translates a user-rejected error into actionable copy', async () => {

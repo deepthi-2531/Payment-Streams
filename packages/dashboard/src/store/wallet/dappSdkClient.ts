@@ -125,7 +125,10 @@ export const dappSdkWalletClient: StreamsWalletClient = {
     await (skipPickerInitOptions ? sdk.init(skipPickerInitOptions) : sdk.init());
   },
 
-  async connect() {
+  async connect(_walletId?: string) {
+    // The dapp-sdk layer is single-wallet (one remote adapter
+    // pointed at the configured gateway), so the walletId arg is
+    // ignored — there's nothing to pick between.
     if (SKIP_PICKER) {
       await assertRemoteWalletReachable();
     }

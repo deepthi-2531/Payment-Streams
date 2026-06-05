@@ -159,7 +159,17 @@ export async function requestStreamWalletApproval(
   stream: Stream,
 ): Promise<StreamApprovalRecord> {
   try {
-    await walletClient.open();
+    // `walletClient.open()` only does something useful on layers
+    // that map it to a real "bring the wallet UI forward" action
+    // (the dapp-sdk picker / Amulet wallet gateway). On a hosted-
+    // multi-wallet layer (PartyLayer) the picker handles its own
+    // visibility and `open()` is a documented no-op — calling it
+    // would leave us recording `wallet-opened` without anything
+    // having actually opened, lying to the user about the state.
+    // Gate the call on the capability flag.
+    if (walletClient.capabilities.openSurfacesWalletUi) {
+      await walletClient.open();
+    }
     const record: StreamApprovalRecord = {
       status: 'wallet-opened',
       updatedAt: Date.now(),
