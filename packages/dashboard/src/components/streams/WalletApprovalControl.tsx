@@ -2,13 +2,13 @@
  * @module components/streams/WalletApprovalControl
  *
  * Inline control rendered on each incoming-stream card. Drives the
- * wallet-mediated preapproval flow:
+ * wallet-mediated approval flow:
  *
- *   1. Status pill: idle / wallet-opened / preapproved / error.
+ *   1. Status pill: idle / wallet-opened / approved-local / error.
  *   2. Primary button:
  *      - idle      → "Approve in Amulet wallet"  (triggers wallet round-trip)
- *      - wallet-opened → "Mark preapproved"      (confirm once Bob signed)
- *      - preapproved   → small "Reset" link only
+ *      - wallet-opened → "Mark approved"         (confirm once Bob approved in Amulet)
+ *      - approved-local → small "Reset" link only
  *      - error     → "Try again"                 (retry the round-trip)
  *   3. Error inline message when the wallet call failed.
  *
@@ -28,9 +28,9 @@ export interface WalletApprovalControlProps {
 }
 
 export function WalletApprovalControl({ stream }: WalletApprovalControlProps) {
-  const { record, isPending, approve, markPreapproved } = useStreamWalletApproval(stream);
-  // We need a connected CIP-103 wallet for `walletSdk.open()` to land
-  // — the dapp-sdk throws "Not connected — call connect() first"
+  const { record, isPending, approve, markApproved } = useStreamWalletApproval(stream);
+  // We need a connected wallet for `walletClient.open()` to land
+  // — wallet adapters throw "Not connected — call connect() first"
   // otherwise. Surface that as an inline, actionable hint instead of
   // letting the raw error bubble out of the click handler. A
   // dev-mode session (JWT-paste path) has no wallet to round-trip
@@ -43,7 +43,7 @@ export function WalletApprovalControl({ stream }: WalletApprovalControlProps) {
       <div style={containerStyle}>
         <StatusPill status="no-wallet" />
         <span style={hintTextStyle}>
-          Connect a CIP-103 wallet (top-right) to preapprove this stream.
+          Connect a CIP-103 wallet (top-right) to approve this stream in Amulet.
         </span>
       </div>
     );
@@ -70,9 +70,9 @@ export function WalletApprovalControl({ stream }: WalletApprovalControlProps) {
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            onClick={markPreapproved}
+            onClick={markApproved}
           >
-            <CheckCircle2 size={12} /> Mark preapproved
+            <CheckCircle2 size={12} /> Mark approved
           </button>
           <button
             type="button"
@@ -86,7 +86,7 @@ export function WalletApprovalControl({ stream }: WalletApprovalControlProps) {
         </>
       )}
 
-      {record.status === 'preapproved' && (
+      {record.status === 'approved-local' && (
         <button
           type="button"
           className="btn btn-ghost btn-sm"
@@ -146,7 +146,7 @@ function StatusPill({ status }: { readonly status: StatusValue }) {
 type StatusValue =
   | 'idle'
   | 'wallet-opened'
-  | 'preapproved'
+  | 'approved-local'
   | 'error'
   | 'no-wallet';
 
@@ -157,7 +157,7 @@ const STATUS: Record<
   'no-wallet': {
     label: 'Wallet not connected',
     help:
-      'No CIP-103 wallet is connected to this session. Connect a wallet (top-right) before you can preapprove streams. The dev-mode JWT path does not have a wallet to round-trip through.',
+      'No CIP-103 wallet is connected to this session. Connect a wallet (top-right) before you can approve streams in Amulet. The dev-mode JWT path does not have a wallet to round-trip through.',
     icon: Plug,
     bg: 'var(--bg-elev)',
     fg: 'var(--fg-3)',
@@ -165,7 +165,7 @@ const STATUS: Record<
   idle: {
     label: 'No wallet approval yet',
     help:
-      'You have not opened the Amulet wallet for this stream. Click "Approve in Amulet wallet" to start the CIP-103 preapproval flow.',
+      'You have not opened the Amulet wallet for this stream. Click "Approve in Amulet wallet" to start the CIP-103 wallet approval flow.',
     icon: Wallet,
     bg: 'var(--bg-elev)',
     fg: 'var(--fg-3)',
@@ -173,15 +173,15 @@ const STATUS: Record<
   'wallet-opened': {
     label: 'Wallet open — sign there',
     help:
-      'The Amulet wallet has been surfaced via CIP-103. Complete the preapproval in the wallet, then click "Mark preapproved" to record it locally.',
+      'The Amulet wallet has been surfaced via CIP-103. Complete the AllocationRequest approval in the wallet, then click "Mark approved" to record it locally.',
     icon: Wallet,
     bg: 'var(--warn-soft)',
     fg: 'var(--warn)',
   },
-  preapproved: {
-    label: 'Preapproved (local record)',
+  'approved-local': {
+    label: 'Approved (local record)',
     help:
-      'You confirmed the wallet preapproval. The Amulet TransferPreapproval contract lives in the wallet; the dashboard records the intent here.',
+      'You confirmed the wallet approval. The Amulet AllocationRequest approval lives in the wallet; the dashboard records only the local confirmation here.',
     icon: CheckCircle2,
     bg: 'var(--accent-soft)',
     fg: 'var(--accent)',

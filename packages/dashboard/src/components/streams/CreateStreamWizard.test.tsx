@@ -42,7 +42,7 @@ vi.mock('../../hooks/useStreams.js', () => ({
 // doesn't bail out before our assertions can fire.
 vi.mock('../../store/auth.js', async () => {
   // The wizard imports the real `useAuth` symbol; everything else
-  // (AuthProvider, walletSdk, …) is not needed in this test.
+  // (AuthProvider, wallet client, …) is not needed in this test.
   return {
     useAuth: () => ({
       party: 'alice::1220mockpartyid',

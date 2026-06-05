@@ -967,7 +967,7 @@ function StepReview({
           <li>You submit; the stream is created on-ledger and starts accruing.</li>
           <li>
             The recipient sees it in their Incoming view. V2 funding approval
-            (the Amulet TransferPreapproval) happens separately in the
+            (the Amulet AllocationRequest approval) happens separately in the
             recipient's wallet.
           </li>
           <li>
