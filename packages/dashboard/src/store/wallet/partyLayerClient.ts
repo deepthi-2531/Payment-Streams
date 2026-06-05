@@ -120,6 +120,8 @@ function emptyStatus(): StreamsWalletStatus {
 async function snapshotStatus(): Promise<StreamsWalletStatus> {
   const client = await ensureClient();
   const session = await client.getActiveSession();
+  // eslint-disable-next-line no-console
+  console.info('[partyLayerClient] snapshotStatus: getActiveSession =', session);
   if (!session) return emptyStatus();
   // `PartyLayerClient.getActiveSession()` carries `partyId` + `walletId`
   // but no `accessToken`. auth.tsx flips `isAuthenticated` only when
@@ -131,10 +133,16 @@ async function snapshotStatus(): Promise<StreamsWalletStatus> {
   // against a PartyLayer-routed wallet.
   try {
     const provider = client.asProvider();
-    const cipStatus = (await provider.request({
+    const cipStatusRaw = await provider.request({
       method: 'status',
       params: {},
-    })) as {
+    });
+    // eslint-disable-next-line no-console
+    console.info(
+      '[partyLayerClient] snapshotStatus: asProvider().request(status) =',
+      cipStatusRaw,
+    );
+    const cipStatus = cipStatusRaw as {
       provider?: { id?: string; name?: string; type?: string };
       connection?: {
         isConnected?: boolean;
@@ -162,11 +170,22 @@ async function snapshotStatus(): Promise<StreamsWalletStatus> {
         session: cipStatus.session ?? { userId: session.partyId },
       };
     }
-  } catch {
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[partyLayerClient] snapshotStatus: asProvider().request(status) threw — async wallet?',
+      err,
+    );
     /* Fall through to the session-only snapshot. auth.tsx will treat
      * the connection as unauthenticated; the picker error surfaces
      * the reason. */
   }
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[partyLayerClient] snapshotStatus: falling back to session-only snapshot (no accessToken). ' +
+      'auth.tsx will keep isAuthenticated=false until a JWT is plumbed through ' +
+      "PartyLayer's async-wallet path. See HOSTED-WALLET-PLAN.md \"Known limitations\".",
+  );
   return {
     provider: {
       id: session.walletId,
