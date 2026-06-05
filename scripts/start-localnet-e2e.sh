@@ -80,6 +80,16 @@ resolve_pinned_commit() {
   [[ -n "$SPLICE_PINNED_COMMIT" ]] || fail "could not resolve SPLICE_PINNED_COMMIT from scripts/fetch-v2-dars.mjs"
 }
 
+# Read the PR-5697 preview commit (Amulet wallet V2 iterated-settlement
+# UI) so the announce path can detect whether the operator opted into
+# it. Empty string is fine — that just suppresses the matched-preview
+# annotation.
+resolve_pr5697_preview_commit() {
+  SPLICE_PR5697_PREVIEW_COMMIT="$(grep -m1 -E "^export const SPLICE_PR5697_PREVIEW_COMMIT" \
+    "$ROOT_DIR/scripts/fetch-v2-dars.mjs" 2>/dev/null \
+    | sed -E "s/.*'([0-9a-f]+)'.*/\1/")"
+}
+
 clone_or_update_splice() {
   if [[ ! -d "$SPLICE_CHECKOUT_DIR/.git" ]]; then
     run_step "Cloning Splice into $SPLICE_CHECKOUT_DIR" \
@@ -105,29 +115,23 @@ build_localnet_amulet_wallet() {
   # three React wallet UIs (on 2000/3000/4000), plus participant JSON-Ledger
   # APIs on x975 ports.
   #
-  # Critically, that stack does NOT expose a CIP-103 JSON-RPC wallet
-  # gateway at :3030/api/v0/dapp. That endpoint is provided by the separate
-  # Splice Wallet Kernel (historically "SWK"), now canonically hosted at
-  # canton-network/wallet. The operator must run it alongside LocalNet:
+  # The Amulet wallet that ships on every validator node supports the
+  # CIP-56 V2 token standard on the token-standard-v2-upcoming branch we
+  # pin against (full iterated-settlement support tracked upstream in
+  # canton-network/splice#5498). So once LocalNet is running, the wallet
+  # half of the V2 flow can be exercised end-to-end.
   #
-  #   git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
-  #   cd .splice-wallet-kernel && yarn install && yarn build:all && yarn start:all
-  #
-  # Point its CANTON_NODE_URL at the app-user validator JSON API on :2975
-  # or the app-provider on :3975, and add this dashboard's origin to
-  # allowedOrigins. The gateway daemon is published as
-  # `@canton-network/wallet-gateway-remote`; the in-page client this
-  # dashboard imports is `@canton-network/dapp-sdk` (same monorepo).
-  #
-  # There is therefore no honest one-command path from a stock CI runner to
-  # a working $WALLET_GATEWAY_URL at the pinned commit. We print the verified
-  # upstream startup steps for transparency, then refuse to fake readiness.
+  # The LocalNet stack does NOT expose a CIP-103 JSON-RPC wallet gateway
+  # at :3030/api/v0/dapp directly. That endpoint comes from the separate
+  # Splice Wallet Kernel (canton-network/wallet), published on npm as
+  # @canton-network/wallet-gateway-remote. The fastest path is to run it
+  # from npx — no clone or build required.
 
   local compose_wrapper="$SPLICE_CHECKOUT_DIR/build-tools/splice-localnet-compose.sh"
 
   cat <<EOF
 
-    Splice LocalNet stack (verified upstream commands at $SPLICE_PINNED_COMMIT):
+    Splice LocalNet stack (verified upstream command at $SPLICE_PINNED_COMMIT):
 
       cd "$SPLICE_CHECKOUT_DIR"
       ./build-tools/splice-localnet-compose.sh start
@@ -137,33 +141,37 @@ build_localnet_amulet_wallet() {
       - app-provider wallet UI: http://localhost:3000
       - SV wallet UI          : http://localhost:4000
       - participant JSON APIs : :2975 / :3975 / :4975
+      - Amulet wallet (V2-capable on the token-standard-v2-upcoming
+        branch this commit lives on; full iterated-settlement tracked
+        in canton-network/splice#5498)
 
-    HONEST GAP: the pinned commit does NOT publish a CIP-103 JSON-RPC
-    wallet gateway at $WALLET_GATEWAY_URL as part of LocalNet. That
-    endpoint comes from the separate Splice Wallet Kernel (historically
-    "SWK"), now canonically hosted at canton-network/wallet
-    (https://github.com/canton-network/wallet). It must be run alongside
-    LocalNet by the operator. There is no canonical one-command path at
-    $SPLICE_PINNED_COMMIT that yields :3030.
+    HONEST GAP: the LocalNet stack does NOT publish a CIP-103 JSON-RPC
+    wallet gateway at $WALLET_GATEWAY_URL on its own. The dashboard
+    talks to the wallet through the Splice Wallet Kernel, run as a
+    separate process. Fastest path (no clone needed):
 
-    Verified upstream startup (from canton-network/wallet README):
+      npx @canton-network/wallet-gateway-remote@1.4.0 --config-example \\
+        > wallet-gateway.localnet.json
+      # Edit wallet-gateway.localnet.json:
+      #   ledgerApi.baseUrl   = http://127.0.0.1:2975   (LocalNet app-user JSON API)
+      #   allowedOrigins      += http://localhost:3000
+      #   allowedOrigins      += http://127.0.0.1:3000
+      npx @canton-network/wallet-gateway-remote@1.4.0 \\
+        -c wallet-gateway.localnet.json -p 3030
 
-      git clone https://github.com/canton-network/wallet.git .splice-wallet-kernel
-      cd .splice-wallet-kernel
-      yarn install
-      yarn build:all
-      yarn start:all
+    (To target the app-provider validator instead, use
+    http://127.0.0.1:3975. The Splice Wallet Kernel can also be built
+    from source — clone canton-network/wallet, yarn install &&
+    yarn build:all && yarn start:all — same endpoint, same config.)
 
-    Then probe the CIP-103 gateway (port is the documented default; the
-    upstream quickstart does not pin it):
+    Probe the CIP-103 gateway:
 
       curl -fsS -X POST $WALLET_GATEWAY_URL \\
+        -H 'Origin: http://localhost:3000' \\
         -H 'content-type: application/json' \\
         --data '{"jsonrpc":"2.0","id":"probe","method":"status","params":{}}'
 
-    To proceed, bring up the wallet by whatever path your environment
-    uses (LocalNet + Splice Wallet Kernel, an externally-managed CIP-103
-    gateway, or a mock), then re-run this script with:
+    Once that responds, re-run this script with:
 
       SKIP_LOCALNET_BUILD=1 bash scripts/start-localnet-e2e.sh
 
@@ -261,13 +269,23 @@ Drive the V2 allocation flow end-to-end through the wallet:
          --data '{"jsonrpc":"2.0","id":"a","method":"listAccounts","params":{}}'
 
   3. Create a V2 stream (recipient + amount + V2 instrument + funding ref)
-     through the dashboard "Create stream" wizard. Submission emits an
-     AllocationRequest the Amulet wallet renders.
+     through the dashboard "Create stream" wizard. Submission creates a
+     V2 StreamAdmin contract via packages/sdk/src/commands/create.ts.
 
-  4. Approve in the wallet. The wallet exercises
-     AllocationFactory_Allocate (committed=True). The Streams executor
-     then exercises Allocation_Settle (and SettlementFactory_SettleBatch
-     for batched advancement).
+     Honest gap: the SDK does NOT yet also emit a V2 AllocationRequest
+     for the recipient to accept, and the inbox "Approve in Amulet
+     wallet" button currently calls walletSdk.open() — it does not yet
+     call walletSdk.prepareExecuteAndWait(...) with an
+     AllocationRequest_Accept payload. Wiring that is the next
+     focused implementation step; target wallet build is the PR-5697
+     preview commit announced above. See
+     packages/dashboard/src/lib/walletApprovals.ts for the swap site.
+
+  4. Approve in the Amulet wallet directly (its own UI, through the
+     wallet gateway). Approval exercises AllocationFactory_Allocate
+     (committed=True). The Streams executor then exercises
+     Allocation_Settle (and SettlementFactory_SettleBatch for batched
+     advancement) against the on-ledger contracts.
 
   5. Sanity-check the choice names by running the CI guard locally:
        bash $ROOT_DIR/scripts/check-v2-conformance.sh
@@ -284,7 +302,20 @@ main() {
   need curl
 
   resolve_pinned_commit
+  resolve_pr5697_preview_commit
   echo "Pinned Splice commit: $SPLICE_PINNED_COMMIT"
+  if [[ -n "$SPLICE_PR5697_PREVIEW_COMMIT" \
+      && "$SPLICE_PINNED_COMMIT" == "$SPLICE_PR5697_PREVIEW_COMMIT" ]]; then
+    echo "    (canton-network/splice#5697 preview — Amulet wallet V2"
+    echo "     iterated-settlement frontend; opt-in branch"
+    echo "     oriol/initialted-settlement-fe)"
+  elif [[ -n "$SPLICE_PR5697_PREVIEW_COMMIT" ]]; then
+    echo "Preview commit:       $SPLICE_PR5697_PREVIEW_COMMIT"
+    echo "    (export SPLICE_PINNED_COMMIT=$SPLICE_PR5697_PREVIEW_COMMIT to opt"
+    echo "     into the canton-network/splice#5697 preview — Amulet wallet V2"
+    echo "     iterated-settlement frontend, branch"
+    echo "     oriol/initialted-settlement-fe)"
+  fi
   echo "Wallet gateway URL:   $WALLET_GATEWAY_URL"
   echo "Streams checkout:     $ROOT_DIR"
   echo "Splice checkout:      $SPLICE_CHECKOUT_DIR"

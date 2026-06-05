@@ -1,10 +1,10 @@
 /**
- * Auth context — backed by @canton-network/dapp-sdk.
+ * Auth context — backed by the dashboard wallet-client abstraction.
  *
  * STR-118 / Phase 7: replaced the JWT-paste session-storage flow with
- * a real Splice Wallet Kernel connection. The dashboard no longer
- * stores tokens; it asks the dapp-sdk for the current session and
- * forwards the access token to the proxy and ledger reads.
+ * a real wallet connection. The dashboard no longer stores wallet
+ * tokens; it asks the active wallet adapter for the current session
+ * and forwards the access token to the proxy and ledger reads.
  *
  * Surface (kept compatible with the rest of the app):
  *   • `token` — current `session.accessToken` from the wallet (or null)
@@ -31,142 +31,33 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import {
-  DappSDK,
-  dappSDK,
-  RemoteAdapter,
-  type StatusEvent,
-  type Wallet,
-  type Network,
-  type ListAccountsResult,
-  type WalletPickerFn,
-} from '@canton-network/dapp-sdk';
+  walletClient,
+  type StreamsWalletAccount,
+  type StreamsWalletNetwork,
+  type StreamsWalletProviderInfo,
+  type StreamsWalletStatus,
+} from './wallet/index.js';
 
-/**
- * Dev-only: skip the dapp-sdk wallet picker UI and auto-select a local
- * Splice Wallet Kernel.
- *
- * The picker is a popup window — in many headless / automation flows
- * the popup ends up in a browser window outside the automation tab
- * tracker and can't be clicked through. It's also unnecessary noise
- * when only one wallet is available locally. When
- * `VITE_SKIP_WALLET_PICKER=true`, we create a dedicated `DappSDK`
- * with a no-UI `walletPicker` that returns the first `remote` entry it finds,
- * falling back to a synthetic remote entry pointing at
- * `VITE_WALLET_GATEWAY_URL` (default `http://localhost:3030/api/v0/dapp`).
- *
- * Production builds and any user who doesn't set the flag still get the
- * normal picker UX.
- */
-const SKIP_PICKER =
-  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[
-    'VITE_SKIP_WALLET_PICKER'
-  ] === 'true';
-const WALLET_GATEWAY_URL =
-  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[
-    'VITE_WALLET_GATEWAY_URL'
-  ] ?? 'http://localhost:3030/api/v0/dapp';
-const WALLET_NAME =
-  (import.meta as unknown as { env?: Record<string, string | undefined> }).env?.[
-    'VITE_WALLET_NAME'
-  ] ?? 'Splice Amulet Wallet (LocalNet V2)';
-const REMOTE_PROVIDER_ID = `remote:${WALLET_GATEWAY_URL}`;
-
-type PickerEntry = {
-  readonly providerId: string;
-  readonly name: string;
-  readonly type: string;
-  readonly url?: string;
-};
-
-async function autoRemotePicker(entries: readonly PickerEntry[]): Promise<PickerEntry> {
-  const remote = entries.find((e) => e.type === 'remote' && e.url);
-  if (remote) return remote;
-  // Fall back to constructing a synthetic remote entry pointing at the
-  // configured wallet-gateway URL. The SDK will register a fresh
-  // RemoteAdapter for it on the connection attempt.
-  return {
-    providerId: REMOTE_PROVIDER_ID,
-    name: WALLET_NAME,
-    type: 'remote',
-    url: WALLET_GATEWAY_URL,
-  };
-}
-
-const SKIP_PICKER_INIT_OPTIONS = SKIP_PICKER
-  ? {
-      defaultAdapters: [],
-      additionalAdapters: [
-        new RemoteAdapter({
-          providerId: REMOTE_PROVIDER_ID,
-          name: WALLET_NAME,
-          rpcUrl: WALLET_GATEWAY_URL,
-          description: 'CIP-103 Amulet wallet gateway for Token Standard V2 LocalNet',
-        }),
-      ],
-    }
-  : undefined;
-
-// dappSDK 1.1.0 only honors `walletPicker` in the DappSDK constructor;
-// passing it to `init()` is ignored. Use a dedicated SDK instance for
-// the automation/local-Amulet path so no popup picker is created.
-//
-// Exported so other dashboard modules (notably the Inbox wallet-
-// approval helper in `lib/walletApprovals.ts`) can issue CIP-103 calls
-// against the SAME SDK instance the AuthProvider connected with. Going
-// through a separate `dappSDK` import would race against this instance
-// when `VITE_SKIP_WALLET_PICKER=true`.
-export const walletSdk: DappSDK = SKIP_PICKER
-  ? new DappSDK({ walletPicker: autoRemotePicker as unknown as WalletPickerFn })
-  : dappSDK;
-
-async function assertRemoteWalletReachable(): Promise<void> {
-  try {
-    const response = await fetch(WALLET_GATEWAY_URL, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-      },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'streams-wallet-preflight',
-        method: 'status',
-        params: {},
-      }),
-    });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-  } catch (err) {
-    const suffix = err instanceof Error ? ` (${err.message})` : '';
-    throw new Error(
-      `Amulet wallet gateway is not reachable at ${WALLET_GATEWAY_URL}${suffix}. ` +
-        'Start the Splice LocalNet validator Amulet wallet gateway, ' +
-        'then retry Connect wallet.',
-    );
-  }
-}
-
-type WalletProvider = StatusEvent['provider'] | null;
+type WalletProvider = StreamsWalletProviderInfo | null;
 
 interface AuthContextValue {
   // Session
   readonly token: string | null;
   readonly party: string | null;
-  readonly accounts: readonly Wallet[];
+  readonly accounts: readonly StreamsWalletAccount[];
   readonly signingProviderId: string | null;
-  readonly network: Network | null;
+  readonly network: StreamsWalletNetwork | null;
   readonly provider: WalletProvider;
   readonly isAuthenticated: boolean;
   readonly isConnecting: boolean;
   readonly error: string | null;
 
   // Wallet-driven controls
-  readonly connect: () => Promise<void>;
+  readonly connect: (walletId?: string) => Promise<void>;
   readonly disconnect: () => Promise<void>;
   /** Alias of disconnect — kept so older callers compile. */
   readonly clearCredentials: () => void;
@@ -207,8 +98,8 @@ function writeDevSession(token: string | null, party: string | null) {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<StatusEvent | null>(null);
-  const [accounts, setAccounts] = useState<readonly Wallet[]>([]);
+  const [status, setStatus] = useState<StreamsWalletStatus | null>(null);
+  const [accounts, setAccounts] = useState<readonly StreamsWalletAccount[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -217,23 +108,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [devToken, setDevToken] = useState<string | null>(devInitial.token);
   const [devParty, setDevParty] = useState<string | null>(devInitial.party);
 
-  const initRef = useRef(false);
-
-  // Cold-start: init dapp-sdk once, restore persisted session, subscribe to
+  // Cold-start: init wallet client, restore persisted session, subscribe to
   // status / accounts / connected events.
+  //
+  // No once-only guard: under React 19 StrictMode the effect runs
+  // setup → cleanup → setup. A `useRef(false)` gate would set true
+  // on the first setup, the cleanup would cancel the async chain
+  // (so no subscribers actually got attached), and the second setup
+  // would bail because the ref was still true — leaving the auth
+  // context permanently at empty status. The async block's own
+  // `cancelled` flag + the unsubscribe in the cleanup is what
+  // protects against duplicate handlers across re-mounts; the
+  // `subscriptions` WeakMap inside partyLayerClient further
+  // dedupes if the same listener identity is presented twice.
   useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
-    const handleStatus = (event: StatusEvent) => setStatus(event);
-    const handleAccounts = (event: readonly Wallet[]) => setAccounts(event ?? []);
-    const handleConnected = (event: StatusEvent) => {
+    const handleStatus = (event: StreamsWalletStatus) => setStatus(event);
+    const handleAccounts = (event: readonly StreamsWalletAccount[]) =>
+      setAccounts(event ?? []);
+    const handleConnected = (event: StreamsWalletStatus) => {
       setStatus(event);
       setError(null);
       // best-effort refresh of accounts post-connect
-      void walletSdk
+      void walletClient
         .listAccounts()
-        .then((list: ListAccountsResult) => setAccounts(list ?? []))
+        .then((list) => setAccounts(list ?? []))
         .catch(() => {
           /* swallow — surface via status.connection.reason */
         });
@@ -242,57 +140,85 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        await (SKIP_PICKER_INIT_OPTIONS
-          ? walletSdk.init(SKIP_PICKER_INIT_OPTIONS)
-          : walletSdk.init());
+        await walletClient.init();
         if (cancelled) return;
-        const current = await walletSdk.status();
+        // Attach subscribers BEFORE snapshotting status. Hosted-
+        // multi-wallet adapters (PartyLayer / Loop) restore a
+        // persisted session asynchronously via the wallet's own
+        // ticket-server handshake. That handshake can take several
+        // seconds; on cold-start it commonly resolves after our
+        // initial `walletClient.status()` snapshot has already
+        // returned empty. If we attached our `session:connected`
+        // listener after that, the restore event would have fired
+        // already and our handler would never see it — the UI
+        // would stay stuck on the picker even though the wallet is
+        // already authenticated.
+        await walletClient.onStatusChanged(handleStatus);
+        await walletClient.onAccountsChanged(handleAccounts);
+        await walletClient.onConnected(handleConnected);
+        if (cancelled) return;
+        const current = await walletClient.status();
         if (cancelled) return;
         setStatus(current);
         if (current.connection.isConnected) {
           try {
-            const list = await walletSdk.listAccounts();
+            const list = await walletClient.listAccounts();
             if (!cancelled) setAccounts(list ?? []);
           } catch {
             /* ignore */
           }
+        } else if (walletClient.capabilities.hostedMultiWallet) {
+          // Hosted-multi-wallet restore is asynchronous; poll the
+          // status one more time after a short grace window to
+          // pick up sessions that landed between subscribe-attach
+          // and the next event dispatch. Cheap belt-and-braces in
+          // case the SDK ever emits the restore signal slightly
+          // out of band of our listener API.
+          setTimeout(() => {
+            if (cancelled) return;
+            void walletClient
+              .status()
+              .then((latest) => {
+                if (cancelled) return;
+                if (latest.connection.isConnected) setStatus(latest);
+                return walletClient.listAccounts();
+              })
+              .then((list) => {
+                if (!cancelled && list) setAccounts(list);
+              })
+              .catch(() => {
+                /* ignore — primary path is the subscriber */
+              });
+          }, 4_000);
         }
-        await walletSdk.onStatusChanged(handleStatus);
-        await walletSdk.onAccountsChanged(handleAccounts);
-        await walletSdk.onConnected(handleConnected);
       } catch (err) {
         if (!cancelled)
-          setError(err instanceof Error ? err.message : 'Failed to initialize wallet SDK');
+          setError(err instanceof Error ? err.message : 'Failed to initialize wallet client');
       }
     })();
 
     return () => {
       cancelled = true;
-      // best-effort detach; listeners are tied to the SDK singleton
-      void walletSdk.removeOnStatusChanged(handleStatus).catch(() => {});
-      void walletSdk.removeOnAccountsChanged(handleAccounts).catch(() => {});
-      void walletSdk.removeOnConnected(handleConnected).catch(() => {});
+      // best-effort detach; listeners are tied to the wallet-client singleton
+      void walletClient.removeOnStatusChanged(handleStatus).catch(() => {});
+      void walletClient.removeOnAccountsChanged(handleAccounts).catch(() => {});
+      void walletClient.removeOnConnected(handleConnected).catch(() => {});
     };
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (walletId?: string) => {
     setIsConnecting(true);
     setError(null);
     try {
-      if (SKIP_PICKER) {
-        await assertRemoteWalletReachable();
-      }
-      const result = await (SKIP_PICKER_INIT_OPTIONS
-        ? walletSdk.connect(SKIP_PICKER_INIT_OPTIONS)
-        : walletSdk.connect());
+      const result = await walletClient.connect(walletId);
       if (!result.isConnected) {
         setError(result.reason ?? 'Wallet connection rejected');
         return;
       }
-      const current = await walletSdk.status();
+      const current = await walletClient.status();
       setStatus(current);
       try {
-        const list = await walletSdk.listAccounts();
+        const list = await walletClient.listAccounts();
         setAccounts(list ?? []);
       } catch {
         /* ignore */
@@ -302,7 +228,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setDevParty(null);
       writeDevSession(null, null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Wallet connection failed');
+      setError(await walletClient.describeConnectError(err));
     } finally {
       setIsConnecting(false);
     }
@@ -310,12 +236,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const disconnect = useCallback(async () => {
     try {
-      await walletSdk.disconnect();
+      await walletClient.disconnect();
     } catch {
       /* swallow — we still clear local state */
     }
     setStatus(null);
     setAccounts([]);
+    setError(null);
     setDevToken(null);
     setDevParty(null);
     writeDevSession(null, null);
@@ -327,7 +254,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeDevSession(token, party);
   }, []);
 
-  const primaryAccount = useMemo<Wallet | null>(() => {
+  const primaryAccount = useMemo<StreamsWalletAccount | null>(() => {
     if (accounts.length === 0) return null;
     return accounts.find((a) => a.primary) ?? accounts[0] ?? null;
   }, [accounts]);
@@ -342,6 +269,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const party = walletConnected ? walletParty : devParty;
   const devMode = !walletConnected && Boolean(devToken && devParty);
 
+  // Hosted-multi-wallet sessions (PartyLayer-routed: Loop, Cantor8,
+  // Send) authenticate the dashboard via the wallet session itself —
+  // the wallet signs and routes ledger calls through its own
+  // server-side proxy, so the dashboard never gets a JWT bearer
+  // token. The CIP-0103 `status` response leaves both
+  // `network.accessToken` and `session.accessToken` undefined for
+  // these wallets by design.
+  //
+  // Without this branch, the dashboard would stay stuck on the
+  // wallet picker forever because `Boolean(token && party)` would be
+  // false (`token` is null even though the session is real). We
+  // accept the session as auth when the layer is hosted-multi-wallet
+  // and the wallet has handed us a partyId.
+  //
+  // Important: privileged proxy / ledger calls still need to route
+  // through `walletClient.ledgerApi(...)` rather than the
+  // `Authorization: Bearer <jwt>` path. That wiring is tracked
+  // separately — see docs/HOSTED-WALLET-PLAN.md "Known limitations"
+  // and the STR-83 / STR-103 follow-ups.
+  const hostedWalletAuth =
+    walletConnected &&
+    walletClient.capabilities.hostedMultiWallet &&
+    !walletToken &&
+    Boolean(walletParty);
+
+  const isAuthenticated = hostedWalletAuth || Boolean(token && party);
+
   const value: AuthContextValue = useMemo(
     () => ({
       token,
@@ -350,7 +304,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signingProviderId: primaryAccount?.signingProviderId ?? null,
       network: status?.network ?? null,
       provider: status?.provider ?? null,
-      isAuthenticated: Boolean(token && party),
+      isAuthenticated,
       isConnecting,
       error,
       connect,
@@ -367,6 +321,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accounts,
       primaryAccount,
       status,
+      isAuthenticated,
       isConnecting,
       error,
       connect,

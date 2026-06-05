@@ -15,7 +15,9 @@
 import { useState, type CSSProperties } from 'react';
 import { AlertCircle, ChevronRight, KeyRound, Wallet } from 'lucide-react';
 import { useAuth } from '../../store/auth.js';
+import { walletClient } from '../../store/wallet/index.js';
 import { Signing } from './Signing.js';
+import { WalletPicker } from './WalletPicker.js';
 
 const wrapStyle: CSSProperties = {
   minHeight: '100vh',
@@ -215,7 +217,9 @@ export function ConnectFlow() {
                   color: 'var(--fg-4)',
                 }}
               >
-                Splice Amulet Wallet · CIP-103
+                {walletClient.capabilities.hostedMultiWallet
+                  ? `${walletClient.name} · pick a wallet`
+                  : 'Splice Amulet Wallet · CIP-103'}
               </p>
             </div>
           </div>
@@ -225,6 +229,14 @@ export function ConnectFlow() {
               label="Confirm in your wallet"
               subLabel="The picker will open in a new window if not already shown."
             />
+          ) : walletClient.capabilities.hostedMultiWallet ? (
+            // STR-131 hosted-multi-wallet path: render the dashboard
+            // picker that calls auth.connect(walletId). The previous
+            // build called walletClient.connect() with no walletId,
+            // which PartyLayer routed to the first adapter (Console)
+            // and surfaced as a not-installed error — bypassing the
+            // user's choice. The picker fixes that.
+            <WalletPicker />
           ) : (
             <button
               type="button"
