@@ -13,9 +13,10 @@
  */
 
 import { Link } from 'react-router';
-import { Plus, Inbox, ArrowUpRight, TrendingUp } from 'lucide-react';
+import { Plus, Inbox, ArrowUpRight, TrendingUp, Wallet } from 'lucide-react';
 import { useMemo } from 'react';
 import { useStreams } from '../hooks/useStreams.js';
+import { useLoopHoldings } from '../hooks/useLoopHoldings.js';
 import { useAuth } from '../store/auth.js';
 import { StreamStatus } from '@canton-streams/sdk/browser';
 import {
@@ -25,6 +26,7 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../components/common/index.js';
+import { formatLoopBalance } from '../lib/loopWallet.js';
 // Phase 7 (STR-118): AuthGate in App.tsx renders ConnectFlow when the
 // user is unauthenticated, so DashboardPage no longer needs an unauth
 // branch — it's only mounted once we have a session.
@@ -42,6 +44,12 @@ export function DashboardPage() {
 
   const streams = streamsQ.data;
   const pendingRequests = incomingQ.data;
+  // Loop-specific holdings — empty for non-Loop sessions, fetched
+  // directly from the wallet's REST API (CIP-103's `ledgerApi`
+  // surface doesn't expose holdings).
+  const holdingsQ = useLoopHoldings();
+  const holdings = holdingsQ.data;
+  const hasHoldings = !!holdings && holdings.length > 0;
 
   // Aggregate by asset for the asset cards.
   const byAsset = useMemo(() => {
@@ -114,6 +122,43 @@ export function DashboardPage() {
           </>
         }
       />
+
+      {/* Wallet panel — Loop holdings via the fivenorth REST API.
+          Renders nothing for non-Loop sessions or when the wallet
+          has no holdings yet. */}
+      {hasHoldings && holdings && (
+        <div style={{ marginTop: 8, marginBottom: 32 }}>
+          <SectionHeader
+            title="Your wallet"
+            count={holdings.length}
+            action={
+              <Link to="/create" className="btn btn-ghost btn-sm">
+                Stream an asset <ArrowUpRight size={12} />
+              </Link>
+            }
+          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 12,
+            }}
+          >
+            {holdings.map((h) => (
+              <WalletAssetCard key={`${h.instrumentAdmin}:${h.instrumentId}`} holding={h} />
+            ))}
+          </div>
+        </div>
+      )}
+      {holdingsQ.isError && (
+        <div style={{ marginTop: 8, marginBottom: 32 }}>
+          <ErrorState
+            error={holdingsQ.error}
+            title="Could not load wallet holdings"
+            onRetry={() => holdingsQ.refetch()}
+          />
+        </div>
+      )}
 
       {/* Asset breakdown cards */}
       {streamsQ.isPending && (
@@ -418,4 +463,66 @@ function fmt(n: number, decimals = 2): string {
 function partyShort(p: string): string {
   const sep = p.indexOf('::');
   return sep > 0 ? p.slice(0, Math.min(sep, 16)) : p.slice(0, 16);
+}
+
+function WalletAssetCard({
+  holding,
+}: {
+  holding: import('../lib/loopWallet.js').LoopHolding;
+}) {
+  const unlocked = formatLoopBalance(holding);
+  const locked = formatLoopBalance(holding, holding.lockedBalance);
+  return (
+    <Link
+      to={`/create?asset=${encodeURIComponent(holding.instrumentId)}&admin=${encodeURIComponent(holding.instrumentAdmin)}`}
+      className="card"
+      style={{
+        textDecoration: 'none',
+        color: 'inherit',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Wallet size={14} style={{ color: 'var(--accent)' }} />
+        <strong style={{ fontSize: 14 }}>{holding.symbol}</strong>
+        {holding.isCantonCoin && (
+          <span
+            className="mono"
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              background: 'var(--accent-soft)',
+              color: 'var(--accent)',
+              padding: '1px 6px',
+              borderRadius: 999,
+            }}
+          >
+            CC
+          </span>
+        )}
+      </div>
+      <div
+        className="mono"
+        style={{ fontSize: 18, fontWeight: 600, lineHeight: 1 }}
+        title={`Unlocked balance: ${unlocked}`}
+      >
+        {unlocked}
+      </div>
+      {locked !== '0' && (
+        <div
+          className="mono"
+          style={{ fontSize: 11, color: 'var(--fg-3)' }}
+          title={`Locked balance: ${locked}`}
+        >
+          + {locked} locked
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--fg-3)' }} title={holding.instrumentAdmin}>
+        {holding.issuerName}
+      </div>
+    </Link>
+  );
 }
