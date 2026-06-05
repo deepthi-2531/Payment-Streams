@@ -31,7 +31,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -109,14 +108,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [devToken, setDevToken] = useState<string | null>(devInitial.token);
   const [devParty, setDevParty] = useState<string | null>(devInitial.party);
 
-  const initRef = useRef(false);
-
-  // Cold-start: init wallet client once, restore persisted session, subscribe to
+  // Cold-start: init wallet client, restore persisted session, subscribe to
   // status / accounts / connected events.
+  //
+  // No once-only guard: under React 19 StrictMode the effect runs
+  // setup → cleanup → setup. A `useRef(false)` gate would set true
+  // on the first setup, the cleanup would cancel the async chain
+  // (so no subscribers actually got attached), and the second setup
+  // would bail because the ref was still true — leaving the auth
+  // context permanently at empty status. The async block's own
+  // `cancelled` flag + the unsubscribe in the cleanup is what
+  // protects against duplicate handlers across re-mounts; the
+  // `subscriptions` WeakMap inside partyLayerClient further
+  // dedupes if the same listener identity is presented twice.
   useEffect(() => {
-    if (initRef.current) return;
-    initRef.current = true;
-
     const handleStatus = (event: StreamsWalletStatus) => setStatus(event);
     const handleAccounts = (event: readonly StreamsWalletAccount[]) =>
       setAccounts(event ?? []);
