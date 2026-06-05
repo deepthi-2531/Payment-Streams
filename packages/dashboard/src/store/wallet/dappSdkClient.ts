@@ -108,6 +108,18 @@ export const dappSdkWalletClient: StreamsWalletClient = {
   layer: 'dapp-sdk',
   name: 'Amulet / dapp-sdk',
   supportsHostedMultiWallet: false,
+  capabilities: {
+    // The dapp-sdk's `ledgerApi` + `prepareExecuteAndWait` are both
+    // first-class CIP-0103 methods, so the inbox AllocationRequest-
+    // accept swap (lib/walletApprovals.ts) targets THIS adapter
+    // against an Amulet wallet built from the splice#5697 preview
+    // commit. See docs/E2E-HARNESS.md and docs/HOSTED-WALLET-PLAN.md.
+    ledgerApi: true,
+    prepareExecuteAndWait: true,
+    v2AllocationRequestUx: true,
+    hostedMultiWallet: false,
+    openSurfacesWalletUi: true,
+  },
 
   async init() {
     await (skipPickerInitOptions ? sdk.init(skipPickerInitOptions) : sdk.init());

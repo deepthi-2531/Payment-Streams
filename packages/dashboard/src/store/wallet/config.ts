@@ -20,3 +20,14 @@ export const WALLET_GATEWAY_URL =
 
 export const WALLET_NAME =
   env.VITE_WALLET_NAME ?? 'Splice Amulet Wallet (LocalNet V2)';
+
+/**
+ * PartyLayer connection params (STR-131). Defaults match the
+ * recommended LocalNet posture documented in
+ * docs/HOSTED-WALLET-PLAN.md "Support matrix".
+ */
+export const PARTYLAYER_NETWORK =
+  env.VITE_PARTYLAYER_NETWORK ?? env.VITE_WALLET_NETWORK ?? 'devnet';
+
+export const PARTYLAYER_APP_NAME =
+  env.VITE_PARTYLAYER_APP_NAME ?? 'Canton Payment Streams';
