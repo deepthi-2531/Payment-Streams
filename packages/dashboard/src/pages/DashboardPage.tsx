@@ -16,7 +16,7 @@ import { Link } from 'react-router';
 import { Plus, Inbox, ArrowUpRight, TrendingUp, Wallet } from 'lucide-react';
 import { useMemo } from 'react';
 import { useStreams } from '../hooks/useStreams.js';
-import { useLoopHoldings } from '../hooks/useLoopHoldings.js';
+import { useWalletHoldings } from '../hooks/useWalletHoldings.js';
 import { useAuth } from '../store/auth.js';
 import { StreamStatus } from '@canton-streams/sdk/browser';
 import {
@@ -26,7 +26,7 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../components/common/index.js';
-import { formatLoopBalance } from '../lib/loopWallet.js';
+import type { WalletHolding } from '../lib/walletHoldings.js';
 // Phase 7 (STR-118): AuthGate in App.tsx renders ConnectFlow when the
 // user is unauthenticated, so DashboardPage no longer needs an unauth
 // branch — it's only mounted once we have a session.
@@ -44,12 +44,17 @@ export function DashboardPage() {
 
   const streams = streamsQ.data;
   const pendingRequests = incomingQ.data;
-  // Loop-specific holdings — empty for non-Loop sessions, fetched
-  // directly from the wallet's REST API (CIP-103's `ledgerApi`
-  // surface doesn't expose holdings).
-  const holdingsQ = useLoopHoldings();
-  const holdings = holdingsQ.data;
-  const hasHoldings = !!holdings && holdings.length > 0;
+  // Generic wallet holdings — works for every adapter PartyLayer
+  // exposes (Loop via its REST API, Send/Nightly/Console via
+  // canonical CIP-103 ACS, Cantor8/Bron return an empty list with
+  // a `reason` we can surface to the user). The hook is wallet-
+  // neutral; per-wallet logic lives in lib/walletAdapters.
+  const holdingsQ = useWalletHoldings();
+  const holdingsResult = holdingsQ.data;
+  const holdings: readonly WalletHolding[] = holdingsResult?.holdings ?? [];
+  const hasHoldings = holdings.length > 0;
+  const unsupportedReason =
+    holdingsResult?.strategy === 'unsupported' ? holdingsResult.reason : null;
 
   // Aggregate by asset for the asset cards.
   const byAsset = useMemo(() => {
@@ -123,9 +128,26 @@ export function DashboardPage() {
         }
       />
 
-      {/* Wallet panel — Loop holdings via the fivenorth REST API.
-          Renders nothing for non-Loop sessions or when the wallet
-          has no holdings yet. */}
+      {/* Wallet panel — generic across PartyLayer adapters.
+          Loop → REST. Send/Nightly/Console → canonical CIP-103
+          ACS via ledgerApi. Cantor8/Bron → empty + reason hint. */}
+      {unsupportedReason && (
+        <div
+          className="card"
+          style={{
+            marginTop: 8,
+            marginBottom: 32,
+            padding: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: 'var(--fg-2)',
+          }}
+        >
+          <Wallet size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          <span style={{ fontSize: 12 }}>{unsupportedReason}</span>
+        </div>
+      )}
       {hasHoldings && holdings && (
         <div style={{ marginTop: 8, marginBottom: 32 }}>
           <SectionHeader
@@ -465,13 +487,24 @@ function partyShort(p: string): string {
   return sep > 0 ? p.slice(0, Math.min(sep, 16)) : p.slice(0, 16);
 }
 
-function WalletAssetCard({
-  holding,
-}: {
-  holding: import('../lib/loopWallet.js').LoopHolding;
-}) {
-  const unlocked = formatLoopBalance(holding);
-  const locked = formatLoopBalance(holding, holding.lockedBalance);
+/**
+ * Format a wallet-neutral integer minor-unit balance for display.
+ * Mirrors `formatLoopBalance` from lib/loopWallet but works on raw
+ * (rawString, decimals) pairs so callers don't have to hold onto
+ * the original adapter type.
+ */
+function formatWalletBalance(raw: string, decimals: number): string {
+  if (!raw) return '0';
+  if (decimals === 0) return raw;
+  const padded = raw.padStart(decimals + 1, '0');
+  const intPart = padded.slice(0, padded.length - decimals);
+  const fracPart = padded.slice(padded.length - decimals).replace(/0+$/, '');
+  return fracPart ? `${intPart}.${fracPart}` : intPart;
+}
+
+function WalletAssetCard({ holding }: { holding: WalletHolding }) {
+  const unlocked = formatWalletBalance(holding.unlockedBalance, holding.decimals);
+  const locked = formatWalletBalance(holding.lockedBalance, holding.decimals);
   return (
     <Link
       to={`/create?asset=${encodeURIComponent(holding.instrumentId)}&admin=${encodeURIComponent(holding.instrumentAdmin)}`}
