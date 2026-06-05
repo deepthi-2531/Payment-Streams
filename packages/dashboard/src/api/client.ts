@@ -155,9 +155,39 @@ export class CantonStreamsApi {
    * propagate to the page.
    */
   private isDarNotDeployedError(err: unknown): boolean {
-    const msg = err instanceof Error ? err.message : String(err);
-    return /Failed to get active contracts|template.*not.*found|not.*deployed|no.*package/i.test(
-      msg,
+    // Errors arrive in three shapes from the wallet layer:
+    //   1. An `Error` instance — `err.message` carries the text
+    //      (`Failed to get active contracts ... templateId="..."`).
+    //   2. A plain object thrown verbatim from the wallet's
+    //      `ledgerApi` — Canton participants surface this as
+    //      `{ code: "PACKAGE_NAMES_NOT_FOUND", cause: "...", ... }`
+    //      and Loop forwards the JSON unchanged. The user hit this
+    //      live on submit; before this change my regex was checking
+    //      only `err.message` (undefined here) and let it fall
+    //      through as the raw JSON.
+    //   3. A string already (rare; defensive).
+    // Coalesce all three into one searchable text blob before
+    // running the pattern check.
+    const text = (() => {
+      if (err instanceof Error) return err.message;
+      if (typeof err === 'string') return err;
+      if (err && typeof err === 'object') {
+        const e = err as { code?: unknown; cause?: unknown; message?: unknown };
+        const parts: string[] = [];
+        if (typeof e.code === 'string') parts.push(e.code);
+        if (typeof e.message === 'string') parts.push(e.message);
+        if (typeof e.cause === 'string') parts.push(e.cause);
+        if (parts.length > 0) return parts.join(' ');
+        try {
+          return JSON.stringify(err);
+        } catch {
+          return String(err);
+        }
+      }
+      return String(err);
+    })();
+    return /PACKAGE_NAMES_NOT_FOUND|package.*not.*found|do not match upgradable packages|Failed to get active contracts|template.*not.*found|not.*deployed|no.*package/i.test(
+      text,
     );
   }
 
