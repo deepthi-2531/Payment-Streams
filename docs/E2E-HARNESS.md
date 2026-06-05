@@ -175,9 +175,10 @@ dashboard image will pick it up (see the env note in Step 2).
 > **V2 token support in the Amulet wallet.** The Splice Amulet wallet
 > that ships on every validator node supports the CIP-56 V2 token
 > standard on the `token-standard-v2-upcoming` branch this repo pins
-> against, so the full preapproval / iterated-settlement flow can be
-> exercised end-to-end against a LocalNet built from that branch. Full
-> iterated-settlement support in the wallet is tracked upstream in
+> against, so Amulet's V2 AllocationRequest approval and
+> iterated-settlement wallet behavior can be exercised against a
+> LocalNet built from that branch. Full iterated-settlement support in
+> the wallet is tracked upstream in
 > [canton-network/splice#5498](https://github.com/canton-network/splice/issues/5498)
 > — read it before assuming a specific UX flow lands in a given
 > wallet build.
