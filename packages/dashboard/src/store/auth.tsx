@@ -137,6 +137,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await walletClient.init();
         if (cancelled) return;
+        // Attach subscribers BEFORE snapshotting status. Hosted-
+        // multi-wallet adapters (PartyLayer / Loop) restore a
+        // persisted session asynchronously via the wallet's own
+        // ticket-server handshake. That handshake can take several
+        // seconds; on cold-start it commonly resolves after our
+        // initial `walletClient.status()` snapshot has already
+        // returned empty. If we attached our `session:connected`
+        // listener after that, the restore event would have fired
+        // already and our handler would never see it — the UI
+        // would stay stuck on the picker even though the wallet is
+        // already authenticated.
+        await walletClient.onStatusChanged(handleStatus);
+        await walletClient.onAccountsChanged(handleAccounts);
+        await walletClient.onConnected(handleConnected);
+        if (cancelled) return;
         const current = await walletClient.status();
         if (cancelled) return;
         setStatus(current);
@@ -147,10 +162,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           } catch {
             /* ignore */
           }
+        } else if (walletClient.capabilities.hostedMultiWallet) {
+          // Hosted-multi-wallet restore is asynchronous; poll the
+          // status one more time after a short grace window to
+          // pick up sessions that landed between subscribe-attach
+          // and the next event dispatch. Cheap belt-and-braces in
+          // case the SDK ever emits the restore signal slightly
+          // out of band of our listener API.
+          setTimeout(() => {
+            if (cancelled) return;
+            void walletClient
+              .status()
+              .then((latest) => {
+                if (cancelled) return;
+                if (latest.connection.isConnected) setStatus(latest);
+                return walletClient.listAccounts();
+              })
+              .then((list) => {
+                if (!cancelled && list) setAccounts(list);
+              })
+              .catch(() => {
+                /* ignore — primary path is the subscriber */
+              });
+          }, 4_000);
         }
-        await walletClient.onStatusChanged(handleStatus);
-        await walletClient.onAccountsChanged(handleAccounts);
-        await walletClient.onConnected(handleConnected);
       } catch (err) {
         if (!cancelled)
           setError(err instanceof Error ? err.message : 'Failed to initialize wallet client');
@@ -229,6 +264,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const party = walletConnected ? walletParty : devParty;
   const devMode = !walletConnected && Boolean(devToken && devParty);
 
+  // Hosted-multi-wallet sessions (PartyLayer-routed: Loop, Cantor8,
+  // Send) authenticate the dashboard via the wallet session itself —
+  // the wallet signs and routes ledger calls through its own
+  // server-side proxy, so the dashboard never gets a JWT bearer
+  // token. The CIP-0103 `status` response leaves both
+  // `network.accessToken` and `session.accessToken` undefined for
+  // these wallets by design.
+  //
+  // Without this branch, the dashboard would stay stuck on the
+  // wallet picker forever because `Boolean(token && party)` would be
+  // false (`token` is null even though the session is real). We
+  // accept the session as auth when the layer is hosted-multi-wallet
+  // and the wallet has handed us a partyId.
+  //
+  // Important: privileged proxy / ledger calls still need to route
+  // through `walletClient.ledgerApi(...)` rather than the
+  // `Authorization: Bearer <jwt>` path. That wiring is tracked
+  // separately — see docs/HOSTED-WALLET-PLAN.md "Known limitations"
+  // and the STR-83 / STR-103 follow-ups.
+  const hostedWalletAuth =
+    walletConnected &&
+    walletClient.capabilities.hostedMultiWallet &&
+    !walletToken &&
+    Boolean(walletParty);
+
+  const isAuthenticated = hostedWalletAuth || Boolean(token && party);
+
   const value: AuthContextValue = useMemo(
     () => ({
       token,
@@ -237,7 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signingProviderId: primaryAccount?.signingProviderId ?? null,
       network: status?.network ?? null,
       provider: status?.provider ?? null,
-      isAuthenticated: Boolean(token && party),
+      isAuthenticated,
       isConnecting,
       error,
       connect,
@@ -254,6 +316,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accounts,
       primaryAccount,
       status,
+      isAuthenticated,
       isConnecting,
       error,
       connect,

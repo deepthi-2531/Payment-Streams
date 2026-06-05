@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@canton-network/dapp-sdk": "1.1.0",
+    "@partylayer/provider": "0.1.7",
     "@partylayer/sdk": "0.4.1",
     "@canton-streams/sdk": "workspace:*",
     "@hookform/resolvers": "5.2.2",
