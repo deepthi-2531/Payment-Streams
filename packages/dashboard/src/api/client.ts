@@ -131,31 +131,42 @@ export class CantonStreamsApi {
   }
 
   /**
-   * Exercise the wallet's CIP-0103 `ledgerApi` round-trip. We don't
-   * currently consume the response — its job is to prove the
-   * wallet-routed ledger path is reachable before we hand the caller
-   * an empty result. If the call throws, the error propagates up to
-   * the caller's `useQuery` so the page shows an actionable error
-   * instead of "0 streams (but actually we never asked)".
+   * Hosted-wallet read path: NO ledger probe today.
    *
-   * Endpoint choice: hosted wallets restrict the `ledgerApi` surface
-   * to an allowlist. 5N Loop today permits:
-   *   - POST /v2/state/acs
-   *   - GET  /v2/state/acs/active-contracts
-   *   - POST /v2/commands/submit
-   *   - POST /v2/commands/submit-and-wait
-   * — and rejects `/v2/version` with `CapabilityNotSupportedError`.
-   * `GET /v2/state/acs/active-contracts` is the cheapest read on
-   * Loop's list and works on Console / Nightly too, so we use it as
-   * the universal probe.
+   * Earlier iterations of this code tried to exercise the wallet's
+   * CIP-0103 `ledgerApi` with a probe query (first `GET /v2/version`,
+   * then `GET /v2/state/acs/active-contracts`, then `POST /v2/state/acs`
+   * with various filter shapes). All three were rejected by Loop's
+   * adapter wrapper — `/v2/version` is not on Loop's allowlist, and
+   * the ACS endpoints are rejected as "unfiltered query" no matter
+   * what filter shape we send, because Loop's wrapper requires a
+   * templateId / interfaceId Canton Streams hasn't deployed to the
+   * devnet participant Loop is attached to.
+   *
+   * The user-visible cost of the failing probe was a banner
+   * ("Could not load streams: Loop getActiveContracts() failed for
+   * no filter") on every page even though the dashboard had nothing
+   * to show. Dropping the probe is the honest answer:
+   *
+   *   - The dashboard returns `[]` for every hosted-wallet read.
+   *   - The CIP-0103 wallet path is genuinely not exercised here.
+   *   - The follow-up (browser-side template-filtered decoder) is
+   *     what turns this into a real query.
+   *
+   * When that follow-up lands, the decoder will:
+   *   1. resolve the active party from `walletClient.listAccounts()`
+   *   2. POST a filtered ACS query for TEMPLATE_STREAM_ESCROW etc.
+   *      against the participant the wallet is attached to (the
+   *      filter shape that Loop's wrapper actually allows — likely
+   *      the templateId-in-query-param form once the streams DAR
+   *      is published on a network Loop can reach)
+   *   3. reuse the SDK's browser-safe `deserializeStream` decoder.
+   *
+   * Until then: the hosted-wallet code path is "render the shell
+   * truthfully empty". That's better than a noisy banner.
    */
   private async probeHostedLedger(): Promise<void> {
-    const wc = walletClient.ledgerApi;
-    if (!wc) throw new Error('Wallet does not expose ledgerApi');
-    await wc({
-      requestMethod: 'get',
-      resource: '/v2/state/acs/active-contracts',
-    });
+    return;
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
