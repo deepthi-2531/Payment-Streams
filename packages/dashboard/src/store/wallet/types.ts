@@ -51,9 +51,59 @@ export type StreamsWalletAccountsHandler = (
 ) => void;
 export type StreamsWalletTxChangedHandler = (event: unknown) => void;
 
+/**
+ * STR-132 capability bag.
+ *
+ * Each flag tells the dashboard whether a specific Streams flow can
+ * be driven through this wallet layer. The optional methods on
+ * `StreamsWalletClient` (`ledgerApi`, `prepareExecuteAndWait`) are
+ * only safe to call when the matching capability is `true`.
+ *
+ * Call-sites check capabilities, NOT `typeof client.method === 'function'`:
+ * a thrown stub (the PartyLayer unsupported client) defines the
+ * method but the capability is `false`. That keeps the gate at the
+ * contract, not at the runtime.
+ */
+export interface WalletCapabilities {
+  /** Can issue arbitrary CIP-0103 `ledgerApi` queries against the
+   * participant — used to verify on-ledger AllocationRequest /
+   * Allocation state. */
+  readonly ledgerApi: boolean;
+  /** Can call `prepareExecuteAndWait` with a Daml command — required
+   * for the future inbox AllocationRequest-accept swap from
+   * `walletClient.open()` to a real wallet-signed exercise. */
+  readonly prepareExecuteAndWait: boolean;
+  /** Wallet renders V2 token-standard AllocationRequest acceptance
+   * UX natively (Amulet on the
+   * `token-standard-v2-upcoming` branch + the PR canton-network/splice#5697
+   * preview do; older builds do not). When false the inbox shows the
+   * "open wallet" copy rather than promising in-wallet V2 receiver
+   * UX. */
+  readonly v2AllocationRequestUx: boolean;
+  /** Wallet UI is a hosted multi-wallet picker (PartyLayer) rather
+   * than a single-wallet flow (dapp-sdk + a single remote adapter).
+   * Drives the connect-flow copy and the inbox no-wallet hint. */
+  readonly hostedMultiWallet: boolean;
+  /** `dappSDK.open()` brings the wallet UI forward (single-wallet
+   * flows) — for hosted multi-wallet flows the picker handles
+   * visibility itself. */
+  readonly openSurfacesWalletUi: boolean;
+}
+
 export interface StreamsWalletClient {
   readonly layer: WalletLayer;
   readonly name: string;
+
+  /** Capability bag for STR-132 gating. Keep this in sync with the
+   * concrete methods the layer actually implements; a `false` flag
+   * means call-sites MUST NOT invoke the matching method even if it
+   * is defined on the object (the unsupported PartyLayer stub
+   * defines them but throws). */
+  readonly capabilities: WalletCapabilities;
+
+  /** @deprecated Use `capabilities.hostedMultiWallet` instead.
+   * Kept for one release so call-sites can migrate without breakage;
+   * STR-133 will drop it. */
   readonly supportsHostedMultiWallet: boolean;
 
   init(): Promise<void>;
@@ -63,7 +113,9 @@ export interface StreamsWalletClient {
   listAccounts(): Promise<readonly StreamsWalletAccount[]>;
   open(): Promise<void>;
 
+  /** Only call when `capabilities.ledgerApi === true`. */
   ledgerApi?(params: unknown): Promise<unknown>;
+  /** Only call when `capabilities.prepareExecuteAndWait === true`. */
   prepareExecuteAndWait?(params: unknown): Promise<unknown>;
 
   describeConnectError(err: unknown): Promise<string>;

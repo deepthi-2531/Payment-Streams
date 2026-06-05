@@ -290,6 +290,96 @@ docker compose -f docker/docker-compose.yml down -v
 # Then Ctrl-C the upstream Splice validator + wallet processes.
 ```
 
+## Hosted-wallet E2E (PartyLayer — STR-133)
+
+The default dapp-sdk path above uses a single Amulet wallet behind
+the CIP-103 gateway. The dashboard also supports a hosted multi-wallet
+picker via `@partylayer/sdk` 0.4.1. Both paths drive the same
+`StreamsWalletClient` contract in
+`packages/dashboard/src/store/wallet/`, so every flow tested above
+(connect → create stream → wallet approval → executor settlement)
+exists unchanged under the partylayer layer.
+
+### Bringing up the dashboard in hosted-wallet mode
+
+```bash
+# Build the dashboard image with the PartyLayer layer selected.
+VITE_WALLET_LAYER=partylayer \
+VITE_PARTYLAYER_NETWORK=devnet \
+VITE_PARTYLAYER_APP_NAME='Canton Payment Streams' \
+docker compose -f docker/docker-compose.yml up -d --build --no-deps dashboard
+```
+
+`docker-compose.yml` substitutes the new env vars via `${VAR:-default}`
+syntax so the partylayer layer activates without code edits. No
+wallet gateway at `:3030` is required — PartyLayer talks to wallets
+through its own adapter set (Console / Loop / Cantor8 by default;
+see `docs/HOSTED-WALLET-PLAN.md` "Wallet support matrix").
+
+### Test plan against the partylayer layer
+
+Drive each through the dashboard, observing PartyLayer's picker in
+place of the dapp-sdk auto-remote-picker:
+
+1. **Connect** — click "Connect wallet". PartyLayer renders its
+   picker; choose Loop (recommended for end-user flow) or Console
+   (recommended for dev verification).
+2. **Sender visibility** — Alice creates a V2 stream to Bob via
+   "Create stream". Asserts: `commands/create.ts` runs against the
+   same proxy regardless of layer; on-ledger StreamAdmin contract
+   is created identically.
+3. **Receiver visibility** — Bob (a different PartyLayer wallet
+   session) sees the incoming stream in the Inbox.
+4. **Receiver wallet approval** — Bob clicks "Approve in Amulet
+   wallet" (the button copy stays from the dapp-sdk default; in
+   partylayer mode the underlying call is
+   `walletClient.open()` → no-op + the picker handles its own
+   visibility, so the button mostly serves as the "Mark approved"
+   trigger today). The future `prepareExecuteAndWait` swap will
+   work against the partylayer layer too — `PartyLayerClient.asProvider()`
+   exposes the CIP-103 method.
+5. **Executor settlement** — same on-ledger flow as the dapp-sdk
+   path; the dashboard observes `Allocation_Settle` /
+   `SettlementFactory_SettleBatch` events through the proxy log.
+6. **Batch** — same.
+7. **Policies + executor logs** — same.
+
+### What's the same and what's different vs. the dapp-sdk path
+
+| Flow                                | dapp-sdk layer           | partylayer layer                                 |
+| ----------------------------------- | ------------------------ | ------------------------------------------------ |
+| Connect                             | Auto-remote-picker → :3030 | Multi-wallet picker (Console / Loop / Cantor8) |
+| Sender create stream                | Identical                | Identical                                        |
+| Receiver Inbox view                 | Identical                | Identical                                        |
+| Receiver inbox button → wallet      | `walletSdk.open()`       | `walletClient.open()` (no-op; picker self-shows) |
+| On-ledger choices                   | Identical                | Identical                                        |
+| Executor + logs                     | Identical                | Identical                                        |
+
+### Hosted-wallet smoke test (no docker required)
+
+The vitest contract tests in
+`packages/dashboard/src/store/wallet/walletClient.test.ts`
+exercise both clients' method surface + capability bag without a
+real wallet behind them. Treat these as the always-on smoke for
+both layers; the docker-compose flow above is the integration test
+operators run when a real picker round-trip is needed.
+
+### Known gaps
+
+- Connect-flow copy / picker shell — the PartyLayer adapter set
+  ships its own picker UI. The dashboard's existing connect-flow
+  copy ("Connect a CIP-103 wallet") is generic enough to ride
+  along but tests assume the dapp-sdk auto-picker layout. Visual
+  parity is a docs-only follow-up tracked in STR-134.
+- `walletClient.open()` is a no-op on the partylayer layer (the
+  picker handles its own visibility). Existing inbox copy says
+  "Wallet open — sign there" after click; that copy is accurate
+  under both layers because the picker also opens-a-wallet at click
+  time, but the surface is the picker, not a specific wallet UI.
+- The future receiver-flow swap from `walletClient.open()` to
+  `walletClient.prepareExecuteAndWait(...)` runs against either
+  layer; STR-133 only asserts the layer-switching surface works.
+
 ## Troubleshooting
 
 | Symptom                                                                  | Likely cause                                                                | Fix                                                                                              |
