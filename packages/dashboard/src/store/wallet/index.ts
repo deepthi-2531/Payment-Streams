@@ -6,6 +6,7 @@ import type { StreamsWalletClient } from './types.js';
 export type {
   StreamsWalletAccount,
   StreamsWalletClient,
+  StreamsWalletEntry,
   StreamsWalletNetwork,
   StreamsWalletProviderInfo,
   StreamsWalletStatus,
