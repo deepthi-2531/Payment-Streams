@@ -137,12 +137,18 @@ it, override `adapters` in `createPartyLayer(...)` inside
    `scripts/fetch-v2-dars.mjs` is the dev-mode target. Once merged
    into `token-standard-v2-upcoming`, the regular Amulet wallet
    builds will pick the receiver UX up.
-2. **PartyLayer async (`userUrl`-pattern) wallets** are not exposed
-   through `PartyLayerClient.asProvider()` — for async wallet
-   support, the upstream guidance is to use `PartyLayerProvider`
-   directly. The Streams dashboard does not currently use any
-   async-pattern wallet; if/when it does, the partylayer client
-   wires through the provider class instead of the SDK class.
+2. **CJS `require()` in `PartyLayerClient.asProvider()`**: the SDK's
+   `client.asProvider()` lazily resolves the provider bridge via a
+   synchronous CommonJS `require('@partylayer/provider')`. Vite's ESM
+   dev server cannot resolve that at runtime (verified live:
+   `Dynamic require of "@partylayer/provider" is not supported`),
+   so `partyLayerClient.ts` imports `@partylayer/provider` as a
+   direct dependency and constructs the bridge via the ESM
+   `createProviderBridge(client)` export. The Provider surface is
+   identical, the CJS hazard is gone. If the upstream SDK fixes the
+   loader (issues a real ESM `import()`), we can switch back to
+   `client.asProvider()` and drop the direct `@partylayer/provider`
+   dep.
 3. **Capability flag drift**: `WalletCapabilities` is the
    single source of truth. Tests in
    `packages/dashboard/src/store/wallet/walletClient.test.ts`

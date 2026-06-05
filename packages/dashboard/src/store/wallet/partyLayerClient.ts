@@ -22,9 +22,10 @@
  *                                    forward — the wallet is the picker)
  *   - ledgerApi              = true  (PartyLayerClient.ledgerApi proxies the
  *                                    request through the active adapter)
- *   - prepareExecuteAndWait  = true  (routed through `asProvider()`'s
- *                                    CIP-0103 Provider, which exposes the
- *                                    canonical `prepareExecuteAndWait`)
+ *   - prepareExecuteAndWait  = false (the CIP-0103 provider bridge implements
+ *                                    fire-and-forget `prepareExecute` only —
+ *                                    no waiter today; capability false until
+ *                                    upstream adds it)
  *   - v2AllocationRequestUx  = the wallet's native UX, not PartyLayer's.
  *                              The picker can target an Amulet build that
  *                              supports the splice#5697 receiver UX, but
@@ -82,23 +83,32 @@ type PartyLayerClientLike = {
     network: string;
   } | null>;
   ledgerApi: (params: unknown) => Promise<unknown>;
-  asProvider: () => {
-    request: (payload: { method: string; params?: unknown }) => Promise<unknown>;
-  };
+  // Note: NOT using `client.asProvider()` — that path does an
+  // internal CommonJS `require('@partylayer/provider')` which Vite's
+  // ESM dev server cannot resolve at runtime (verified live: throws
+  // `Dynamic require of "@partylayer/provider" is not supported`).
+  // We import the provider package ourselves via real ESM and call
+  // `createProviderBridge(client)` directly — same surface, no CJS.
   on: (event: string, handler: (event: unknown) => void) => () => void;
   destroy: () => void;
 };
 
+type CipProviderLike = {
+  request: (payload: { method: string; params?: unknown }) => Promise<unknown>;
+};
+
 let clientPromise: Promise<PartyLayerClientLike> | null = null;
+let providerPromise: Promise<CipProviderLike> | null = null;
 
 async function ensureClient(): Promise<PartyLayerClientLike> {
   if (!clientPromise) {
     clientPromise = (async () => {
       const mod = await import('@partylayer/sdk');
       // `createPartyLayer` registers the built-in adapter set
-      // (Console + Loop + Cantor8 by default; Bron requires OAuth
-      // so we leave it off). The dashboard uses the picker's
-      // default UI; per-app branding is in PartyLayer's tickets.
+      // (Console + Loop + Cantor8 + Nightly + Send by default; Bron
+      // requires OAuth so it stays off). The dashboard uses the
+      // picker's default UI; per-app branding is in PartyLayer's
+      // tickets.
       return mod.createPartyLayer({
         network: PARTYLAYER_NETWORK as never,
         app: { name: PARTYLAYER_APP_NAME },
@@ -106,6 +116,36 @@ async function ensureClient(): Promise<PartyLayerClientLike> {
     })();
   }
   return clientPromise;
+}
+
+/**
+ * Build the CIP-0103 Provider façade over the PartyLayerClient via
+ * ESM rather than going through `client.asProvider()`.
+ *
+ * The SDK's `asProvider()` does
+ *
+ *   const { createProviderBridge } = require('@partylayer/provider');
+ *
+ * at runtime — fine in a bundler that polyfills `require`, fatal in
+ * the Vite ESM dev server (and in any pure-ESM consumer). The bridge
+ * itself is exported as a regular ESM symbol, so importing it
+ * ourselves gives us the same Provider with none of the CJS hazard.
+ *
+ * We cache the provider per session: `createProviderBridge` is cheap,
+ * but redundant calls would attach extra event forwarders to the
+ * native wallet provider on every status snapshot.
+ */
+async function ensureProvider(): Promise<CipProviderLike> {
+  if (!providerPromise) {
+    providerPromise = (async () => {
+      const client = await ensureClient();
+      const mod = await import('@partylayer/provider');
+      return mod.createProviderBridge(
+        client as unknown as Parameters<typeof mod.createProviderBridge>[0],
+      ) as unknown as CipProviderLike;
+    })();
+  }
+  return providerPromise;
 }
 
 function emptyStatus(): StreamsWalletStatus {
@@ -120,28 +160,21 @@ function emptyStatus(): StreamsWalletStatus {
 async function snapshotStatus(): Promise<StreamsWalletStatus> {
   const client = await ensureClient();
   const session = await client.getActiveSession();
-  // eslint-disable-next-line no-console
-  console.info('[partyLayerClient] snapshotStatus: getActiveSession =', session);
   if (!session) return emptyStatus();
   // `PartyLayerClient.getActiveSession()` carries `partyId` + `walletId`
   // but no `accessToken`. auth.tsx flips `isAuthenticated` only when
   // `status.network.accessToken` or `status.session.accessToken` is
-  // populated (see auth.tsx:222 — `walletToken = status?.network?.accessToken ?? ...`).
+  // populated (see auth.tsx — `walletToken = status?.network?.accessToken ?? ...`).
   // The wallet-issued JWT lives in PartyLayer's CIP-0103 `status`
-  // response, exposed through `asProvider().request({method:'status'})`.
+  // response, which we read through the ESM-imported provider bridge.
   // Without this round-trip the dashboard would never authenticate
   // against a PartyLayer-routed wallet.
   try {
-    const provider = client.asProvider();
+    const provider = await ensureProvider();
     const cipStatusRaw = await provider.request({
       method: 'status',
       params: {},
     });
-    // eslint-disable-next-line no-console
-    console.info(
-      '[partyLayerClient] snapshotStatus: asProvider().request(status) =',
-      cipStatusRaw,
-    );
     const cipStatus = cipStatusRaw as {
       provider?: { id?: string; name?: string; type?: string };
       connection?: {
@@ -173,19 +206,12 @@ async function snapshotStatus(): Promise<StreamsWalletStatus> {
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn(
-      '[partyLayerClient] snapshotStatus: asProvider().request(status) threw — async wallet?',
+      '[partyLayerClient] snapshotStatus: provider.request(status) failed — ' +
+        'falling back to session-only snapshot. auth.tsx will keep ' +
+        'isAuthenticated=false until status returns an accessToken.',
       err,
     );
-    /* Fall through to the session-only snapshot. auth.tsx will treat
-     * the connection as unauthenticated; the picker error surfaces
-     * the reason. */
   }
-  // eslint-disable-next-line no-console
-  console.warn(
-    '[partyLayerClient] snapshotStatus: falling back to session-only snapshot (no accessToken). ' +
-      'auth.tsx will keep isAuthenticated=false until a JWT is plumbed through ' +
-      "PartyLayer's async-wallet path. See HOSTED-WALLET-PLAN.md \"Known limitations\".",
-  );
   return {
     provider: {
       id: session.walletId,
