@@ -60,10 +60,18 @@ shape. The two shipped clients claim:
 | Capability                  | dapp-sdk client | partylayer client |
 | --------------------------- | --------------- | ----------------- |
 | `ledgerApi`                 | true            | true              |
-| `prepareExecuteAndWait`     | true            | true              |
+| `prepareExecuteAndWait`     | true            | **false** (see note) |
 | `v2AllocationRequestUx`     | true            | depends on wallet |
 | `hostedMultiWallet`         | false           | true              |
 | `openSurfacesWalletUi`      | true            | false             |
+
+> **`prepareExecuteAndWait` on partylayer is currently false.**
+> `@partylayer/provider@0.1.7`'s bridge implements the fire-and-forget
+> `prepareExecute` method but not `prepareExecuteAndWait`. We advertise
+> the capability honestly so call-sites do not invoke an unsupported
+> method. When an upstream release adds it, flip the flag back to true
+> in `packages/dashboard/src/store/wallet/partyLayerClient.ts` (a
+> commented-out implementation is left there for the swap).
 
 Notes:
 
@@ -87,15 +95,15 @@ Notes:
 PartyLayer 0.4.x ships built-in adapters for these wallets. The
 matrix records what the dashboard expects to work via each.
 
-| Wallet           | npm adapter package          | V2 AllocationRequest accept | Notes |
-| ---------------- | ---------------------------- | --------------------------- | ----- |
-| Amulet / splice  | (via dapp-sdk, not partylayer) | yes (on splice#5697)     | Default LocalNet path. |
-| 5N Loop          | `@partylayer/adapter-loop`   | follow upstream             | Hosted; deep-link / QR transport. The main user-facing target for partylayer mode. |
-| Console Wallet   | `@partylayer/adapter-console`| follow upstream             | Browser extension. Auto-registered by PartyLayer's defaults. |
-| Cantor8 (C8)     | `@partylayer/adapter-cantor8`| follow upstream             | Deep-link. Auto-registered. |
-| Nightly          | `@partylayer/adapter-nightly`| follow upstream             | Browser extension. Not auto-registered. |
-| Bron             | `@partylayer/adapter-bron`   | follow upstream             | OAuth-backed; requires `BronAdapterConfig` we do not configure today. |
-| Send             | `@partylayer/adapter-send`   | follow upstream             | Not exposed in PartyLayer 0.4.1's default set. |
+| Wallet           | npm adapter package          | In PL 0.4.1 default set | V2 AllocationRequest accept | Notes |
+| ---------------- | ---------------------------- | ----------------------- | --------------------------- | ----- |
+| Amulet / splice  | (via dapp-sdk, not partylayer) | n/a                  | yes (on splice#5697)        | Default LocalNet path. |
+| 5N Loop          | `@partylayer/adapter-loop`   | **yes**                 | follow upstream             | Hosted; deep-link / QR transport. The main user-facing target for partylayer mode. |
+| Console Wallet   | `@partylayer/adapter-console`| **yes**                 | follow upstream             | Browser extension. |
+| Cantor8 (C8)     | `@partylayer/adapter-cantor8`| **yes**                 | follow upstream             | Deep-link. |
+| Nightly          | `@partylayer/adapter-nightly`| **yes**                 | follow upstream             | Multichain browser-extension wallet. |
+| Send             | `@partylayer/adapter-send`   | **yes**                 | follow upstream             | Passkey-based, `kernel.id`-guarded `window.canton`. |
+| Bron             | `@partylayer/adapter-bron`   | no                      | follow upstream             | OAuth-backed; needs `BronAdapterConfig` the dashboard does not pass — opt-in by overriding `adapters` in `partyLayerClient.ts`. |
 
 "follow upstream" means: the wallet either currently supports the V2
 AllocationRequest receiver UX, or will when it adopts the
@@ -104,9 +112,11 @@ not gate by wallet identity; the underlying capability check happens
 at the wallet level.
 
 The partylayer client's `connect()` uses PartyLayer's default
-adapter set (Console + Loop + Cantor8). Bron and Nightly can be
-enabled in a future ticket by passing a custom `adapters` array to
-`createPartyLayer(...)` in
+adapter set as of `@partylayer/sdk@0.4.1` —
+**Console + Loop + Cantor8 + Nightly + Send** (verified against
+`getBuiltinAdapters()` in the installed SDK). Bron is not in that
+set because it requires OAuth config we do not pass today; to add
+it, override `adapters` in `createPartyLayer(...)` inside
 `packages/dashboard/src/store/wallet/partyLayerClient.ts`.
 
 ## Recommended wallet paths

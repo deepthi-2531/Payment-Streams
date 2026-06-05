@@ -34,12 +34,14 @@
  *                              UX still depends on which wallet the user
  *                              chooses. Documented in HOSTED-WALLET-PLAN.md.
  *
- * Event mapping: PartyLayer fires session-level events
- * (`session.connected`, `session.disconnected`, `session.expired`,
- * `tx.status`). We surface these on the dashboard's status /
- * connected / accounts / tx subscribers. The dashboard does not
- * currently distinguish "the wallet identity changed" vs "the
- * session was rotated"; both surface as `onStatusChanged`.
+ * Event mapping: PartyLayer fires session-level events with
+ * COLON-separated names (`session:connected`,
+ * `session:disconnected`, `session:expired`, `tx:status` — verified
+ * against `@partylayer/sdk@0.4.1/dist/index.js`). We surface these
+ * on the dashboard's status / connected / accounts / tx
+ * subscribers. The dashboard does not currently distinguish
+ * "the wallet identity changed" vs "the session was rotated";
+ * both surface as `onStatusChanged`.
  */
 
 import type {
@@ -47,6 +49,7 @@ import type {
   StreamsWalletAccountsHandler,
   StreamsWalletClient,
   StreamsWalletConnectResult,
+  StreamsWalletEntry,
   StreamsWalletStatus,
   StreamsWalletStatusHandler,
   StreamsWalletTxChangedHandler,
@@ -56,9 +59,22 @@ import { PARTYLAYER_APP_NAME, PARTYLAYER_NETWORK } from './config.js';
 // Minimal structural type — keeps this file from importing the full
 // `@partylayer/sdk` value namespace at module load. The runtime types
 // come from the dynamic import inside `ensureClient`.
+type WalletInfoLike = {
+  walletId: string;
+  name?: string;
+  description?: string;
+  homepage?: string;
+  installUrl?: string;
+  cip0103?: { native?: boolean };
+};
+
 type PartyLayerClientLike = {
-  connect: (options?: unknown) => Promise<unknown>;
+  connect: (options?: { walletId?: string; preferInstalled?: boolean }) => Promise<unknown>;
   disconnect: () => Promise<void>;
+  listWallets: (filter?: unknown) => Promise<WalletInfoLike[]>;
+  getAdapter: (walletId: string) => {
+    detectInstalled?: () => Promise<{ installed: boolean }>;
+  } | undefined;
   getActiveSession: () => Promise<{
     sessionId: string;
     walletId: string;
@@ -105,6 +121,52 @@ async function snapshotStatus(): Promise<StreamsWalletStatus> {
   const client = await ensureClient();
   const session = await client.getActiveSession();
   if (!session) return emptyStatus();
+  // `PartyLayerClient.getActiveSession()` carries `partyId` + `walletId`
+  // but no `accessToken`. auth.tsx flips `isAuthenticated` only when
+  // `status.network.accessToken` or `status.session.accessToken` is
+  // populated (see auth.tsx:222 — `walletToken = status?.network?.accessToken ?? ...`).
+  // The wallet-issued JWT lives in PartyLayer's CIP-0103 `status`
+  // response, exposed through `asProvider().request({method:'status'})`.
+  // Without this round-trip the dashboard would never authenticate
+  // against a PartyLayer-routed wallet.
+  try {
+    const provider = client.asProvider();
+    const cipStatus = (await provider.request({
+      method: 'status',
+      params: {},
+    })) as {
+      provider?: { id?: string; name?: string; type?: string };
+      connection?: {
+        isConnected?: boolean;
+        isNetworkConnected?: boolean;
+        reason?: string;
+      };
+      network?: { networkId?: string; accessToken?: string; ledgerApi?: string };
+      session?: { accessToken?: string; userId?: string };
+    } | null;
+    if (cipStatus) {
+      return {
+        provider: cipStatus.provider
+          ? {
+              id: cipStatus.provider.id,
+              name: cipStatus.provider.name,
+              providerType: cipStatus.provider.type,
+            }
+          : { id: session.walletId, name: session.walletId, providerType: 'partylayer' },
+        connection: {
+          isConnected: cipStatus.connection?.isConnected ?? true,
+          isNetworkConnected: cipStatus.connection?.isNetworkConnected ?? true,
+          reason: cipStatus.connection?.reason ?? null,
+        },
+        network: cipStatus.network ?? { networkId: session.network },
+        session: cipStatus.session ?? { userId: session.partyId },
+      };
+    }
+  } catch {
+    /* Fall through to the session-only snapshot. auth.tsx will treat
+     * the connection as unauthenticated; the picker error surfaces
+     * the reason. */
+  }
   return {
     provider: {
       id: session.walletId,
@@ -135,16 +197,24 @@ async function snapshotAccounts(): Promise<readonly StreamsWalletAccount[]> {
 // `removeOn*` calls actually unsubscribe the right closure.
 const subscriptions = new WeakMap<object, () => void>();
 
+// PartyLayer SDK emits events with COLON separators
+// (`session:connected`, `tx:status`, ...) — NOT dot-separators.
+// Earlier versions of this adapter listened on the dot names, which
+// meant disconnect / expiry / tx invalidation never fired through
+// our subscribers. Verified against
+// `@partylayer/sdk@0.4.1/dist/index.js` (emits `session:connected`,
+// `session:disconnected`, `session:expired`, `tx:status`).
+
 async function subscribeStatus(listener: StreamsWalletStatusHandler) {
   if (subscriptions.has(listener as unknown as object)) return;
   const client = await ensureClient();
-  const onConnected = client.on('session.connected', () => {
+  const onConnected = client.on('session:connected', () => {
     void snapshotStatus().then((s) => listener(s));
   });
-  const onDisconnected = client.on('session.disconnected', () => {
+  const onDisconnected = client.on('session:disconnected', () => {
     listener(emptyStatus());
   });
-  const onExpired = client.on('session.expired', () => {
+  const onExpired = client.on('session:expired', () => {
     listener(emptyStatus());
   });
   subscriptions.set(listener as unknown as object, () => {
@@ -157,10 +227,10 @@ async function subscribeStatus(listener: StreamsWalletStatusHandler) {
 async function subscribeAccounts(listener: StreamsWalletAccountsHandler) {
   if (subscriptions.has(listener as unknown as object)) return;
   const client = await ensureClient();
-  const onConnected = client.on('session.connected', () => {
+  const onConnected = client.on('session:connected', () => {
     void snapshotAccounts().then((a) => listener(a));
   });
-  const onDisconnected = client.on('session.disconnected', () => {
+  const onDisconnected = client.on('session:disconnected', () => {
     listener([]);
   });
   subscriptions.set(listener as unknown as object, () => {
@@ -172,7 +242,7 @@ async function subscribeAccounts(listener: StreamsWalletAccountsHandler) {
 async function subscribeTx(listener: StreamsWalletTxChangedHandler) {
   if (subscriptions.has(listener as unknown as object)) return;
   const client = await ensureClient();
-  const unsubscribe = client.on('tx.status', (event) => listener(event));
+  const unsubscribe = client.on('tx:status', (event) => listener(event));
   subscriptions.set(listener as unknown as object, unsubscribe);
 }
 
@@ -190,7 +260,15 @@ export const partyLayerWalletClient: StreamsWalletClient = {
   supportsHostedMultiWallet: true,
   capabilities: {
     ledgerApi: true,
-    prepareExecuteAndWait: true,
+    // `@partylayer/provider@0.1.7`'s bridge implements
+    // `prepareExecute` (fire-and-forget) but NOT
+    // `prepareExecuteAndWait` — unknown methods fall through to a
+    // capability-not-supported error. So we declare the capability
+    // as `false` and call-sites (lib/walletApprovals.ts swap
+    // target) skip the prepareExecuteAndWait route on this layer.
+    // When the upstream provider adds the method this flag flips
+    // back to true with no other change.
+    prepareExecuteAndWait: false,
     // The wallet's V2 receiver UX depends on which wallet the user
     // picks. The picker itself does not gate this. See
     // docs/HOSTED-WALLET-PLAN.md "Support matrix".
@@ -203,10 +281,44 @@ export const partyLayerWalletClient: StreamsWalletClient = {
     await ensureClient();
   },
 
-  async connect(): Promise<StreamsWalletConnectResult> {
+  async connect(walletId?: string): Promise<StreamsWalletConnectResult> {
     const client = await ensureClient();
-    await client.connect();
+    // When the dashboard's picker passed a walletId, target that
+    // adapter exactly. When omitted (e.g. a programmatic call or
+    // session restore), `preferInstalled: true` makes PartyLayer
+    // route to the first adapter whose `detectInstalled()` reports
+    // success — much friendlier than the default behaviour, which
+    // requires an explicit choice.
+    await client.connect(walletId ? { walletId } : { preferInstalled: true });
     return { isConnected: true, isNetworkConnected: true };
+  },
+
+  async listWallets(): Promise<readonly StreamsWalletEntry[]> {
+    const client = await ensureClient();
+    const wallets = await client.listWallets();
+    // Run install detection in parallel — the picker UI uses the
+    // `installed` flag to render badges + disable not-installed
+    // entries.
+    return Promise.all(
+      wallets.map(async (w): Promise<StreamsWalletEntry> => {
+        const adapter = client.getAdapter(w.walletId);
+        let installed: boolean | undefined;
+        try {
+          const detect = await adapter?.detectInstalled?.();
+          installed = detect?.installed;
+        } catch {
+          /* ignore; leave installed undefined */
+        }
+        return {
+          id: w.walletId,
+          name: w.name ?? w.walletId,
+          description: w.description,
+          installed,
+          installUrl: w.installUrl ?? w.homepage,
+          cip0103Native: w.cip0103?.native,
+        };
+      }),
+    );
   },
 
   async disconnect() {
@@ -235,14 +347,17 @@ export const partyLayerWalletClient: StreamsWalletClient = {
     return client.ledgerApi(params);
   },
 
-  async prepareExecuteAndWait(params: unknown) {
-    const client = await ensureClient();
-    const provider = client.asProvider();
-    return provider.request({
-      method: 'prepareExecuteAndWait',
-      params,
-    });
-  },
+  // `prepareExecuteAndWait` intentionally omitted on this client —
+  // `@partylayer/provider@0.1.7`'s bridge only implements
+  // `prepareExecute`. `capabilities.prepareExecuteAndWait === false`
+  // tells call sites not to invoke this method via the contract.
+  // If a future upstream release adds it, restore the method
+  // alongside flipping the capability back to true:
+  //
+  //   async prepareExecuteAndWait(params: unknown) {
+  //     const provider = (await ensureClient()).asProvider();
+  //     return provider.request({ method: 'prepareExecuteAndWait', params });
+  //   }
 
   async describeConnectError(err: unknown): Promise<string> {
     const raw = err instanceof Error ? err.message : String(err);
