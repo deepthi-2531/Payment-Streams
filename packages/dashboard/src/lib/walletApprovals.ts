@@ -8,23 +8,23 @@
  *   Bob opens the Streams Inbox
  *     → sees Alice's incoming CC stream
  *     → clicks "Approve in Amulet wallet"
- *     → the dashboard calls into `@canton-network/dapp-sdk`
- *     → the wallet renders the Amulet acceptance prompt
- *     → Bob signs in the wallet
+ *     → the dashboard calls into the active wallet adapter
+ *     → the Amulet wallet opens so Bob can complete the AllocationRequest
+ *       approval there when a matching request exists
  *     → the dashboard refreshes the stored approval state
  *
  * What this module IS today
  * -------------------------
  * - A real CIP-103 round-trip: clicking the button invokes
- *   `walletSdk.open()` so the Amulet wallet surface comes forward and
- *   the recipient completes the acceptance there.
+ *   `walletClient.open()` so the Amulet wallet surface comes forward and
+ *   the recipient can complete the AllocationRequest approval there.
  * - Per-stream approval-intent state, persisted in `sessionStorage` so
  *   the badge state survives reload and is scoped to the current
  *   session.
  * - A single `requestStreamWalletApproval` entry-point — the place a
- *   future contributor swaps in `walletSdk.prepareExecuteAndWait` with
+ *   future contributor swaps in `walletClient.prepareExecuteAndWait` with
  *   the real V2 `AllocationRequest_Accept` (committed-iterated)
- *   command, replacing the `walletSdk.open()` call. The on-screen
+ *   command, replacing the `walletClient.open()` call. The on-screen
  *   status copy is already ready for that swap.
  *
  * What this module IS NOT today
@@ -39,14 +39,15 @@
  * `token-standard-v2-upcoming` branch we pin against. So the
  * impediment is implementation, not missing bindings: someone needs
  * to wire the AllocationRequest contract id + the accept choice
- * payload through to `walletSdk.prepareExecuteAndWait(...)`. Upstream
+ * payload through to `walletClient.prepareExecuteAndWait(...)`. Upstream
  * support for iterated settlement in the Amulet wallet UX is tracked
  * in canton-network/splice#5498 — read it before committing to a
  * specific shape.
  *
  * Until that swap lands the button still does the right CIP-103
- * thing: it brings the wallet forward via `walletSdk.open()`, the
- * recipient completes the acceptance in the wallet's own UI, and the
+ * thing: it brings the wallet forward via `walletClient.open()`, the
+ * recipient completes the AllocationRequest approval in the wallet's
+ * own UI when the request exists there, and the
  * dashboard records the local intent so the inbox badge stays
  * truthful across reloads.
  *
@@ -58,18 +59,18 @@
  * from `scripts/fetch-v2-dars.mjs` as `SPLICE_PR5697_PREVIEW_COMMIT`;
  * `scripts/start-localnet-e2e.sh` recognises it. The E2E harness
  * runbook `docs/E2E-HARNESS.md` documents the opt-in path. A
- * contributor wiring `walletSdk.prepareExecuteAndWait(...)` should
+ * contributor wiring `walletClient.prepareExecuteAndWait(...)` should
  * develop against a LocalNet built from that commit (or its
  * successor merge sha) so the wallet renders the right shape.
  */
 
 import type { Stream } from '@canton-streams/sdk/browser';
-import { walletSdk } from '../store/auth.js';
+import { walletClient } from '../store/wallet/index.js';
 
 export type StreamApprovalStatus =
   | 'idle'
   | 'wallet-opened'
-  | 'preapproved'
+  | 'approved-local'
   | 'error';
 
 export interface StreamApprovalRecord {
@@ -115,7 +116,19 @@ export function readStreamApproval(
   stream: Pick<Stream, 'config'>,
 ): StreamApprovalRecord {
   const all = readAll();
-  return all[streamApprovalKey(stream)] ?? { status: 'idle', updatedAt: 0 };
+  const record = all[streamApprovalKey(stream)];
+  return isStreamApprovalRecord(record) ? record : { status: 'idle', updatedAt: 0 };
+}
+
+function isStreamApprovalRecord(record: unknown): record is StreamApprovalRecord {
+  if (typeof record !== 'object' || record === null) return false;
+  const status = (record as { status?: unknown }).status;
+  return (
+    status === 'idle' ||
+    status === 'wallet-opened' ||
+    status === 'approved-local' ||
+    status === 'error'
+  );
 }
 
 function writeStreamApproval(
@@ -130,12 +143,13 @@ function writeStreamApproval(
 /**
  * Trigger the wallet-mediated approval flow for an incoming stream.
  *
- * Today this issues `walletSdk.open()` — a real CIP-103 call that
+ * Today this issues `walletClient.open()` — a real wallet call that
  * surfaces the connected Amulet wallet so the recipient can complete
- * the preapproval there. Once the Amulet TS binding is bundled, the
- * same function will issue
- * `walletSdk.prepareExecuteAndWait({ commands: [createTransferPreapproval(...)] })`
- * and the wallet will render the precise preapproval prompt directly.
+ * the AllocationRequest approval there if the request is visible in
+ * Amulet. Once dashboard-side acceptance is wired, the same function
+ * will issue
+ * `walletClient.prepareExecuteAndWait({ commands: [AllocationRequest_Accept] })`
+ * with the real request cid and choice payload.
  *
  * The function always updates the session-store record so the inbox
  * badge reflects what's actually happened, even if the wallet call
@@ -145,7 +159,7 @@ export async function requestStreamWalletApproval(
   stream: Stream,
 ): Promise<StreamApprovalRecord> {
   try {
-    await walletSdk.open();
+    await walletClient.open();
     const record: StreamApprovalRecord = {
       status: 'wallet-opened',
       updatedAt: Date.now(),
@@ -154,8 +168,9 @@ export async function requestStreamWalletApproval(
     return record;
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err);
-    // The dapp-sdk throws "Not connected — call connect() first" when
-    // `walletSdk.open()` is fired before a wallet session exists.
+    // Wallet adapters commonly throw "Not connected — call connect()
+    // first" when `walletClient.open()` is fired before a wallet
+    // session exists.
     // Translate that into actionable copy for the inbox card rather
     // than passing the bare SDK string straight to the user.
     const actionable = /not connected/i.test(raw)
@@ -172,15 +187,15 @@ export async function requestStreamWalletApproval(
 }
 
 /**
- * Mark a stream as preapproved once the recipient confirms the action
- * happened in the wallet. Manual button today; once
- * `walletSdk.ledgerApi(...)` returns a real Amulet `TransferPreapproval`
- * for this recipient + instrument, this helper will be called by the
- * background poller rather than the user.
+ * Mark a stream as locally approved once the recipient confirms the
+ * AllocationRequest approval happened in the wallet. Manual button
+ * today; once `walletClient.ledgerApi(...)` can verify the matching
+ * Amulet AllocationRequest/Allocation state, this helper will be
+ * called by the background poller rather than the user.
  */
-export function markStreamPreapproved(stream: Stream): StreamApprovalRecord {
+export function markStreamApproved(stream: Stream): StreamApprovalRecord {
   const record: StreamApprovalRecord = {
-    status: 'preapproved',
+    status: 'approved-local',
     updatedAt: Date.now(),
   };
   writeStreamApproval(stream, record);
