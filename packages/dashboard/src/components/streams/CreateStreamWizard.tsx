@@ -135,12 +135,29 @@ export function CreateStreamWizard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
+  // Pre-fill from `?asset=<id>&admin=<party>` query params. The
+  // dashboard's "Your wallet" cards link here with both set, so the
+  // user lands on Step 1 with the asset row already filled in.
+  // Reads the URL once at mount; subsequent navigation within the
+  // wizard does not re-run this.
+  const prefillFromQuery = useMemo((): Partial<CreateStreamSchemaValues> => {
+    if (typeof window === 'undefined') return {};
+    const params = new URLSearchParams(window.location.search);
+    const asset = params.get('asset');
+    const admin = params.get('admin');
+    if (!asset && !admin) return {};
+    return {
+      ...(asset ? { instrumentId: asset } : {}),
+      ...(admin ? { instrumentAdmin: admin } : {}),
+    };
+  }, []);
+
   // zod's `.default()` on `cancellable` makes the *input* optional but the
   // *output* required. RHF infers field state from input; explicitly bind
   // the resolver to keep typecheck happy without weakening validation.
   const methods = useForm<CreateStreamSchemaValues>({
     resolver: zodResolver(createStreamSchema) as Resolver<CreateStreamSchemaValues>,
-    defaultValues: defaults as CreateStreamSchemaValues,
+    defaultValues: { ...defaults, ...prefillFromQuery } as CreateStreamSchemaValues,
     mode: 'onBlur',
   });
 
