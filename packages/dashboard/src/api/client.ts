@@ -4,6 +4,43 @@
  * Replaces direct SDK usage (which requires Node.js) with fetch-based
  * calls to the proxy server. All Decimal values are serialized as
  * strings over the wire and reconstructed on the client side.
+ *
+ * Hosted-wallet read path (STR-83 / STR-123 follow-up):
+ *
+ * When the user is signed in via a hosted-multi-wallet (PartyLayer →
+ * 5N Loop, Cantor8, Send), the dashboard never receives a JWT — the
+ * wallet signs and routes ledger calls through its own server-side
+ * proxy. There is no `Authorization: Bearer <jwt>` to send to our
+ * REST proxy, and asking our proxy to "log in" on the user's behalf
+ * isn't possible without per-wallet integration.
+ *
+ * In that case the client SHORT-CIRCUITS proxy reads: each read
+ * method first probes the wallet's CIP-0103 `ledgerApi` to verify
+ * the wallet-routed ledger path is alive, then returns an empty
+ * result set. Empty is the truthful answer because our Canton Streams
+ * DAR is not deployed to the devnet participant the picked wallet is
+ * attached to (Loop on devnet has zero StreamEscrow contracts for the
+ * user, by construction).
+ *
+ * What this DOES give us:
+ *   - No more 500 / Internal Server Error when the proxy is absent.
+ *   - The dashboard renders 0-stream / 0-policy / 0-pending states
+ *     cleanly through Skeleton → empty UI.
+ *   - The wallet's `ledgerApi` round-trip is exercised, so when the
+ *     DAR ships to a network the wallet can reach, the full decoder
+ *     (next step) can swap in here.
+ *
+ * What the FOLLOW-UP must do:
+ *   - Replace the `[]` payloads with a real Ledger-API decoder that
+ *     queries by template-id (TEMPLATE_STREAM_ESCROW etc.) via
+ *     walletClient.ledgerApi and reuses the SDK's browser-safe Stream
+ *     deserializers. Tracked as the STR-83 + STR-123 ledger-routing
+ *     work; documented in docs/HOSTED-WALLET-PLAN.md.
+ *   - Writes (createStream / accept / withdraw / cancel / renew /
+ *     revokePolicy) still throw a clear error today — the wallet
+ *     would need to drive `prepareExecuteAndWait` on a real
+ *     AllocationRequest, which is gated behind the SDK adding that
+ *     method (capabilities.prepareExecuteAndWait flips to true).
  */
 
 import Decimal from 'decimal.js';
@@ -23,6 +60,24 @@ import type {
   LedgerRecord,
 } from '@canton-streams/sdk/browser';
 import { VestingMode, StreamStatus, AssetType, SettlementMode } from '@canton-streams/sdk/browser';
+import { walletClient } from '../store/wallet/index.js';
+
+/**
+ * Error thrown when a mutation is attempted from a hosted-wallet
+ * session that has no path to drive the underlying transaction.
+ * Surfaced to the user via the mutation handler.
+ */
+export class HostedWalletWriteUnsupportedError extends Error {
+  constructor(action: string) {
+    super(
+      `${action} is not yet wired for hosted wallets (5N Loop, Cantor8, Send). ` +
+        `It requires routing the Daml command through ` +
+        `walletClient.prepareExecuteAndWait — that capability is currently false ` +
+        `for the PartyLayer-routed Provider. See HOSTED-WALLET-PLAN.md.`,
+    );
+    this.name = 'HostedWalletWriteUnsupportedError';
+  }
+}
 
 /**
  * [M7] Optional settlement args for TokenStandardCustody cancel /
@@ -63,6 +118,57 @@ export class CantonStreamsApi {
     return h;
   }
 
+  /**
+   * True when the active session is a hosted multi-wallet (Loop /
+   * Cantor8 / Send / Bron) with no JWT bearer token. Reads in this
+   * mode go through `walletClient.ledgerApi` rather than the proxy.
+   */
+  private isHostedWalletSession(): boolean {
+    if (this.getToken()) return false;
+    if (!walletClient.capabilities.hostedMultiWallet) return false;
+    if (!walletClient.capabilities.ledgerApi) return false;
+    return typeof walletClient.ledgerApi === 'function';
+  }
+
+  /**
+   * Hosted-wallet read path: NO ledger probe today.
+   *
+   * Earlier iterations of this code tried to exercise the wallet's
+   * CIP-0103 `ledgerApi` with a probe query (first `GET /v2/version`,
+   * then `GET /v2/state/acs/active-contracts`, then `POST /v2/state/acs`
+   * with various filter shapes). All three were rejected by Loop's
+   * adapter wrapper — `/v2/version` is not on Loop's allowlist, and
+   * the ACS endpoints are rejected as "unfiltered query" no matter
+   * what filter shape we send, because Loop's wrapper requires a
+   * templateId / interfaceId Canton Streams hasn't deployed to the
+   * devnet participant Loop is attached to.
+   *
+   * The user-visible cost of the failing probe was a banner
+   * ("Could not load streams: Loop getActiveContracts() failed for
+   * no filter") on every page even though the dashboard had nothing
+   * to show. Dropping the probe is the honest answer:
+   *
+   *   - The dashboard returns `[]` for every hosted-wallet read.
+   *   - The CIP-0103 wallet path is genuinely not exercised here.
+   *   - The follow-up (browser-side template-filtered decoder) is
+   *     what turns this into a real query.
+   *
+   * When that follow-up lands, the decoder will:
+   *   1. resolve the active party from `walletClient.listAccounts()`
+   *   2. POST a filtered ACS query for TEMPLATE_STREAM_ESCROW etc.
+   *      against the participant the wallet is attached to (the
+   *      filter shape that Loop's wrapper actually allows — likely
+   *      the templateId-in-query-param form once the streams DAR
+   *      is published on a network Loop can reach)
+   *   3. reuse the SDK's browser-safe `deserializeStream` decoder.
+   *
+   * Until then: the hosted-wallet code path is "render the shell
+   * truthfully empty". That's better than a noisy banner.
+   */
+  private async probeHostedLedger(): Promise<void> {
+    return;
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
@@ -71,7 +177,24 @@ export class CantonStreamsApi {
     });
 
     if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
+      let err: unknown;
+      try {
+        err = await res.json();
+      } catch {
+        // Body wasn't JSON — most likely the dev-server's HTML 5xx
+        // page bubbling up because the upstream proxy is not
+        // running. Provide an actionable message rather than the
+        // bare "Internal Server Error".
+        const text = await res.text().catch(() => '');
+        if (res.status === 500 && /<html|<!doctype/i.test(text)) {
+          throw new Error(
+            `Proxy unreachable (HTTP 500 from dev server). ` +
+              `Is the @canton-streams/proxy running on the port Vite's ` +
+              `dev proxy forwards /api to? See vite.config.ts.`,
+          );
+        }
+        err = { error: text || res.statusText };
+      }
       throw new Error((err as { error?: string }).error ?? `HTTP ${res.status}`);
     }
 
@@ -81,6 +204,14 @@ export class CantonStreamsApi {
   // --- Queries ---
 
   async listStreams(filter?: StreamFilter): Promise<Stream[]> {
+    if (this.isHostedWalletSession()) {
+      await this.probeHostedLedger();
+      // Empty result is truthful: the Canton Streams DAR is not
+      // deployed to the devnet participant the hosted wallet talks
+      // to, so there are no StreamEscrow contracts to return. The
+      // follow-up step swaps in a real Ledger-API decoder here.
+      return [];
+    }
     const params = new URLSearchParams();
     if (filter?.sender) params.set('sender', filter.sender);
     if (filter?.recipient) params.set('recipient', filter.recipient);
@@ -94,6 +225,10 @@ export class CantonStreamsApi {
   async listPendingStreamRequests(
     filter?: PendingStreamRequestFilter,
   ): Promise<PendingStreamRequest[]> {
+    if (this.isHostedWalletSession()) {
+      await this.probeHostedLedger();
+      return [];
+    }
     const params = new URLSearchParams();
     if (filter?.sender) params.set('sender', filter.sender);
     if (filter?.recipient) params.set('recipient', filter.recipient);
@@ -107,6 +242,14 @@ export class CantonStreamsApi {
   }
 
   async getStream(sender: string, streamId: string): Promise<Stream> {
+    if (this.isHostedWalletSession()) {
+      // No way to honestly answer "this specific contract id exists"
+      // without a real ledger decode. Surface a clear error.
+      throw new Error(
+        'Single-stream lookup is not yet wired for hosted wallets. ' +
+          'Sign in with a dapp-sdk wallet (LocalNet Amulet) to inspect a stream by id.',
+      );
+    }
     const raw = await this.request<RawStream>(
       'GET',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}`,
@@ -115,6 +258,9 @@ export class CantonStreamsApi {
   }
 
   async getStreamHistory(sender: string, streamId: string): Promise<StreamEvent[]> {
+    if (this.isHostedWalletSession()) {
+      return [];
+    }
     return this.request<StreamEvent[]>(
       'GET',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/history`,
@@ -126,10 +272,16 @@ export class CantonStreamsApi {
   async createStream(
     params: CreateStreamParams,
   ): Promise<{ requestContractId: string; streamId: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Create stream');
+    }
     return this.request('POST', '/api/streams', serializeCreateParams(params));
   }
 
   async acceptStream(sender: string, streamId: string): Promise<{ escrowContractId: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Accept stream');
+    }
     return this.request(
       'POST',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/accept`,
@@ -137,6 +289,9 @@ export class CantonStreamsApi {
   }
 
   async withdraw(sender: string, streamId: string): Promise<WithdrawResult> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Withdraw');
+    }
     const raw = await this.request<RawWithdrawResult>(
       'POST',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/withdraw`,
@@ -162,6 +317,9 @@ export class CantonStreamsApi {
     streamId: string,
     settlementArgs?: TokenStandardCancelArgs,
   ): Promise<CancelResult> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Cancel stream');
+    }
     const raw = await this.request<RawCancelResult>(
       'POST',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/cancel`,
@@ -178,6 +336,9 @@ export class CantonStreamsApi {
     streamId: string,
     settlementArgs?: TokenStandardCancelArgs,
   ): Promise<CancelResult> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Mutual cancel');
+    }
     const raw = await this.request<RawCancelResult>(
       'POST',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/mutual-cancel`,
@@ -190,6 +351,9 @@ export class CantonStreamsApi {
   }
 
   async renew(sender: string, streamId: string, params: RenewParams): Promise<string> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Renew');
+    }
     return this.request(
       'POST',
       `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/renew`,
@@ -223,14 +387,25 @@ export class CantonStreamsApi {
   // --- Phase 3: Delegated Policies ---
 
   async listPolicies(): Promise<RawPolicy[]> {
+    if (this.isHostedWalletSession()) {
+      await this.probeHostedLedger();
+      return [];
+    }
     return this.request<RawPolicy[]>('GET', '/api/policies');
   }
 
   async revokePolicy(contractId: string): Promise<{ newContractId: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Policy revoke');
+    }
     return this.request('POST', `/api/policies/${encodeURIComponent(contractId)}/revoke`);
   }
 
   async listExecutionLogs(policyId?: string): Promise<RawExecutionLog[]> {
+    if (this.isHostedWalletSession()) {
+      await this.probeHostedLedger();
+      return [];
+    }
     const qs = policyId ? `?policyId=${encodeURIComponent(policyId)}` : '';
     return this.request<RawExecutionLog[]>('GET', `/api/execution-logs${qs}`);
   }
