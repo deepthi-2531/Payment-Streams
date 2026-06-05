@@ -289,7 +289,43 @@ export const partyLayerWalletClient: StreamsWalletClient = {
     // route to the first adapter whose `detectInstalled()` reports
     // success — much friendlier than the default behaviour, which
     // requires an explicit choice.
-    await client.connect(walletId ? { walletId } : { preferInstalled: true });
+    try {
+      await client.connect(walletId ? { walletId } : { preferInstalled: true });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // PartyLayer wraps adapter errors in typed `PartyLayerError`
+      // subclasses (UserRejectedError, WalletNotInstalledError,
+      // TimeoutError, TransportError). Surface the message verbatim
+      // so the inbox / connect-flow can show what actually
+      // happened. Console-log too, because some adapters fail
+      // asynchronously (popup blocked, deep-link rejected) and only
+      // leave a trace in the browser console.
+      // eslint-disable-next-line no-console
+      console.error('[partyLayerClient] connect() failed:', err);
+      return { isConnected: false, reason: msg || 'Wallet connection failed' };
+    }
+    // QR / deep-link transports (Loop, Cantor8) can resolve
+    // `connect()` before the wallet-side handshake has finished
+    // writing the session to PartyLayer's storage. Re-check
+    // getActiveSession() so we never report `isConnected: true`
+    // against a half-baked session — auth.tsx would then snapshot
+    // an empty status, leave `isAuthenticated` false, and silently
+    // strand the user on the connect screen.
+    const session = await client.getActiveSession();
+    if (!session) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        '[partyLayerClient] connect() resolved but getActiveSession() returned null. ' +
+          'Wallet response may still be in flight or the adapter failed silently. ' +
+          'Reopen the picker and try again.',
+      );
+      return {
+        isConnected: false,
+        reason:
+          'Wallet connection completed but no session was established. ' +
+          'Try again — check the wallet popup/QR has been approved.',
+      };
+    }
     return { isConnected: true, isNetworkConnected: true };
   },
 
