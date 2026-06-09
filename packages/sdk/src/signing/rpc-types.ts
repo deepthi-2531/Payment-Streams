@@ -7,8 +7,8 @@
  * (May 2026). These mirrors live here so the SDK does not need a hard
  * runtime dependency on the wallet-kernel packages.
  *
- * See `docs/integration-guide/dapp-sdk-types-reference.md` for the
- * verified type listing.
+ * Keep these mirrors aligned with the wallet gateway used by your target
+ * network before cutting a release.
  */
 
 // ---------------------------------------------------------------------------

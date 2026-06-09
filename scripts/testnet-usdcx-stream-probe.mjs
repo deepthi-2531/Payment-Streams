@@ -47,7 +47,7 @@
  * set in addition to --target mainnet. Pre-flight detects placeholder
  * "TBD::..." values in the asset registry and fails on mainnet.
  *
- * See docs/TESTNET-RUNBOOK.md for the full setup walkthrough.
+ * See docs/DEPLOYMENT.md for deployment and validation guidance.
  */
 
 import {

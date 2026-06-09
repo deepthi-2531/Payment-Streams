@@ -71,7 +71,7 @@ The dashboard uses [CIP-103](https://github.com/canton-foundation/cips/blob/main
 4. Complete the IDP sign-in in the wallet popup
 5. Dashboard transitions to the authenticated layout
 
-For a local SWK setup, see [SWK-WALLET-RUNBOOK.md](SWK-WALLET-RUNBOOK.md).
+For live sender/receiver wallet validation, see [E2E-HARNESS.md](E2E-HARNESS.md).
 
 **Skip the wallet picker for local dev:** set `VITE_SKIP_WALLET_PICKER=true` in `packages/dashboard/.env.local` to auto-select the configured Amulet remote wallet. Template: `packages/dashboard/.env.example`.
 
@@ -207,4 +207,3 @@ await client.close();
 - [REST API Reference](API.md) — full endpoint documentation
 - [Deployment Guide](DEPLOYMENT.md) — environment variables, DAR upload + vetting, production hardening
 - [Integration Example](INTEGRATION-EXAMPLE.md) — end-to-end host-app integration walkthrough
-- [Testnet Runbook](TESTNET-RUNBOOK.md) — point your local proxy + dashboard at a remote validator

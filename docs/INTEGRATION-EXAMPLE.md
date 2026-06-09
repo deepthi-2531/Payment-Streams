@@ -302,6 +302,6 @@ The proxy's executor honors the on-ledger policy bounds. The employee can revoke
 ## Where to go from here
 
 - [DEPLOYMENT.md](DEPLOYMENT.md) — full environment-variable matrix
-- [OPERATIONS.md](OPERATIONS.md) — day-2 ops, monitoring, package upgrades
+- [DEPLOYMENT.md](DEPLOYMENT.md) — environment variables, health checks, and production hardening
 - [API.md](API.md) — REST endpoint reference
-- [integration-guide/](integration-guide/) — per-asset config, CIP-103 walkthrough, dapp-sdk types reference
+- [integration-guide/](integration-guide/) — per-asset config and CIP-103 walkthrough

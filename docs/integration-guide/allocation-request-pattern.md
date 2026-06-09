@@ -152,5 +152,5 @@ The wallet-agnostic claim holds for the **majority of stream activity** (creates
 
 * [`per-asset-config.md`](./per-asset-config.md) — asset registry format (V2-only)
 * [`cip-56-v2-types-reference.md`](./cip-56-v2-types-reference.md) — verified V2 type listing
-* [`wallet-gateway-api-reference.md`](./wallet-gateway-api-reference.md) — JSON-RPC dApp API the SDK signs through
+* [`cip-103-walkthrough.md`](./cip-103-walkthrough.md) — browser-wallet flow the SDK signs through
 * [`THREAT-MODEL.md`](../THREAT-MODEL.md) — full threat model
