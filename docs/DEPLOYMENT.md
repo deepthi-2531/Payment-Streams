@@ -218,7 +218,7 @@ The dashboard talks to any [CIP-103](https://github.com/canton-foundation/cips/b
 3. Allow the dashboard origin (`http://localhost:3000`) in the wallet gateway config
 4. Open the dashboard — Connect Wallet → Amulet login → authenticated
 
-See [SWK-WALLET-RUNBOOK.md](SWK-WALLET-RUNBOOK.md) for the full walkthrough including the headless-browser caveat.
+For end-to-end wallet validation, see [E2E-HARNESS.md](E2E-HARNESS.md).
 
 ## Production considerations
 
@@ -285,10 +285,6 @@ Key metrics:
 - `TransferEventsV2` subscriber lag
 - Auto-withdraw success / failure rate per stream
 
-### Testnet reference setup
-
-For pointing your local proxy + dashboard at a remote validator over an SSH tunnel — including the alt-port scheme that lets a local sandbox coexist with the tunnel — see [TESTNET-RUNBOOK.md](TESTNET-RUNBOOK.md).
-
 ## Validation probes
 
 | Script                                   | Purpose                                                |
@@ -311,4 +307,4 @@ Keep secrets in env vars, never in the JSON config file.
 
 ## Upgrade and migration
 
-For Daml package upgrades, see [OPERATIONS.md](OPERATIONS.md). For breaking changes between releases (e.g. the 0.2.7 → 0.2.8 V2-only pivot), see [CHANGELOG.md](../CHANGELOG.md).
+For breaking changes between releases, see [CHANGELOG.md](../CHANGELOG.md).

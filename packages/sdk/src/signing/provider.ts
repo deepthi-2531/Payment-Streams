@@ -18,8 +18,8 @@
  * SDK calls `listAccounts()` to retrieve each `Wallet`'s
  * `signingProviderId` and routes per-party.
  *
- * Field names + shapes here mirror `@canton-network/core-wallet-dapp-rpc-client`
- * (verified May 2026 — see `docs/integration-guide/dapp-sdk-types-reference.md`).
+ * Field names and shapes mirror the CIP-103 dApp API types consumed by
+ * `@canton-network/dapp-sdk`.
  */
 
 import type {

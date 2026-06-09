@@ -12,8 +12,8 @@
  *   - `JsonRpcTransport` (rarely needed directly)
  *   - The 5 concrete adapter classes
  *
- * See `docs/integration-guide/wallet-gateway-api-reference.md` for the
- * verified wire contract this layer wraps.
+ * The wire contract is the CIP-103 JSON-RPC dApp API exposed by the
+ * configured wallet gateway.
  */
 
 // Interfaces + types
