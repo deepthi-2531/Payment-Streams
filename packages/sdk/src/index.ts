@@ -125,7 +125,7 @@ export type { PolicyInfo, ExecutionLogInfo } from './commands/policy.js';
 
 // SigningProvider — wallet-gateway-bound per-party signing for
 // server-side automation. Replaces the in-process node:crypto path.
-// See docs/integration-guide/wallet-gateway-api-reference.md.
+// Uses the CIP-103 JSON-RPC dApp API exposed by the configured wallet gateway.
 export {
   createSigningFromEnv,
   createSigning,

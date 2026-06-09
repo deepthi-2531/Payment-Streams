@@ -296,4 +296,4 @@ For a healthy integration, all of the following are true:
 | Ledger | `Allocation.settled` increases monotonically; `lock` decreases mirror-image; no unaccounted balance |
 | Metrics | `scripts/query-adoption-metrics.mjs` includes the stream in its per-asset count |
 
-If any of these is missing, see [OPERATIONS.md](OPERATIONS.md) for the debugging matrix.
+If any of these is missing, start with the health checks in [DEPLOYMENT.md](DEPLOYMENT.md).

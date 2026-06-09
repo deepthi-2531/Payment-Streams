@@ -208,5 +208,4 @@ automatic approval path.
 - `scripts/fetch-v2-dars.mjs`
 - `scripts/check-v2-conformance.sh`
 - `docker/docker-compose.yml`
-- `docs/HOSTED-WALLET-PLAN.md`
 - `docs/QUICKSTART.md`

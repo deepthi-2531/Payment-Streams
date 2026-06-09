@@ -1,6 +1,6 @@
 -- | Unified propose / accept / operator-consent / finalize workflow for stream creation.
 --
--- This module consolidates the previously per-settlement-mode workflows
+-- This module consolidates the earlier stream-creation workflows
 -- (`CreateStream`, `CreateTokenStandardStream`, `CreateUtilityHoldingStream`,
 -- `CreateLocalAssetStream`) into a single propose-and-accept machine
 -- parameterized over the full signatory set:

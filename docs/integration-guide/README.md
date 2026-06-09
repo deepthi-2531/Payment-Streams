@@ -25,7 +25,6 @@ You do not need all of them. Most integrations use the SDK directly
 | Run the CIP-103 conformance suite against your dApp | [`cip-103-conformance.md`](./cip-103-conformance.md) |
 | Configure your dApp for the right asset | [`per-asset-config.md`](./per-asset-config.md) |
 | Review the transitional CIP-0047/CIP-0104 marker seam | [`featured-app-rewards.md`](./featured-app-rewards.md) |
-| Pick the right settlement mode for your asset (legacy adapter view) | [`per-settlement-mode.md`](./per-settlement-mode.md) — **deprecated path; new code SHOULD use the AllocationRequest pattern** |
 
 ---
 
@@ -107,8 +106,8 @@ into `provider.prepareExecute({...})`. See `cip-103-walkthrough.md`.
 ## What you do NOT need to do
 
 - **Branch by asset name**: the library gates on V2 capability flags.
-  You pick a registered V2 asset; the library rejects assets that do
-  not advertise the required V2 allocation support.
+You pick a registered V2 asset; the library rejects assets that do
+not advertise the required V2 allocation support.
 - **Manage your own signing**: use Path A (wallet) or Path B (vault).
   Don't roll your own.
 - **Run your own Scan endpoint aggregator**: the asset registry +

@@ -166,7 +166,7 @@ Splice LocalNet validator wallet and expose a CIP-103 dApp gateway at:
 http://localhost:3030/api/v0/dapp
 ```
 
-Then follow [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md).
+For the full live-wallet flow, follow [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md).
 
 ### Run The Dashboard And Proxy Without Docker
 
@@ -209,11 +209,7 @@ Hosted wallet approval is intentionally truthful: when the selected hosted
 wallet does not expose automatic prepare-and-wait completion to the dashboard,
 the user completes approval in the wallet UI and returns to Streams.
 
-More detail:
-
-- [docs/HOSTED-WALLET-PLAN.md](docs/HOSTED-WALLET-PLAN.md)
-- [docs/SWK-WALLET-RUNBOOK.md](docs/SWK-WALLET-RUNBOOK.md)
-- [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md)
+For live wallet validation, use [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md).
 
 ## Use The SDK
 
@@ -329,10 +325,8 @@ participant.
 
 | If you want to... | Read |
 | --- | --- |
-| Ship one minimal stream | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
 | Run locally | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
 | Test with a real wallet | [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md) |
-| Understand wallet options | [docs/HOSTED-WALLET-PLAN.md](docs/HOSTED-WALLET-PLAN.md) |
 | Integrate into your dApp | [docs/integration-guide/README.md](docs/integration-guide/README.md) |
 | Understand the architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Deploy safely | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |

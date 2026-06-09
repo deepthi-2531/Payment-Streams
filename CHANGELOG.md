@@ -15,8 +15,7 @@ All notable changes to Canton Payment Streams are documented here. The format is
 
 ### Added
 
-- **Splice Wallet Kernel runbook** (`docs/SWK-WALLET-RUNBOOK.md`) — local CIP-103 wallet wiring, including CORS setup and headless-browser caveat.
-- **TestNet runbook** (`docs/TESTNET-RUNBOOK.md`) — bring proxy + dashboard up against a remote validator over an SSH tunnel (alt-port scheme to coexist with a local sandbox).
+- **Wallet-backed E2E harness docs** (`docs/E2E-HARNESS.md`) — local CIP-103 wallet wiring and live V2 flow validation guidance.
 - **`scripts/check-tunnel.sh`** — watchdog that detects when a local Canton sandbox is shadowing an SSH-tunnel port and would route gRPC to the wrong ledger.
 - **`VITE_SKIP_WALLET_PICKER`** dashboard env flag — auto-selects the configured remote wallet without showing the picker UI (for single-wallet dev environments).
 - **Opt-in `FeaturedAppActivityMarker` emission helper** for networks that still support the CIP-0047 marker path. Treat the helper as transitional and don't bake CIP-0047 reward amounts into adopter economics.
