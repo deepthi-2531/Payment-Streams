@@ -247,18 +247,18 @@ const request = buildAllocationRequest({
 
 The sender keeps the funded balance topped up via `TopUp` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit).
 
-### Milestone-gated grants
+### Milestone-gated releases
 
-For an `AcmeFoundation` grant disbursed as KPIs hit:
+For an `AcmeSponsor` milestone program disbursed as KPIs hit:
 
 ```typescript
 const request = buildAllocationRequest({
   // ...
   streamType: 'milestone',     // → MilestoneAdmin template
   milestones: [
-    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: foundationAdmin },
-    { id: '1k-users',    amount: new Decimal('50000'),  confirmer: foundationAdmin },
-    { id: '10k-users',   amount: new Decimal('100000'), confirmer: foundationAdmin },
+    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: sponsorAdmin },
+    { id: '1k-users',    amount: new Decimal('50000'),  confirmer: sponsorAdmin },
+    { id: '10k-users',   amount: new Decimal('100000'), confirmer: sponsorAdmin },
   ],
 });
 ```
@@ -302,6 +302,6 @@ The proxy's executor honors the on-ledger policy bounds. The employee can revoke
 ## Where to go from here
 
 - [DEPLOYMENT.md](DEPLOYMENT.md) — full environment-variable matrix
-- [OPERATIONS.md](OPERATIONS.md) — day-2 ops, monitoring, package upgrades
+- [DEPLOYMENT.md](DEPLOYMENT.md) — environment variables, health checks, and production hardening
 - [API.md](API.md) — REST endpoint reference
-- [integration-guide/](integration-guide/) — per-asset config, CIP-103 walkthrough, dapp-sdk types reference
+- [integration-guide/](integration-guide/) — per-asset config and CIP-103 walkthrough

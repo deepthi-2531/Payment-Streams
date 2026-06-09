@@ -287,7 +287,7 @@ Aggregated adoption metrics computed from per-asset Scan endpoints (configured i
 |---|---|---|
 | `since` | string (ISO 8601) | Earliest event timestamp |
 | `until` | string (ISO 8601) | Latest event timestamp (default: now) |
-| `excludeParties` | string (CSV) | Party ids to exclude (e.g. grantee + affiliates) |
+| `excludeParties` | string (CSV) | Party ids to exclude from aggregate metrics |
 
 **Response — `200 OK`:**
 

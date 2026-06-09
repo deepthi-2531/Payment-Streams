@@ -366,7 +366,7 @@ export interface Stream {
   readonly escrowRef?: EscrowRef;
 }
 
-/** Pending request awaiting recipient acceptance before a stream becomes active. */
+/** Pre-activation stream request awaiting the required wallet/token-standard approval. */
 export interface PendingStreamRequest {
   /** Canton ledger contract ID of the CreateStreamRequest. */
   readonly contractId: string;

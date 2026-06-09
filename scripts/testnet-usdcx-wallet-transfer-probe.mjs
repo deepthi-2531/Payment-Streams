@@ -108,7 +108,7 @@ const token = signHs256(
     aud: config.audience,
     iat: now,
     exp: now + Math.max(60, config.ttlSeconds || 3600),
-    jti: `codex-wallet-transfer-${now}`,
+    jti: `streams-wallet-transfer-${now}`,
   },
   config.authSecret,
 );

@@ -31,7 +31,7 @@
  *   STREAM_DURATION_SECONDS   defaults to 60
  *   TARGET_NETWORK            alternative to --target flag
  *
- * See docs/TESTNET-RUNBOOK.md for the full setup walkthrough.
+ * See docs/DEPLOYMENT.md for deployment and validation guidance.
  */
 
 import { loadLocalScriptConfig } from './local-config.mjs';
@@ -215,7 +215,7 @@ async function main() {
     console.error('  NumericLegacy sandbox flow used for accrual-math verification.');
     console.error('  Mainnet/TestNet CC runs should use the production probe instead.');
     console.error('');
-    console.error('  See docs/TESTNET-RUNBOOK.md for the full setup.');
+    console.error('  See docs/DEPLOYMENT.md for setup guidance.');
     process.exit(2);
   }
 

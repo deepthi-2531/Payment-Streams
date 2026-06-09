@@ -103,9 +103,7 @@ function required(
 ): string {
   const v = env[name];
   if (!v || !v.trim()) {
-    throw new Error(
-      `Missing required env var: ${name}. See docs/integration-guide/dapp-sdk-types-reference.md for the verified shape.`,
-    );
+    throw new Error(`Missing required env var: ${name}. See docs/integration-guide/README.md.`);
   }
   return v.trim();
 }
