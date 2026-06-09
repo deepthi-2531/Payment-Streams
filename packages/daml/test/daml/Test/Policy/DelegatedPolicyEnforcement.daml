@@ -2,7 +2,7 @@
 --
 -- Each test exercises one specific enforcement rule from
 -- `CantonStreams.Policy.DelegatedPolicy.ExecutePolicy`. The tests
--- collectively serve as the M3 audit-readiness evidence that the
+-- collectively verify that the
 -- delegated-execution contract enforces what it claims to enforce
 -- entirely on-ledger (no off-chain trust required).
 --
@@ -79,7 +79,7 @@ setupPolicy sender recipient executor escrowOperator
       policyId
       sender
       executor
-      recipient   -- [M5] state visibility for recipient as observer
+      recipient   -- state visibility for recipient as observer
       totalExecutions = 0
       lastExecutionTime = None
       recentExecutions = []

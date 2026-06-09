@@ -1,21 +1,10 @@
-/**
- * DashboardPage — STR-116 Phase 5 reskin to cc-streams aesthetic.
- *
- * Layout adapted from the mock's dashboard.jsx:
- *   - Greeting header with active count + inflow/outflow rate
- *   - Asset breakdown cards (one per asset with positive flow)
- *   - "Awaiting your acceptance" inbox preview when pending != 0
- *   - "Streaming now" list of active streams (first 6)
- *
- * Data wiring unchanged: `useStreams` + `usePendingStreamRequests`
- * TanStack hooks against the proxy. Mutations / live ticker remain
- * as separate concerns (Phase 6 wizard + Phase 7 wallet).
- */
+/** Dashboard overview for wallet holdings, incoming streams, and active streams. */
 
 import { Link } from 'react-router';
-import { Plus, Inbox, ArrowUpRight, TrendingUp } from 'lucide-react';
+import { Plus, Inbox, ArrowUpRight, TrendingUp, Wallet } from 'lucide-react';
 import { useMemo } from 'react';
 import { useStreams } from '../hooks/useStreams.js';
+import { useWalletHoldings } from '../hooks/useWalletHoldings.js';
 import { useAuth } from '../store/auth.js';
 import { StreamStatus } from '@canton-streams/sdk/browser';
 import {
@@ -25,23 +14,22 @@ import {
   SectionHeader,
   StatusBadge,
 } from '../components/common/index.js';
-// Phase 7 (STR-118): AuthGate in App.tsx renders ConnectFlow when the
-// user is unauthenticated, so DashboardPage no longer needs an unauth
-// branch — it's only mounted once we have a session.
+import type { WalletHolding } from '../lib/walletHoldings.js';
 
 export function DashboardPage() {
   const { party } = useAuth();
   const streamsQ = useStreams();
-  // "Inbox preview" surfaces streams where this party is the recipient.
-  // The dashboard does not run a propose/accept ceremony today (V2
-  // funding approval happens in the wallet), so showing
-  // `usePendingStreamRequests()` here always rendered zero and
-  // implied a non-existent acceptance step. Switched to active streams
-  // filtered by recipient.
+  // Incoming preview surfaces streams where this party is the recipient.
   const incomingQ = useStreams(party ? { recipient: party } : undefined);
 
   const streams = streamsQ.data;
   const pendingRequests = incomingQ.data;
+  const holdingsQ = useWalletHoldings();
+  const holdingsResult = holdingsQ.data;
+  const holdings: readonly WalletHolding[] = holdingsResult?.holdings ?? [];
+  const hasHoldings = holdings.length > 0;
+  const unsupportedReason =
+    holdingsResult?.strategy === 'unsupported' ? holdingsResult.reason : null;
 
   // Aggregate by asset for the asset cards.
   const byAsset = useMemo(() => {
@@ -114,6 +102,58 @@ export function DashboardPage() {
           </>
         }
       />
+
+      {/* Wallet holdings */}
+      {unsupportedReason && (
+        <div
+          className="card"
+          style={{
+            marginTop: 8,
+            marginBottom: 32,
+            padding: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            color: 'var(--fg-2)',
+          }}
+        >
+          <Wallet size={14} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+          <span style={{ fontSize: 12 }}>{unsupportedReason}</span>
+        </div>
+      )}
+      {hasHoldings && holdings && (
+        <div style={{ marginTop: 8, marginBottom: 32 }}>
+          <SectionHeader
+            title="Your wallet"
+            count={holdings.length}
+            action={
+              <Link to="/create" className="btn btn-ghost btn-sm">
+                Stream an asset <ArrowUpRight size={12} />
+              </Link>
+            }
+          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+              gap: 12,
+            }}
+          >
+            {holdings.map((h) => (
+              <WalletAssetCard key={`${h.instrumentAdmin}:${h.instrumentId}`} holding={h} />
+            ))}
+          </div>
+        </div>
+      )}
+      {holdingsQ.isError && (
+        <div style={{ marginTop: 8, marginBottom: 32 }}>
+          <ErrorState
+            error={holdingsQ.error}
+            title="Could not load wallet holdings"
+            onRetry={() => holdingsQ.refetch()}
+          />
+        </div>
+      )}
 
       {/* Asset breakdown cards */}
       {streamsQ.isPending && (
@@ -418,4 +458,77 @@ function fmt(n: number, decimals = 2): string {
 function partyShort(p: string): string {
   const sep = p.indexOf('::');
   return sep > 0 ? p.slice(0, Math.min(sep, 16)) : p.slice(0, 16);
+}
+
+/**
+ * Format a wallet-neutral integer minor-unit balance for display.
+ * Mirrors `formatLoopBalance` from lib/loopWallet but works on raw
+ * (rawString, decimals) pairs so callers don't have to hold onto
+ * the original adapter type.
+ */
+function formatWalletBalance(raw: string, decimals: number): string {
+  if (!raw) return '0';
+  if (decimals === 0) return raw;
+  const padded = raw.padStart(decimals + 1, '0');
+  const intPart = padded.slice(0, padded.length - decimals);
+  const fracPart = padded.slice(padded.length - decimals).replace(/0+$/, '');
+  return fracPart ? `${intPart}.${fracPart}` : intPart;
+}
+
+function WalletAssetCard({ holding }: { holding: WalletHolding }) {
+  const unlocked = formatWalletBalance(holding.unlockedBalance, holding.decimals);
+  const locked = formatWalletBalance(holding.lockedBalance, holding.decimals);
+  return (
+    <Link
+      to={`/create?asset=${encodeURIComponent(holding.instrumentId)}&admin=${encodeURIComponent(holding.instrumentAdmin)}`}
+      className="card"
+      style={{
+        textDecoration: 'none',
+        color: 'inherit',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <Wallet size={14} style={{ color: 'var(--accent)' }} />
+        <strong style={{ fontSize: 14 }}>{holding.symbol}</strong>
+        {holding.isCantonCoin && (
+          <span
+            className="mono"
+            style={{
+              fontSize: 9,
+              fontWeight: 600,
+              background: 'var(--accent-soft)',
+              color: 'var(--accent)',
+              padding: '1px 6px',
+              borderRadius: 999,
+            }}
+          >
+            CC
+          </span>
+        )}
+      </div>
+      <div
+        className="mono"
+        style={{ fontSize: 18, fontWeight: 600, lineHeight: 1 }}
+        title={`Unlocked balance: ${unlocked}`}
+      >
+        {unlocked}
+      </div>
+      {locked !== '0' && (
+        <div
+          className="mono"
+          style={{ fontSize: 11, color: 'var(--fg-3)' }}
+          title={`Locked balance: ${locked}`}
+        >
+          + {locked} locked
+        </div>
+      )}
+      <div style={{ fontSize: 11, color: 'var(--fg-3)' }} title={holding.instrumentAdmin}>
+        {holding.issuerName}
+      </div>
+    </Link>
+  );
 }

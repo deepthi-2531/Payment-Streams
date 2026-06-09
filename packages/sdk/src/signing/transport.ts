@@ -4,8 +4,8 @@
  * JSON-RPC 2.0 transport for the Splice Wallet Gateway dApp API.
  *
  * Shared by all 5 `SigningProvider` adapters (Participant / Fireblocks /
- * Blockdaemon / Dfns / WalletGatewayInternal). Per STR-92 the gateway
- * exposes JSON-RPC 2.0 at `/api/v0/dapp`; this transport handles:
+ * Blockdaemon / Dfns / WalletGatewayInternal). The gateway exposes
+ * JSON-RPC 2.0 at `/api/v0/dapp`; this transport handles:
  *
  *   * Request id correlation
  *   * Batch requests

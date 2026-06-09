@@ -328,11 +328,9 @@ async function authorizeUserRequest(req: Request, config: AuthConfig): Promise<A
       );
     }
   } else {
-    // Dev mode (STR-83 advance): the canonical path is the wallet-issued
-    // Authorization: Bearer <token> with a `party` (or `sub`) claim. Extract
-    // identity from the JWT. The legacy X-Canton-Party header is still
-    // honored as a fallback for older scripts / curl probes; once all
-    // callers migrate, the fallback can be deleted (full STR-83 close).
+    // Dev mode: prefer wallet-issued Authorization: Bearer <token> with
+    // a `party` or `sub` claim. X-Canton-Party remains as a local script
+    // fallback.
     const jwtParty = token ? extractPartyFromJwtUnsafe(token) : null;
     const headerParty = req.headers['x-canton-party'] as string | undefined;
     party = jwtParty ?? headerParty ?? '';
@@ -516,9 +514,8 @@ export function extractPartyFromJwtUnsafe(token: string): string | null {
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Legacy helper retained for reference — the dev-auth path now reads the
-// party from the JWT `party`/`sub` claim directly (STR-83 Phase 7).
-// Kept here for documentation; not currently called from anywhere.
+// Legacy helper retained for local scripts that still pass X-Canton-Party.
+// The primary dev-auth path reads party from JWT `party`/`sub` claims.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 function extractPartyFromHeader(req: Request): string {
   const party = req.headers['x-canton-party'] as string | undefined;

@@ -1,8 +1,6 @@
 # AllocationRequest pattern (V2-only)
 
-> **Status (May 2026 / STR-79 V2-only pivot)**: this library supports the
-> CIP-56 Token Standard V2 only. V1 was dropped — see [STR-79 decision](https://linear.app/bitdynamics/issue/STR-79)
-> for the rationale.
+> **Status:** this library supports the CIP-56 Token Standard V2 only.
 >
 > Per [CIP-0112 §5 Backwards Compatibility](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility),
 > V1 assets are expected to publish V2 interfaces alongside V1 (dual-
@@ -56,7 +54,7 @@
 
 ## Choice vocabulary (V2)
 
-Verified against [`canton-network/splice@token-standard-v2-upcoming`](https://github.com/canton-network/splice/tree/token-standard-v2-upcoming/token-standard):
+Verified against the upstream [`canton-network/splice`](https://github.com/canton-network/splice/tree/main/token-standard) Token Standard packages:
 
 | Operation | V2 choice | Actor | Where the call originates |
 |---|---|---|---|
@@ -91,7 +89,7 @@ A payment stream is exactly the iterated case:
 
 `Allocation.originalAllocationId` ties all iterations together for off-chain correlation.
 
-## Behavioral interop — what a generic V2 wallet can and cannot do (STR-91)
+## Behavioral interop — what a generic V2 wallet can and cannot do
 
 Earlier framing of this library overclaimed "wallet-agnostic" interop. Be precise about it:
 
@@ -105,7 +103,7 @@ A V2-only wallet — one that implements `Splice.Api.Token.AllocationV2` + `Spli
 * Sign `Allocation_Cancel` to release the committed allocation
 * Display `numIterations`, `originalAllocationId`, and the leg list verbatim
 
-This is the **operability** acceptance gate verified by [STR-89](https://linear.app/bitdynamics/issue/STR-89) `V2WalletOnly` scripts.
+This is the operability bar for the `V2WalletOnly` scenarios.
 
 ### A wallet that knows ONLY the V2 standard vocabulary CANNOT
 
@@ -147,12 +145,12 @@ The wallet-agnostic claim holds for the **majority of stream activity** (creates
 
 ## Reference implementations to mirror
 
-* [`splice-token-test-trading-app-v2/TradingAppV2.daml`](https://github.com/canton-network/splice/blob/token-standard-v2-upcoming/token-standard/examples/splice-token-test-trading-app-v2/daml/Splice/Testing/Apps/TradingAppV2.daml) — canonical V2 app that emits AllocationRequest + drives `SettlementFactory_SettleBatch`. Our `StreamEscrow` admin contract follows the same shape (group transfer legs by authorizer; emit per-authorizer requests; executor batch-settles) — diff: streams iterate, trades don't.
-* [`splice-token-standard-v2-test/Tests/TestIteratedSettlement.daml`](https://github.com/canton-network/splice/blob/token-standard-v2-upcoming/token-standard/splice-token-standard-v2-test/daml/Splice/Tests/TestIteratedSettlement.daml) — canonical end-to-end test for committed + iterated allocations. Our streams acceptance test ([STR-89](https://linear.app/bitdynamics/issue/STR-89)) mirrors this pattern using the same `Splice.Testing.TokenStandard.WalletClientV2` fixtures.
+* [`splice-token-test-trading-app-v2/TradingAppV2.daml`](https://github.com/canton-network/splice/blob/main/token-standard/examples/splice-token-test-trading-app-v2/daml/Splice/Testing/Apps/TradingAppV2.daml) — canonical V2 app that emits AllocationRequest + drives `SettlementFactory_SettleBatch`. Our `StreamEscrow` admin contract follows the same shape: group transfer legs by authorizer, emit per-authorizer requests, executor batch-settles. Streams differ because they iterate over time.
+* [`splice-token-standard-v2-test/Tests/TestIteratedSettlement.daml`](https://github.com/canton-network/splice/blob/main/token-standard/splice-token-standard-v2-test/daml/Splice/Tests/TestIteratedSettlement.daml) — canonical end-to-end test for committed and iterated allocations.
 
 ## Related docs
 
 * [`per-asset-config.md`](./per-asset-config.md) — asset registry format (V2-only)
 * [`cip-56-v2-types-reference.md`](./cip-56-v2-types-reference.md) — verified V2 type listing
 * [`wallet-gateway-api-reference.md`](./wallet-gateway-api-reference.md) — JSON-RPC dApp API the SDK signs through
-* [`THREAT-MODEL.md`](../THREAT-MODEL.md) — full threat-model packet for the audit firm
+* [`THREAT-MODEL.md`](../THREAT-MODEL.md) — full threat model

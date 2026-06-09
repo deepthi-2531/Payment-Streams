@@ -1,9 +1,8 @@
 /**
  * AcceptModal — review + accept a pending incoming stream request.
  *
- * Phase 6 (STR-122). Uses the real `useAcceptStream` mutation from
- * `hooks/useStreams.ts`. Shows the sender + total + vesting + settlement
- * up front so the user can verify before signing. No mock data.
+ * Uses the real `useAcceptStream` mutation and shows sender, total,
+ * vesting, and settlement details before the user signs.
  */
 
 import { useState } from 'react';

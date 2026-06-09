@@ -1,12 +1,11 @@
 /**
  * @module settlement/adapters/token-standard-v2
  *
- * CIP-56 V2 token-standard settlement adapter for the SDK (V2-only per STR-79).
+ * CIP-56 V2 token-standard settlement adapter for the SDK.
  *
- * V1 was dropped from this library; see STR-79 for the rationale and
- * CIP-0112 §5 for the path back to V1-asset support (assets are expected
- * to publish V2 interfaces alongside V1 per the dual-implementation
- * normative requirement).
+ * V1-only assets are not supported because stream settlement requires V2
+ * allocations. Per CIP-0112 §5, V1 assets are expected to publish V2
+ * interfaces alongside V1.
  *
  * The V2 adapter uses the V2 interfaces (HoldingV2, TransferInstructionV2,
  * AllocationV2, AllocationInstructionV2, AllocationRequestV2,
@@ -22,7 +21,7 @@
  *
  * This module exports the type surfaces and dispatch metadata used by
  * the V2 settlement path. Callers should branch on `getAssetCapabilities`
- * (STR-33) rather than importing this module directly.
+ * rather than importing this module directly.
  */
 
 import type { InstrumentIdV2, AccountV2 } from '../../types/stream.js';

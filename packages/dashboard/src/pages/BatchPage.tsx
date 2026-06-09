@@ -1,5 +1,5 @@
 /**
- * BatchPage — STR-117 Phase 6.
+ * Batch stream creation page.
  *
  * Renders the BatchUpload flow (papaparse → zod validate → fan-out
  * useCreateStream mutations). Real submit; no mock data.

@@ -1,17 +1,6 @@
 /**
- * BatchUpload — STR-117 Phase 6.
- *
- * Drop-CSV → parse with papaparse → zod-validate every row → preview
- * → fan-out N `useCreateStream` mutations with per-row progress.
- *
- * The proxy does not (yet) expose a `/streams/batch` endpoint, so the
- * page issues N parallel-but-bounded create commands and aggregates
- * status row-by-row. When that endpoint lands, swap the per-row call
- * for a single batched mutation — the UI doesn't need to change.
- *
- * Every row is V2 token-standard explicit: the CSV must carry the
- * funding reference, Amulet account refs, escrow operator, and V2
- * instrument admin. We do not fall back to legacy/sandbox settlement.
+ * CSV batch upload for creating multiple streams with per-row validation,
+ * preview, and bounded parallel submission.
  */
 
 import { useMemo, useRef, useState, type CSSProperties } from 'react';

@@ -4,8 +4,6 @@
  * Inline error message component for forms. Styled to match the
  * dashboard's design tokens; targeted by `<FormField>` and usable
  * directly by callers that need to surface non-field-level errors.
- *
- * Phase 4 / STR-115.
  */
 
 import type { ReactNode } from 'react';

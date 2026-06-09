@@ -1,10 +1,4 @@
-/**
- * Wallet-neutral dashboard contract.
- *
- * Keep this file free of concrete wallet SDK imports. The hosted
- * PartyLayer implementation and the LocalNet dapp-sdk/Amulet
- * implementation should both adapt into this shape.
- */
+/** Wallet-neutral dashboard contract. */
 
 export type WalletLayer = 'dapp-sdk' | 'partylayer';
 
@@ -44,14 +38,7 @@ export interface StreamsWalletAccount {
   readonly signingProviderId?: string | null;
 }
 
-/**
- * Entry in a hosted-multi-wallet picker. Returned by
- * `listWallets()` on layers with `capabilities.hostedMultiWallet`.
- * On the partylayer client, each entry maps to a PartyLayer
- * `WalletInfo` (Loop, Console, Cantor8, ...). The dapp-sdk client
- * returns a single synthesised entry for the Amulet gateway it's
- * already pointed at.
- */
+/** Entry shown by hosted-multi-wallet picker UIs. */
 export interface StreamsWalletEntry {
   readonly id: string;
   readonly name: string;
@@ -62,8 +49,7 @@ export interface StreamsWalletEntry {
   readonly installed?: boolean;
   /** Where to install the wallet if it isn't yet. */
   readonly installUrl?: string;
-  /** PartyLayer's CIP-0103-native marker (informational; lets the
-   * UI badge "CIP-103 NATIVE" entries). */
+  /** Whether the provider reports native CIP-103 support. */
   readonly cip0103Native?: boolean;
 }
 
@@ -75,17 +61,13 @@ export type StreamsWalletAccountsHandler = (
 export type StreamsWalletTxChangedHandler = (event: unknown) => void;
 
 /**
- * STR-132 capability bag.
- *
  * Each flag tells the dashboard whether a specific Streams flow can
  * be driven through this wallet layer. The optional methods on
  * `StreamsWalletClient` (`ledgerApi`, `prepareExecuteAndWait`) are
  * only safe to call when the matching capability is `true`.
  *
- * Call-sites check capabilities, NOT `typeof client.method === 'function'`:
- * a thrown stub (the PartyLayer unsupported client) defines the
- * method but the capability is `false`. That keeps the gate at the
- * contract, not at the runtime.
+ * Call-sites check capabilities, not method presence, so unsupported
+ * optional methods cannot be invoked accidentally.
  */
 export interface WalletCapabilities {
   /** Can issue arbitrary CIP-0103 `ledgerApi` queries against the
@@ -96,12 +78,7 @@ export interface WalletCapabilities {
    * for the future inbox AllocationRequest-accept swap from
    * `walletClient.open()` to a real wallet-signed exercise. */
   readonly prepareExecuteAndWait: boolean;
-  /** Wallet renders V2 token-standard AllocationRequest acceptance
-   * UX natively (Amulet on the
-   * `token-standard-v2-upcoming` branch + the PR canton-network/splice#5697
-   * preview do; older builds do not). When false the inbox shows the
-   * "open wallet" copy rather than promising in-wallet V2 receiver
-   * UX. */
+  /** Wallet renders V2 token-standard AllocationRequest acceptance UX. */
   readonly v2AllocationRequestUx: boolean;
   /** Wallet UI is a hosted multi-wallet picker (PartyLayer) rather
    * than a single-wallet flow (dapp-sdk + a single remote adapter).
@@ -117,16 +94,14 @@ export interface StreamsWalletClient {
   readonly layer: WalletLayer;
   readonly name: string;
 
-  /** Capability bag for STR-132 gating. Keep this in sync with the
+  /** Capability bag for flow gating. Keep this in sync with the
    * concrete methods the layer actually implements; a `false` flag
    * means call-sites MUST NOT invoke the matching method even if it
-   * is defined on the object (the unsupported PartyLayer stub
-   * defines them but throws). */
+   * is defined on the object. */
   readonly capabilities: WalletCapabilities;
 
   /** @deprecated Use `capabilities.hostedMultiWallet` instead.
-   * Kept for one release so call-sites can migrate without breakage;
-   * STR-133 will drop it. */
+   * Kept temporarily so existing call-sites can migrate without breakage. */
   readonly supportsHostedMultiWallet: boolean;
 
   init(): Promise<void>;

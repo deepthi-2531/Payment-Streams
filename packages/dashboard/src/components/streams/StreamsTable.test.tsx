@@ -1,6 +1,4 @@
 /**
- * StreamsTable — Phase 8 / STR-119.
- *
  * Smoke-level rendering: empty-state path + a populated rows path.
  * We construct Stream objects directly (not via the API hooks) so the
  * test focuses on render logic, not data wiring.

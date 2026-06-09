@@ -5,7 +5,7 @@
  * 232px sidebar + flex main content grid. The `<Outlet />` slot renders
  * the active route's page.
  *
- * STR-112 — Phase 2 of the UI integration.
+ * Dashboard shell layout.
  */
 import type { CSSProperties } from 'react';
 import { Outlet, useLocation } from 'react-router';

@@ -23,23 +23,23 @@
  *   SYNCHRONIZER_ID                           synchronizer id
  *   CANTON_HOST + CANTON_PORT                 gRPC endpoint
  *   CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID  vetted DAR package id
- *   CANTON_STREAMS_WALLET_GATEWAY_URL         Wallet Gateway dApp API base URL (STR-90)
- *   CANTON_STREAMS_WALLET_GATEWAY_TOKEN       Wallet Gateway session token (STR-90)
+ *   CANTON_STREAMS_WALLET_GATEWAY_URL         Wallet Gateway dApp API base URL
+ *   CANTON_STREAMS_WALLET_GATEWAY_TOKEN       Wallet Gateway session token
  *   SENDER_PARTY                              funded sender wallet (signing handled by gateway)
  *   RECIPIENT_PARTY                           recipient wallet (signing handled by gateway)
  *   ESCROW_PARTY                              service party
  *   INSTRUMENT_ID / INSTRUMENT_ADMIN /        asset routing (or use --asset-key)
  *   INSTRUMENT_DEPOSITORY
  *
- * ## STR-90: in-process private keys removed
+ * ## Signing model
  *
  * Previous versions of this probe accepted `SENDER_PRIVATE_KEY` and
  * `RECIPIENT_PRIVATE_KEY` env vars and signed prepared-transaction
- * hashes in-process via `node:crypto`. That path is gone — per
- * STR-83/STR-84, the Wallet Gateway holds all signing keys and the
- * probe uses the SDK `SigningProvider` to delegate prepare → sign →
- * execute. The Wallet Gateway connection (URL + session token) is
- * the only signing config the probe needs.
+ * hashes in-process via `node:crypto`. That path is gone. The Wallet
+ * Gateway holds all signing keys and the probe uses the SDK
+ * `SigningProvider` to delegate prepare, sign, and execute. The Wallet
+ * Gateway connection (URL + session token) is the only signing config
+ * the probe needs.
  *
  * ## Mainnet safety
  *
@@ -89,7 +89,7 @@ const config = {
   ),
   senderParty: env("SENDER_PARTY"),
   recipientParty: env("RECIPIENT_PARTY"),
-  // STR-90: signing now goes through the Wallet Gateway via SigningProvider.
+  // Signing now goes through the Wallet Gateway via SigningProvider.
   // Private key env vars (SENDER_PRIVATE_KEY / RECIPIENT_PRIVATE_KEY) are
   // intentionally NOT read here — the gateway holds the keys.
   escrowParty: env("ESCROW_PARTY"),
@@ -171,7 +171,7 @@ function fingerprintFromParty(party) {
   return pieces[pieces.length - 1] || "";
 }
 
-// STR-90: signPreparedHash() is gone. The Wallet Gateway signs prepared
+// signPreparedHash() is gone. The Wallet Gateway signs prepared
 // transactions on behalf of the configured party. The probe now calls
 // `signingResolver.forParty(party).prepareExecuteAndWait({...})` which
 // delegates the entire prepare → sign → execute flow to the gateway.
@@ -309,7 +309,7 @@ async function waitForContract(matchFn, parties, label, attempts = 40) {
 }
 
 /**
- * STR-90: prepareAndExecute now delegates to the Wallet Gateway via
+ * prepareAndExecute now delegates to the Wallet Gateway via
  * SigningProvider.prepareExecuteAndWait. The gateway performs the
  * prepare → sign → execute round-trip server-side using whichever
  * signing-provider kind (participant / Fireblocks / Blockdaemon /
@@ -533,15 +533,14 @@ async function applyAssetRegistryOverride() {
     console.error(`Asset "${assetKey}" not in registry. Available: ${Object.keys(registry.assets ?? {}).join(", ")}`);
     process.exit(2);
   }
-  // STR-79 V2-only pivot: V1 fields are gone from the asset registry.
+  // V1 fields are gone from the asset registry.
   // This V1 probe is superseded by the V2-only equivalent that lands once
   // CC and USDCx publish V2 interfaces per CIP-0112 §5. Until then, this
   // probe is non-functional.
   console.error(
-    `testnet-usdcx-stream-probe.mjs is superseded by the V2-only architecture (STR-79). ` +
+    `testnet-usdcx-stream-probe.mjs is superseded by the V2-only architecture. ` +
     `The original V1 + TokenStandardCustody flow is no longer supported by the library. ` +
-    `Per CIP-0112 §5, USDCx is expected to publish V2 interfaces; once it does, a V2-equivalent ` +
-    `probe will be added (track via STR-86 / STR-78).`,
+    `Per CIP-0112 section 5, USDCx is expected to publish V2 interfaces; once it does, use the V2 probe.`,
   );
   process.exit(2);
   // Unreachable but kept for type-flow until the file is deleted in a later sweep.
@@ -603,14 +602,14 @@ async function main() {
   required(config.senderParty, "SENDER_PARTY");
   required(config.recipientParty, "RECIPIENT_PARTY");
   required(config.escrowParty, "ESCROW_PARTY");
-  // STR-90: Wallet Gateway connection is the only signing config required.
+  // Wallet Gateway connection is the only signing config required.
   required(
     env("CANTON_STREAMS_WALLET_GATEWAY_URL"),
-    "CANTON_STREAMS_WALLET_GATEWAY_URL (STR-90 — signing now via gateway)",
+    "CANTON_STREAMS_WALLET_GATEWAY_URL (signing now via gateway)",
   );
   required(
     env("CANTON_STREAMS_WALLET_GATEWAY_TOKEN"),
-    "CANTON_STREAMS_WALLET_GATEWAY_TOKEN (STR-90 — signing now via gateway)",
+    "CANTON_STREAMS_WALLET_GATEWAY_TOKEN (signing now via gateway)",
   );
   required(config.instrumentAdmin, "INSTRUMENT_ADMIN");
   required(config.instrumentDepository, "INSTRUMENT_DEPOSITORY");
@@ -618,7 +617,7 @@ async function main() {
   const logger = createLogger("token-standard-probe", env("LOG_LEVEL", "info"));
   const orchestrator = createDefaultOrchestrator();
 
-  // STR-90: bootstrap the SigningProvider resolver from env. The
+  // Bootstrap the SigningProvider resolver from env. The
   // resolver lazy-binds each party to its gateway-owned key on first
   // use; per-party caching keeps subsequent calls fast.
   const signingFactory = createSigningFromEnv();

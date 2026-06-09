@@ -1,18 +1,8 @@
 #!/usr/bin/env node
 /**
- * Fetch CIP-56 V2 token-standard DARs from
- * `canton-network/splice@token-standard-v2-upcoming` and place them in
- * `packages/daml/main/.lib/` so the V2 adapter can compile against the
- * real V2 interfaces instead of the stubbed type mirrors.
- *
- * Per the V2-only architectural pivot (STR-79), this fetch is the
- * dependency unlock for the entire M3 critical path:
- *
- *   - Real V2 DARs replace `packages/daml/main/daml/CantonStreams/Settlement/Stubs/`
- *   - Test infrastructure DARs (splice-token-standard-v2-test, splice-test-token-v2)
- *     unlock STR-101: streams acceptance tests use canonical
- *     `Splice.Testing.TokenStandard.WalletClientV2` + `mkAmuletTestCase`
- *     fixtures + `TestIteratedSettlement`-style assertions
+ * Fetch CIP-56 V2 token-standard DARs from canton-network/splice and
+ * place them in `packages/daml/main/.lib/` so the Daml package can
+ * compile against the real V2 interfaces.
  *
  * The script supports three fetch modes, picked via `--mode`:
  *
@@ -25,11 +15,8 @@
  *     on PATH.
  *
  *   `--mode binary-release`
- *     Try GitHub release artifacts. As of token-standard-v2-upcoming
- *     branch, no binary DARs are published; this mode emits a clear
- *     "not yet published" message and exits with a non-zero status.
- *     Once Splice publishes V2 DARs as release artifacts, this is the
- *     fastest path.
+ *     Try GitHub release artifacts. If no binary DARs are published,
+ *     this mode emits a clear message and exits with a non-zero status.
  *
  *   `--mode local`
  *     Use DARs already present in a local clone of the Splice repo
@@ -37,18 +24,8 @@
  *     just copies + hashes. Useful in CI when an upstream job built
  *     the DARs already.
  *
- * After successful fetch, follow STR-65's downstream steps:
- *
- *   1. Verify hashes in `packages/daml/main/.lib/V2_DAR_HASHES.json`
- *   2. Uncomment the V2 deps in `packages/daml/main/daml.yaml`
- *   3. Delete `packages/daml/main/daml/CantonStreams/Settlement/Stubs/`
- *   4. Update the 4 import lines in StreamEscrow, StreamFlow,
- *      MilestoneEscrow, AllocationBridge to import from the real
- *      `Splice.Api.Token.*` modules instead of `Settlement.Stubs.*`
- *   5. Remove `-Wno-upgrade-interfaces` from `daml.yaml`
- *   6. Run `dpm build --all` to verify
- *   7. Run `scripts/build-template-manifest.mjs` to refresh the
- *      template-id manifest
+ * After a successful fetch, verify the hashes in
+ * `packages/daml/main/.lib/V2_DAR_HASHES.json`, then run the Daml build.
  *
  * Usage:
  *
@@ -59,7 +36,7 @@
  *   node scripts/fetch-v2-dars.mjs --dry-run                          # don't write
  *
  * Sources:
- *   - https://github.com/canton-network/splice/tree/token-standard-v2-upcoming/token-standard
+ *   - https://github.com/canton-network/splice/tree/main/token-standard
  */
 
 import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
@@ -76,10 +53,10 @@ const TARGET_DIR = resolve(REPO_ROOT, 'packages/daml/main/.lib');
 const SPLICE_REPO_URL = 'https://github.com/canton-network/splice.git';
 
 /**
- * Pinned upstream commit on `token-standard-v2-upcoming` that this repo's
+ * Pinned upstream commit that this repo's
  * V2 surface was last verified against. Maintainers should:
  *
- *   1. Run `git ls-remote $SPLICE_REPO_URL refs/heads/token-standard-v2-upcoming`
+ *   1. Run `git ls-remote $SPLICE_REPO_URL refs/heads/main`
  *      before a release to capture the current branch tip.
  *   2. Bump SPLICE_PINNED_COMMIT to that hash.
  *   3. Re-run `node scripts/fetch-v2-dars.mjs --mode source-build` to
@@ -96,33 +73,6 @@ export const SPLICE_PINNED_COMMIT = '2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea';
 export const SPLICE_PINNED_AS_OF = '2026-06-02';
 
 /**
- * Opt-in preview pin: the Splice Amulet wallet's frontend support for
- * V2 committed-iterated allocations (the wallet half of our V2 stream
- * E2E) lives on PR canton-network/splice#5697 — branch
- * `oriol/initialted-settlement-fe`, head sha
- * `73c68d16ba93346a80418662f94a7877e3938f91`. Base branch is the same
- * `token-standard-v2-upcoming` ref the main `SPLICE_PINNED_COMMIT` is
- * cut from, so building LocalNet from this commit gives us the same
- * V2 token-standard interface DARs plus the wallet UI that creates /
- * accepts committed allocations with `nextIterationFunding`.
- *
- * Until #5697 merges, we do NOT bump `SPLICE_PINNED_COMMIT` to this
- * sha — the main pin stays on a merged ref so a clean checkout always
- * builds against stable upstream. Operators running the wallet-backed
- * E2E harness opt in explicitly by either:
- *
- *   - exporting `SPLICE_PINNED_COMMIT=<this sha>` before
- *     `scripts/start-localnet-e2e.sh`; or
- *   - passing `splice_pinned_commit: <this sha>` as a workflow_dispatch
- *     input on `.github/workflows/e2e.yml`.
- *
- * On merge, replace `SPLICE_PINNED_COMMIT` above with the merge sha
- * and delete this preview constant.
- */
-export const SPLICE_PR5697_PREVIEW_COMMIT = '73c68d16ba93346a80418662f94a7877e3938f91';
-export const SPLICE_PR5697_PREVIEW_BRANCH = 'oriol/initialted-settlement-fe';
-
-/**
  * Per the CIP-0112 update (May 2026), V2 packages are versioned
  * 1.0.0 (consistent with splice-api-featured-app-v2). We pin to that
  * version. If Splice ships a later 1.x revision, bump here and re-run.
@@ -131,7 +81,7 @@ export const SPLICE_PR5697_PREVIEW_BRANCH = 'oriol/initialted-settlement-fe';
  *   1. INTERFACE packages — bound by `daml.yaml`'s `dependencies` (used
  *      at build time by the templates that implement the V2 interfaces).
  *   2. TEST INFRASTRUCTURE packages — bound by `packages/daml/test/daml.yaml`
- *      only (STR-101). Provide `Splice.Testing.*` fixtures + `WalletClientV2`.
+ *      only. Provide `Splice.Testing.*` fixtures + `WalletClientV2`.
  */
 /**
  * V1 interface packages required as build-only data-dependencies by the
@@ -352,7 +302,7 @@ const EXPECTED_WRITTEN_DAR_COUNT = DAR_SOURCES.filter((dar) => dar.role !== 'bui
 
 function parseArgs(argv) {
   const args = {
-    ref: 'token-standard-v2-upcoming',
+    ref: 'main',
     mode: 'source-build',
     dryRun: false,
     spliceCheckout: null,
@@ -380,7 +330,7 @@ function printUsage() {
   console.error('  --mode source-build    Clone Splice + dpm/daml build each V2 package (default)');
   console.error('  --mode binary-release  Try GitHub release artifacts (currently not published)');
   console.error('  --mode local           Use a local Splice checkout (requires --splice-checkout)');
-  console.error('  --ref <branch>         Splice branch/tag (default: token-standard-v2-upcoming)');
+  console.error('  --ref <branch>         Splice branch/tag (default: main)');
   console.error('  --splice-checkout PATH Local Splice checkout for --mode local');
   console.error('  --keep-clone           Don\'t delete the temporary clone after build');
   console.error('  --dry-run              Print what would happen, don\'t write');
@@ -500,8 +450,8 @@ async function modeBinaryRelease(args) {
   if (Object.keys(results).length === 0) {
     log('');
     log('No binary release artifacts found.');
-    log('As of token-standard-v2-upcoming, Splice does not publish V2 DARs');
-    log('as GitHub release binaries. Use --mode source-build instead, or');
+    log('No Splice V2 DAR GitHub release binaries were found.');
+    log('Use --mode source-build instead, or');
     log('--mode local if you have a Splice checkout that already contains');
     log('the built DARs.');
     process.exit(2);
@@ -705,9 +655,9 @@ async function main() {
 
   if (fetchedCount === EXPECTED_WRITTEN_DAR_COUNT) {
     log('');
-    log('Next steps (V2-only per STR-79):');
+    log('Next steps:');
     log('');
-    log(' Interface adoption (unblocks STR-86 / STR-87 / STR-88):');
+    log(' Interface adoption:');
     log('  1. Add only the V2 interface DARs directly imported by the main Daml package:');
     log('       - .lib/splice-api-token-metadata-v1-1.0.0.dar');
     log('       - .lib/splice-api-token-holding-v2-1.0.0.dar');
@@ -722,7 +672,7 @@ async function main() {
     log('  4. Run `dpm build --all` to verify');
     log('  5. Run `scripts/build-template-manifest.mjs` to refresh the manifest');
     log('');
-    log(' Test infrastructure adoption (unblocks STR-89 + STR-101):');
+    log(' Test infrastructure adoption:');
     log('  7. Add test DARs to packages/daml/test/daml.yaml dependencies:');
     log('       - .lib/splice-test-token-v2-1.0.0.dar');
     log('       - .lib/splice-token-test-trading-app-v2-1.0.0.dar');

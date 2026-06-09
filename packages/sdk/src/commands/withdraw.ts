@@ -66,10 +66,8 @@ export async function withdraw(
       choiceArgs = { withdrawTime: { timestamp: withdrawTimeMicros } };
       break;
     case SettlementMode.TokenStandardCustody:
-      // [C1 fix — STR-103] Fail closed before any submit. The
-      // TokenStandardEscrow Daml template is missing from the package;
-      // submitting would otherwise produce an opaque "template not
-      // found" at the ledger.
+      // Legacy TokenStandardEscrow templates are not shipped; fail closed
+      // before the ledger returns an opaque "template not found".
       assertTokenStandardEscrowAvailable();
       if (!params?.settlementReference?.trim()) {
         throw new Error('settlementReference is required for TokenStandardCustody withdrawals');

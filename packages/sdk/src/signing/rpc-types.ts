@@ -5,12 +5,7 @@
  *
  * Shapes verified against `@canton-network/core-wallet-dapp-rpc-client`
  * (May 2026). These mirrors live here so the SDK does not need a hard
- * runtime dependency on the wallet-kernel packages until / unless
- * `@canton-network/dapp-sdk` is installed (per STR-80).
- *
- * When `@canton-network/dapp-sdk` is added as a workspace dep (STR-82),
- * these types should be re-exported from there so we have a single
- * source of truth.
+ * runtime dependency on the wallet-kernel packages.
  *
  * See `docs/integration-guide/dapp-sdk-types-reference.md` for the
  * verified type listing.

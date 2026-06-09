@@ -6,7 +6,7 @@
  * after `::` in a Canton party identifier (e.g. `alice::abc123def...`
  * → `abc123`).
  *
- * Phase 1 — STR-111.
+ * Shared party identity chip.
  */
 import { Avatar, type AvatarIdentity } from './Avatar.js';
 

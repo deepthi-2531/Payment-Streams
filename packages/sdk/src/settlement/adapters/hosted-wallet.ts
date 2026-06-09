@@ -1,21 +1,17 @@
 /**
  * @module settlement/adapters/hosted-wallet
  *
- * @deprecated Since STR-76 + STR-84 (plan §0 / §7.4).
- *
- * **Two layers of deprecation apply**:
+ * @deprecated Use the V2 AllocationRequest dispatcher and SigningProvider
+ * wallet-gateway path instead.
  *
  * 1. **Settlement-reference path** replaced by V2 AllocationRequest
  *    pattern. Use `dispatchSettlement` from
  *    `settlement/allocation-dispatch.ts`.
  *
  * 2. **In-process signing** (`signPreparedHash` calling
- *    `node:crypto.sign` with a PEM key in memory) is the explicit
- *    antipattern plan §0 + the M3 audit will flag as Critical. The
- *    documented architecture has signing keys held by the Wallet
- *    Gateway's bound signing provider (Participant / Fireblocks /
- *    Blockdaemon / Dfns / wallet-gateway-internal), never in the
- *    SDK / proxy process.
+ *    `node:crypto.sign` with a PEM key in memory) is unsafe for
+ *    production. Signing keys should live in the Wallet Gateway's
+ *    bound signing provider, never in the SDK or proxy process.
  *
  * For new code, use:
  *
@@ -28,8 +24,7 @@
  * await provider.prepareExecuteAndWait({ commands, actAs: [actAsParty] });
  * ```
  *
- * Hard-removed in M4. Private-fork consumers should cut over to
- * `SigningProvider` during the M3 deprecation window.
+ * This adapter remains only for backwards compatibility.
  */
 
 import { createPrivateKey, sign as cryptoSign } from 'node:crypto';
@@ -76,7 +71,7 @@ export function signPreparedHash(
     throw new Error('wallet-gateway credentials are missing a private key');
   }
 
-  // [M9 fix] Prefix match, not substring; PEM is always anchored at `-----BEGIN`.
+  // Prefix match, not substring; PEM is always anchored at `-----BEGIN`.
   if (privateKey.startsWith('-----BEGIN')) {
     return cryptoSign(null, hashBytes, createPrivateKey(privateKey)).toString('base64');
   }

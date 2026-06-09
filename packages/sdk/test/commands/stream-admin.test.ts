@@ -1,6 +1,6 @@
 /**
  * Unit tests for commands/stream-admin.ts — V2-only StreamAdmin
- * orchestration helpers (STR-86).
+ * orchestration helpers.
  *
  * Covers:
  *   - buildStreamAdminCreate payload shape (template id, signatories,

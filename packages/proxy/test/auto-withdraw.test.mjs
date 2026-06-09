@@ -60,7 +60,8 @@ test('parseAutoWithdrawConfig defaults to disabled and 10s polling', () => {
   assert.equal(config.recipientPendingPollAttempts, 24);
   assert.equal(config.recipientPendingPollIntervalMs, 2_500);
   assert.deepEqual(config.discoveryParties, []);
-  // STR-90: in-process signing is the default until M3 cutover completes.
+  // In-process signing remains the default unless the wallet-gateway
+  // signing provider is enabled explicitly.
   assert.equal(config.useSigningProvider, false);
 });
 
@@ -303,17 +304,16 @@ test('executeInteractiveWithdraw prepares the ledger withdraw before locking wal
   }
 });
 
-// STR-90: when PROXY_AUTO_WITHDRAW_USE_SIGNING_PROVIDER is set, the proxy
-// routes the withdraw exercise through the Wallet Gateway's JSON-RPC dApp
-// API (listAccounts → prepareExecuteAndWait). The in-process sign +
+// When PROXY_AUTO_WITHDRAW_USE_SIGNING_PROVIDER is set, the proxy routes
+// the withdraw exercise through the Wallet Gateway's JSON-RPC dApp API
+// (listAccounts → prepareExecuteAndWait). The in-process sign +
 // /v2/interactive-submission/executeAndWait path MUST NOT be touched.
 //
 // Note: the deprecated AmuletWalletGatewayAdapter still handles the
 // external CC value-transfer leg via /api/wallet-gateway/* — that's a
-// separate cutover (STR-86/STR-89/STR-91 collapse this into AllocationRequest).
-// STR-90 is strictly about the SIGNING of the Withdraw_TokenStandard
-// exercise on the ledger.
-test('executeInteractiveWithdraw routes signing through the Wallet Gateway when useSigningProvider=true (STR-90)', async () => {
+// separate migration path. This test is strictly about the SIGNING of
+// the Withdraw_TokenStandard exercise on the ledger.
+test('executeInteractiveWithdraw routes signing through the Wallet Gateway when useSigningProvider=true', async () => {
   const originalFetch = globalThis.fetch;
   const originalAmuletUrl = process.env.CANTON_STREAMS_WALLET_GATEWAY_URL;
   const originalGatewayUrl = process.env.CANTON_STREAMS_SIGNING_GATEWAY_URL;

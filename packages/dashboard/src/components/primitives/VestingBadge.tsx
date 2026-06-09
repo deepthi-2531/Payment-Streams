@@ -1,11 +1,9 @@
 /**
  * VestingBadge — chip displaying a stream's vesting mode.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. Accepts either:
+ * Accepts either:
  *   - the structured `VestingMode` enum value from the SDK ('Linear' | 'CliffLinear' | ...)
  *   - or a structured config object with a `mode` field (the mock's shape)
- *
- * Phase 1 — STR-111.
  */
 const LABELS: Record<string, string> = {
   Linear: 'Linear',

@@ -7,8 +7,6 @@
  * formulas the SDK uses server-side (`linearAccrual`, `cliffLinearAccrual`,
  * `steppedAccrual` from `@canton-streams/sdk`) — display values stay in
  * lockstep with what the ledger will compute.
- *
- * Phase 1 — STR-111.
  */
 import Decimal from 'decimal.js';
 import {

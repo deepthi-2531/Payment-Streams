@@ -54,7 +54,7 @@ services:
         VITE_WALLET_LAYER: ${VITE_WALLET_LAYER:-dapp-sdk}
         VITE_WALLET_GATEWAY_URL: ${VITE_WALLET_GATEWAY_URL:-http://localhost:3030/api/v0/dapp}
         VITE_SKIP_WALLET_PICKER: ${VITE_SKIP_WALLET_PICKER:-true}
-        VITE_WALLET_NAME: ${VITE_WALLET_NAME:-Splice Amulet Wallet (LocalNet V2)}
+        VITE_WALLET_NAME: ${VITE_WALLET_NAME:-Splice Amulet Wallet}
         VITE_PARTYLAYER_NETWORK: ${VITE_PARTYLAYER_NETWORK:-devnet}
         VITE_PARTYLAYER_APP_NAME: ${VITE_PARTYLAYER_APP_NAME:-Canton Payment Streams}
     ports:

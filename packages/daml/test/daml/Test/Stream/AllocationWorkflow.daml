@@ -1,8 +1,7 @@
--- | AllocationRequestV2 interface tests (STR-73 / plan §7.11 / STR-79 V2-only).
+-- | AllocationRequestV2 interface tests.
 --
 -- Verifies that StreamEscrow, StreamFlow, and MilestoneEscrow correctly
--- implement `AllocationRequestV2.AllocationRequest`. V1 was dropped per
--- the V2-only architectural pivot (STR-79).
+-- implement `AllocationRequestV2.AllocationRequest`. V1 is not supported.
 --
 -- ## What this module tests
 --
@@ -13,9 +12,7 @@
 --   * MilestoneEscrow multi-leg: V2 view has one TransferLegSide per
 --     unconfirmed milestone
 --
--- Once STR-65 lands the real V2 DARs, swap the stub imports here for
--- the real `Splice.Api.Token.AllocationRequestV2` module and the tests
--- continue to pass unchanged (the view shapes are wire-compatible).
+-- These tests bind directly against the upstream Splice V2 imports.
 module Test.Stream.AllocationWorkflow where
 
 import Daml.Script
@@ -225,7 +222,7 @@ testMilestoneEscrowMultiLegV2View = script do
   -- V2 view should expose unconfirmed milestones as transferLegSides on a
   -- single multi-leg AllocationSpecification (per plan §7.3, milestone
   -- confirmations are also surfaced as ARA_Custom actions in
-  -- availableActions — see STR-88 for the lifecycle drive).
+  -- availableActions for the lifecycle drive).
   v2View <- queryInterfaceContractId @AR2.AllocationRequest bob (toInterfaceContractId @AR2.AllocationRequest meCid)
   case v2View of
     Some v -> do
@@ -245,7 +242,7 @@ testMilestoneEscrowMultiLegV2View = script do
       debug ("GOLDEN:milestone_v2_view:totalLeg:" <> show totalLeg)
     None -> abort "MilestoneEscrow V2 view not visible"
 
-  -- V1 fallback removed per V2-only pivot (STR-79). MilestoneEscrow only
+  -- V1 fallback removed; MilestoneEscrow only
   -- implements V2 — V2 has native multi-leg, no need for a V1 single-leg
   -- shim.
 

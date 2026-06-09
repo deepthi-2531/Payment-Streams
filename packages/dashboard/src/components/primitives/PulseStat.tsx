@@ -1,10 +1,8 @@
 /**
  * PulseStat — card with uppercase label + ticking MonoCounter + optional sub-text.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. The KPI tile used on
- * the dashboard hero (e.g. `Active streams`, `Cumulative streamed`).
- *
- * Phase 1 — STR-111.
+ * Used for dashboard hero KPIs such as `Active streams` and
+ * `Cumulative streamed`.
  */
 import type { ReactNode } from 'react';
 import { MonoCounter } from './MonoCounter.js';

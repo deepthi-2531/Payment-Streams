@@ -9,7 +9,7 @@ dependencies:
 data-dependencies:
   - ../interfaces/.daml/dist/canton-streams-interfaces-0.2.3.dar
   - ../main/.daml/dist/canton-streams-0.2.8.dar
-  # Real V2 DARs (STR-65 fetch + STR-102 Phase 2 binding). Required for
+  # Real V2 DARs. Required for
   # tests that exercise the V2 AllocationRequest interface directly.
   # Only the four directly referenced by Test.Stream.AllocationWorkflow
   # are listed; the others are pulled in transitively via the main DAR.

@@ -2,7 +2,7 @@
 /**
  * Canton Coin (CC) stream lifecycle probe.
  *
- * Exercises the unified CIP-56 V1 code path against a Canton ledger:
+ * Exercises the legacy CC stream probe against a Canton ledger:
  *   1. Allocate sender + recipient parties (or reuse from env)
  *   2. Submit `CreateStreamRequest` (NumericLegacy by default; pass
  *      --mode token-standard for the production CC TokenStandardCustody path)
@@ -17,7 +17,7 @@
  *   --target NET         Explicit target: devnet | testnet | mainnet.
  *                        Mainnet additionally requires I_HAVE_MAINNET_CREDENTIALS=true.
  *   --json               Emit machine-readable JSON summary on success.
- *   --mode MODE          Settlement mode: numeric (default, M1 sandbox) | token-standard
+ *   --mode MODE          Settlement mode: numeric (default sandbox) | token-standard
  *                        (real CC, requires asset-registry entry + funded wallet).
  *
  * ## Environment / local-config overrides (see config/local.testnet.json):
@@ -30,12 +30,6 @@
  *   DEPOSIT_AMOUNT            defaults to 100.0
  *   STREAM_DURATION_SECONDS   defaults to 60
  *   TARGET_NETWORK            alternative to --target flag
- *
- * ## Acceptance gates
- *
- *   - STR-30 (M1): probe runs green against Canton DevNet using --mode numeric
- *   - STR-78 (M3): probe runs green on Canton TestNet using --mode token-standard
- *                  against real CC (testnet CC obtained via faucet)
  *
  * See docs/TESTNET-RUNBOOK.md for the full setup walkthrough.
  */
@@ -168,7 +162,7 @@ function sleep(ms) {
 async function main() {
   console.log('========================================');
   console.log(' Canton Coin (CC) Stream Lifecycle Probe');
-  console.log(' STR-30 / STR-78 — TokenStandardCustody verification');
+  console.log(' TokenStandardCustody verification');
   console.log('========================================\n');
   log(`API URL:           ${config.apiUrl}`);
   log(`Target network:    ${cliArgs.target}`);
@@ -218,7 +212,7 @@ async function main() {
     console.error('  to run it for Canton Coin.)');
     console.error('');
     console.error('  This script (testnet-cc-stream-probe.mjs) exercises the simpler');
-    console.error('  NumericLegacy sandbox flow used for M1 accrual-math verification.');
+    console.error('  NumericLegacy sandbox flow used for accrual-math verification.');
     console.error('  Mainnet/TestNet CC runs should use the production probe instead.');
     console.error('');
     console.error('  See docs/TESTNET-RUNBOOK.md for the full setup.');

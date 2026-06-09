@@ -60,11 +60,9 @@ describe('SettlementOrchestrator', () => {
     'CANTON_USER_ID',
     'SYNCHRONIZER_ID',
     'CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON',
-    // [C1 fix — STR-103] The orchestrator's TokenStandardCustody dispatch
-    // now fails closed unless this override is set, because the Daml
-    // TokenStandardEscrow template is missing. These tests verify the
-    // orchestrator's wire logic against mocks, not the actual template,
-    // so we set the override to let the existing test cases proceed.
+    // These tests verify the orchestrator's wire logic against mocks,
+    // not the legacy TokenStandardEscrow template, so the guard is
+    // explicitly enabled for this suite.
     'CANTON_STREAMS_TOKEN_STANDARD_ESCROW_PRESENT',
   ] as const;
   const originalEnv = new Map<string, string | undefined>();

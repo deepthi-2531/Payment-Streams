@@ -1,17 +1,8 @@
 /**
- * Create Stream form — reference implementation for the Phase 4 form pattern.
+ * Create Stream form — schema-driven single-page creation flow.
  *
- * Demonstrates the schema-driven `<Form>` + `<FormField>` + `<FormError>`
- * primitives against `createStreamSchema`. Validation logic that used to
- * live as imperative checks inside `onSubmit` is now declarative in the
- * schema — the form just renders fields and hands typed values to the
- * `useCreateStream` mutation.
- *
- * Phase 6 (STR-117) replaces this single-page form with a 4-step wizard
- * built from the mockup; this file lands the pattern + closes STR-115.
- *
- * The form is V2-only: TokenStandardCustody via the CIP-0112
- * AllocationRequest path.
+ * The form is V2-only and creates TokenStandardCustody streams through
+ * the CIP-0112 AllocationRequest path.
  */
 
 import { useState } from 'react';

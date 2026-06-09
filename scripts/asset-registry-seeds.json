@@ -1,6 +1,6 @@
 {
   "version": "0.3.0",
-  "note": "Seed file consumed by scripts/build-asset-registry.mjs (V2-only per STR-79). Pins per-asset display names, V2 capability flags, and per-asset overrides (admin party, Scan URL, wallet-gateway URL). CC and USDCx are NOT in the registry yet because they haven't published V2 interfaces — per CIP-0112 §5 they are expected to publish V2 alongside V1; add them here with allocationsV2 = true once they advertise V2 in supportedApis. When SV status / asset-admin metadata isn't fully programmatically accessible, populate TBD fields here manually after reviewing the SV network status listing (https://canton.foundation/sv-network-status-2/).",
+  "note": "Seed file consumed by scripts/build-asset-registry.mjs. Pins per-asset display names, V2 capability flags, and per-asset overrides (admin party, Scan URL, wallet-gateway URL). Add assets once they advertise Token Standard V2 support in supportedApis. When SV status / asset-admin metadata is not fully programmatically accessible, populate TBD fields manually after reviewing the SV network status listing (https://canton.foundation/sv-network-status-2/).",
   "assets": {
     "v2-test-asset": {
       "displayName": "V2 Test Asset (DevNet only)",

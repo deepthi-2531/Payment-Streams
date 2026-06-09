@@ -25,7 +25,7 @@ Canton-Streams/
     proxy/                    # Express REST proxy (port 4000)
     dashboard/                # React/Vite dashboard (port 3000)
     cli/                      # canton-streams CLI tool
-    executor/                 # Phase 3 delegated execution service
+    executor/                 # delegated execution service
   docs/                       # Project documentation
 ```
 

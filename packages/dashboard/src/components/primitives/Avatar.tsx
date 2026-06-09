@@ -1,11 +1,8 @@
 /**
  * Avatar — gradient circular monogram derived from a hue.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. Initials come from the
- * identity's `name` or `handle`; the gradient uses `hue` / `avatarHue` if
- * present, falling back to 200 (neutral cyan).
- *
- * Phase 1 — STR-111.
+ * Initials come from the identity's `name` or `handle`; the gradient uses
+ * `hue` / `avatarHue` if present, falling back to 200 (neutral cyan).
  */
 import type { CSSProperties } from 'react';
 

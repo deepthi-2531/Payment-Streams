@@ -5,42 +5,9 @@
  * calls to the proxy server. All Decimal values are serialized as
  * strings over the wire and reconstructed on the client side.
  *
- * Hosted-wallet read path (STR-83 / STR-123 follow-up):
- *
- * When the user is signed in via a hosted-multi-wallet (PartyLayer →
- * 5N Loop, Cantor8, Send), the dashboard never receives a JWT — the
- * wallet signs and routes ledger calls through its own server-side
- * proxy. There is no `Authorization: Bearer <jwt>` to send to our
- * REST proxy, and asking our proxy to "log in" on the user's behalf
- * isn't possible without per-wallet integration.
- *
- * In that case the client SHORT-CIRCUITS proxy reads: each read
- * method first probes the wallet's CIP-0103 `ledgerApi` to verify
- * the wallet-routed ledger path is alive, then returns an empty
- * result set. Empty is the truthful answer because our Canton Streams
- * DAR is not deployed to the devnet participant the picked wallet is
- * attached to (Loop on devnet has zero StreamEscrow contracts for the
- * user, by construction).
- *
- * What this DOES give us:
- *   - No more 500 / Internal Server Error when the proxy is absent.
- *   - The dashboard renders 0-stream / 0-policy / 0-pending states
- *     cleanly through Skeleton → empty UI.
- *   - The wallet's `ledgerApi` round-trip is exercised, so when the
- *     DAR ships to a network the wallet can reach, the full decoder
- *     (next step) can swap in here.
- *
- * What the FOLLOW-UP must do:
- *   - Replace the `[]` payloads with a real Ledger-API decoder that
- *     queries by template-id (TEMPLATE_STREAM_ESCROW etc.) via
- *     walletClient.ledgerApi and reuses the SDK's browser-safe Stream
- *     deserializers. Tracked as the STR-83 + STR-123 ledger-routing
- *     work; documented in docs/HOSTED-WALLET-PLAN.md.
- *   - Writes (createStream / accept / withdraw / cancel / renew /
- *     revokePolicy) still throw a clear error today — the wallet
- *     would need to drive `prepareExecuteAndWait` on a real
- *     AllocationRequest, which is gated behind the SDK adding that
- *     method (capabilities.prepareExecuteAndWait flips to true).
+ * Hosted wallets can read through their own CIP-103 `ledgerApi` surface
+ * instead of the REST proxy. Writes still require a wallet provider that can
+ * submit and wait for Daml command execution.
  */
 
 import Decimal from 'decimal.js';
@@ -61,6 +28,17 @@ import type {
 } from '@canton-streams/sdk/browser';
 import { VestingMode, StreamStatus, AssetType, SettlementMode } from '@canton-streams/sdk/browser';
 import { walletClient } from '../store/wallet/index.js';
+import {
+  HOSTED_TID_CREATE_REQUEST,
+  HOSTED_TID_POLICY,
+  HOSTED_TID_STREAM_ESCROW,
+  HOSTED_TID_TOKEN_STANDARD_REQUEST,
+  decodeCreateStreamRequest,
+  decodeStreamEscrow,
+  isHostedLedgerAvailable,
+  queryActiveContracts,
+  submitAndWait,
+} from '../lib/hostedWalletLedger.js';
 
 /**
  * Error thrown when a mutation is attempted from a hosted-wallet
@@ -71,19 +49,13 @@ export class HostedWalletWriteUnsupportedError extends Error {
   constructor(action: string) {
     super(
       `${action} is not yet wired for hosted wallets (5N Loop, Cantor8, Send). ` +
-        `It requires routing the Daml command through ` +
-        `walletClient.prepareExecuteAndWait — that capability is currently false ` +
-        `for the PartyLayer-routed Provider. See HOSTED-WALLET-PLAN.md.`,
+        `This flow needs a wallet provider that can submit the Daml command and wait for completion.`,
     );
     this.name = 'HostedWalletWriteUnsupportedError';
   }
 }
 
-/**
- * [M7] Optional settlement args for TokenStandardCustody cancel /
- * mutualCancel. Required when the stream is TS-custody; omit for
- * NumericLegacy / UtilityHoldingCustody streams.
- */
+/** Optional settlement args for TokenStandardCustody cancel / mutual cancel. */
 export interface TokenStandardCancelArgs {
   readonly recipientSettlementReference?: string;
   readonly senderRefundReference?: string;
@@ -96,10 +68,6 @@ export interface TokenStandardCancelArgs {
 // ---------------------------------------------------------------------------
 
 export class CantonStreamsApi {
-  // `getParty` retained as a constructor arg for backwards-compat with
-  // useCantonClient; not used for request headers anymore (STR-123 Phase
-  // 7). Kept so existing call-sites compile + the constructor signature
-  // doesn't churn ahead of STR-83 proxy cutover.
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
@@ -111,10 +79,6 @@ export class CantonStreamsApi {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     const token = this.getToken();
     if (token) h['Authorization'] = `Bearer ${token}`;
-    // STR-123 Phase 7: identity is read by the proxy from the wallet-issued
-    // bearer token, not from a separate party header. The dashboard no
-    // longer sends `X-Canton-Party`. Once STR-83 lands the proxy stops
-    // accepting it entirely.
     return h;
   }
 
@@ -125,49 +89,77 @@ export class CantonStreamsApi {
    */
   private isHostedWalletSession(): boolean {
     if (this.getToken()) return false;
-    if (!walletClient.capabilities.hostedMultiWallet) return false;
-    if (!walletClient.capabilities.ledgerApi) return false;
-    return typeof walletClient.ledgerApi === 'function';
+    if (!isHostedLedgerAvailable()) return false;
+    return true;
   }
 
   /**
-   * Hosted-wallet read path: NO ledger probe today.
+   * Catch the wallet's "I called the participant and it didn't
+   * find the template" error and convert it to an empty result.
+   * Most hosted-wallet networks (5N Loop on devnet) don't have the
+   * canton-streams DAR vetted, so the legitimate response to a
+   * filtered ACS query is "template not found". Returning [] in
+   * that case keeps the dashboard in its honest empty state
+   * instead of surfacing a wall-of-text Loop error that mentions
+   * a templateId the user can't act on.
    *
-   * Earlier iterations of this code tried to exercise the wallet's
-   * CIP-0103 `ledgerApi` with a probe query (first `GET /v2/version`,
-   * then `GET /v2/state/acs/active-contracts`, then `POST /v2/state/acs`
-   * with various filter shapes). All three were rejected by Loop's
-   * adapter wrapper — `/v2/version` is not on Loop's allowlist, and
-   * the ACS endpoints are rejected as "unfiltered query" no matter
-   * what filter shape we send, because Loop's wrapper requires a
-   * templateId / interfaceId Canton Streams hasn't deployed to the
-   * devnet participant Loop is attached to.
-   *
-   * The user-visible cost of the failing probe was a banner
-   * ("Could not load streams: Loop getActiveContracts() failed for
-   * no filter") on every page even though the dashboard had nothing
-   * to show. Dropping the probe is the honest answer:
-   *
-   *   - The dashboard returns `[]` for every hosted-wallet read.
-   *   - The CIP-0103 wallet path is genuinely not exercised here.
-   *   - The follow-up (browser-side template-filtered decoder) is
-   *     what turns this into a real query.
-   *
-   * When that follow-up lands, the decoder will:
-   *   1. resolve the active party from `walletClient.listAccounts()`
-   *   2. POST a filtered ACS query for TEMPLATE_STREAM_ESCROW etc.
-   *      against the participant the wallet is attached to (the
-   *      filter shape that Loop's wrapper actually allows — likely
-   *      the templateId-in-query-param form once the streams DAR
-   *      is published on a network Loop can reach)
-   *   3. reuse the SDK's browser-safe `deserializeStream` decoder.
-   *
-   * Until then: the hosted-wallet code path is "render the shell
-   * truthfully empty". That's better than a noisy banner.
+   * All other errors are re-thrown so transport failures
+   * (unauthorized, network down, wallet disconnected) still
+   * propagate to the page.
    */
-  private async probeHostedLedger(): Promise<void> {
-    return;
+  private isDarNotDeployedError(err: unknown): boolean {
+    // Errors arrive in three shapes from the wallet layer:
+    //   1. An `Error` instance — `err.message` carries the text
+    //      (`Failed to get active contracts ... templateId="..."`).
+    //   2. A plain object thrown verbatim from the wallet's
+    //      `ledgerApi` — Canton participants surface this as
+    //      `{ code: "PACKAGE_NAMES_NOT_FOUND", cause: "...", ... }`
+    //      and Loop forwards the JSON unchanged. The user hit this
+    //      live on submit; before this change my regex was checking
+    //      only `err.message` (undefined here) and let it fall
+    //      through as the raw JSON.
+    //   3. A string already (rare; defensive).
+    // Coalesce all three into one searchable text blob before
+    // running the pattern check.
+    const text = (() => {
+      if (err instanceof Error) return err.message;
+      if (typeof err === 'string') return err;
+      if (err && typeof err === 'object') {
+        const e = err as { code?: unknown; cause?: unknown; message?: unknown };
+        const parts: string[] = [];
+        if (typeof e.code === 'string') parts.push(e.code);
+        if (typeof e.message === 'string') parts.push(e.message);
+        if (typeof e.cause === 'string') parts.push(e.cause);
+        if (parts.length > 0) return parts.join(' ');
+        try {
+          return JSON.stringify(err);
+        } catch {
+          return String(err);
+        }
+      }
+      return String(err);
+    })();
+    return /PACKAGE_NAMES_NOT_FOUND|package.*not.*found|do not match upgradable packages|Failed to get active contracts|template.*not.*found|not.*deployed|no.*package/i.test(
+      text,
+    );
   }
+
+  private async readHostedParty(): Promise<string> {
+    const accounts = await walletClient.listAccounts();
+    const party =
+      accounts.find((a) => a.primary)?.partyId ?? accounts[0]?.partyId;
+    if (!party) {
+      throw new Error(
+        'Wallet session has no party id — try disconnecting and reconnecting the wallet.',
+      );
+    }
+    return party;
+  }
+
+  // (The earlier `probeHostedLedger` helper was dropped — reads now
+  // run the real ACS query via `queryActiveContracts` against the
+  // wallet's `ledgerApi`. The probe path is documented in the
+  // module's top JSDoc and in lib/hostedWalletLedger.ts.)
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
@@ -205,12 +197,28 @@ export class CantonStreamsApi {
 
   async listStreams(filter?: StreamFilter): Promise<Stream[]> {
     if (this.isHostedWalletSession()) {
-      await this.probeHostedLedger();
-      // Empty result is truthful: the Canton Streams DAR is not
-      // deployed to the devnet participant the hosted wallet talks
-      // to, so there are no StreamEscrow contracts to return. The
-      // follow-up step swaps in a real Ledger-API decoder here.
-      return [];
+      const party = await this.readHostedParty();
+      try {
+        const entries = await queryActiveContracts([HOSTED_TID_STREAM_ESCROW], party);
+        const streams = entries
+          .map((e) => decodeStreamEscrow(e.contractId, e.createArguments))
+          .filter((s): s is Stream => s !== null);
+        // Apply the same client-side filters the proxy would have
+        // applied server-side, so call-sites see consistent
+        // behavior whether we routed through the proxy or the
+        // wallet's ledgerApi.
+        return streams.filter((s) => {
+          if (filter?.sender && s.config.sender !== filter.sender) return false;
+          if (filter?.recipient && s.config.recipient !== filter.recipient) return false;
+          if (filter?.status && s.state.status !== filter.status) return false;
+          if (filter?.vestingMode && s.config.vestingMode.mode !== filter.vestingMode)
+            return false;
+          return true;
+        });
+      } catch (err) {
+        if (this.isDarNotDeployedError(err)) return [];
+        throw err;
+      }
     }
     const params = new URLSearchParams();
     if (filter?.sender) params.set('sender', filter.sender);
@@ -226,8 +234,31 @@ export class CantonStreamsApi {
     filter?: PendingStreamRequestFilter,
   ): Promise<PendingStreamRequest[]> {
     if (this.isHostedWalletSession()) {
-      await this.probeHostedLedger();
-      return [];
+      const party = await this.readHostedParty();
+      try {
+        // Query both the numeric and the token-standard request
+        // templates — the wallet's adapter only takes the first
+        // templateId, so the two-templateId list is structurally
+        // valid but Loop will run two separate queries internally.
+        const entries = await queryActiveContracts(
+          [HOSTED_TID_CREATE_REQUEST, HOSTED_TID_TOKEN_STANDARD_REQUEST],
+          party,
+        );
+        const pending = entries
+          .map((e) =>
+            decodeCreateStreamRequest(e.contractId, e.templateId, e.createArguments),
+          )
+          .filter((r): r is PendingStreamRequest => r !== null);
+        return pending.filter((r) => {
+          if (filter?.sender && r.config.sender !== filter.sender) return false;
+          if (filter?.recipient && r.config.recipient !== filter.recipient) return false;
+          if (filter?.assetType && r.config.assetType !== filter.assetType) return false;
+          return true;
+        });
+      } catch (err) {
+        if (this.isDarNotDeployedError(err)) return [];
+        throw err;
+      }
     }
     const params = new URLSearchParams();
     if (filter?.sender) params.set('sender', filter.sender);
@@ -273,14 +304,85 @@ export class CantonStreamsApi {
     params: CreateStreamParams,
   ): Promise<{ requestContractId: string; streamId: string }> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Create stream');
+      const party = await this.readHostedParty();
+      try {
+        const command = {
+          CreateCommand: {
+            templateId: HOSTED_TID_CREATE_REQUEST,
+            createArguments: this.serializeCreateRequestArgs(params, party),
+          },
+        };
+        const result = (await submitAndWait([command], party, {
+          commandId: `create-${params.streamId ?? Date.now()}`,
+        })) as { transactionId?: string; commandId?: string };
+        // The contract id of the freshly-created CreateStreamRequest
+        // is not always returned by hosted wallets — we surface the
+        // transactionId as a stand-in until we wire a transaction
+        // tree parser.
+        return {
+          requestContractId:
+            result.transactionId ?? result.commandId ?? '<created-via-wallet>',
+          streamId: params.streamId ?? '',
+        };
+      } catch (err) {
+        if (this.isDarNotDeployedError(err)) {
+          throw new Error(
+            'Cannot create a stream: the Canton Streams DAR is not vetted on the ' +
+              'participant your wallet is attached to. Ask the operator to upload ' +
+              "and vet the streams DAR, then refresh this page.",
+          );
+        }
+        throw err;
+      }
     }
     return this.request('POST', '/api/streams', serializeCreateParams(params));
   }
 
+  /**
+   * Build the Daml record arguments for `CreateStreamRequest` from
+   * the dashboard's `CreateStreamParams`. The exact field set is
+   * what the Daml template declares, in v2 JSON-wire form
+   * (microseconds for `Time`, decimals as strings). Loop expects
+   * the templateId in the command itself to be the
+   * `#package-name:module:entity` form already handled by the
+   * caller; the record fields below are positional by name.
+   */
+  private serializeCreateRequestArgs(
+    params: CreateStreamParams,
+    party: string,
+  ): Record<string, unknown> {
+    const startTimeUs = params.startTime
+      ? String(BigInt(params.startTime.getTime()) * 1000n)
+      : null;
+    const endTimeUs = params.endTime
+      ? String(BigInt(params.endTime.getTime()) * 1000n)
+      : null;
+    return {
+      sender: params.sender ?? party,
+      recipient: params.recipient,
+      observers: [],
+      config: {
+        streamId: params.streamId,
+        sender: params.sender ?? party,
+        recipient: params.recipient,
+        totalDeposited: params.totalDeposited.toString(),
+        startTime: startTimeUs,
+        endTime: endTimeUs,
+        vestingMode: { tag: params.vestingMode.mode, value: {} },
+        assetType: params.assetType,
+        cancellable: params.cancellable ?? false,
+        settlementMode: params.settlementMode ?? SettlementMode.TokenStandardCustody,
+      },
+    };
+  }
+
   async acceptStream(sender: string, streamId: string): Promise<{ escrowContractId: string }> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Accept stream');
+      throw new Error(
+        'Accept stream from the hosted-wallet flow needs the request ' +
+          'contract id, not just (sender, streamId). Use the Inbox UI flow ' +
+          'when wallet-side command submission is available.',
+      );
     }
     return this.request(
       'POST',
@@ -304,7 +406,7 @@ export class CantonStreamsApi {
   }
 
   /**
-   * [M7] Cancel a stream.
+   * Cancel a stream.
    *
    * For TokenStandardCustody streams, the proxy needs settlement
    * references (recipient + sender refund refs) to validate the
@@ -384,12 +486,25 @@ export class CantonStreamsApi {
     );
   }
 
-  // --- Phase 3: Delegated Policies ---
+  // --- Delegated Policies ---
 
   async listPolicies(): Promise<RawPolicy[]> {
     if (this.isHostedWalletSession()) {
-      await this.probeHostedLedger();
-      return [];
+      const party = await this.readHostedParty();
+      try {
+        const entries = await queryActiveContracts([HOSTED_TID_POLICY], party);
+        // We don't have a browser-side `DelegatedPolicy` decoder
+        // yet; surface the raw create_arguments as a typed shape
+        // the PoliciesPage can render. If the DAR isn't deployed
+        // this returns [] via the catch below.
+        return entries.map((e) => ({
+          contractId: e.contractId,
+          ...e.createArguments,
+        })) as unknown as RawPolicy[];
+      } catch (err) {
+        if (this.isDarNotDeployedError(err)) return [];
+        throw err;
+      }
     }
     return this.request<RawPolicy[]>('GET', '/api/policies');
   }
@@ -403,7 +518,10 @@ export class CantonStreamsApi {
 
   async listExecutionLogs(policyId?: string): Promise<RawExecutionLog[]> {
     if (this.isHostedWalletSession()) {
-      await this.probeHostedLedger();
+      // ExecutionLog is a non-consumed contract on the policy; the
+      // browser doesn't have a decoder for it yet. Return [] until
+      // the read path lands as part of the full DelegatedPolicy
+      // browser flow.
       return [];
     }
     const qs = policyId ? `?policyId=${encodeURIComponent(policyId)}` : '';

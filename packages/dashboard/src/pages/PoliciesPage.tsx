@@ -1,5 +1,5 @@
 /**
- * PoliciesPage — STR-121 Phase 5 reskin to cc-streams aesthetic.
+ * Delegated policies page.
  *
  * Same TanStack hooks (`useQuery({ queryKey: ['policies'] })` +
  * `useMutation` for revoke) — purely visual reskin from the mock's

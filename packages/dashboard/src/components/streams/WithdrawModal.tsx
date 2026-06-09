@@ -1,12 +1,9 @@
 /**
  * WithdrawModal — confirm-and-withdraw for an active stream.
  *
- * Phase 6 (STR-122). Uses the real `useWithdraw` mutation. Surfaces the
- * current withdrawable balance so the user knows what they're claiming.
- * Server-side computes the actual amount based on accrual; this modal is
- * a confirmation step, not an amount selector.
- *
- * No mock data.
+ * Surfaces the current withdrawable balance so the user knows what they
+ * are claiming. The server computes the actual amount based on accrual;
+ * this modal is a confirmation step, not an amount selector.
  */
 
 import { useState } from 'react';

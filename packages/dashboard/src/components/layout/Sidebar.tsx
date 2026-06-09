@@ -1,14 +1,8 @@
 /**
  * Sidebar — Canton Streams left-rail navigation.
  *
- * Rebuilt from the mock at `Canton Streams/src/shell.jsx`. Uses the design
- * tokens + primitives from Phase 1 (STR-111). The identity card at the
- * bottom reads from the real `useAuth()` context — no mock identity.
- *
- * The pending-count badge on Inbox stays at zero until Phase 6 (STR-122)
- * adds the InboxPage + outgoing-pending query.
- *
- * STR-112 — Phase 2 of the UI integration.
+ * Reads identity from the active wallet session and badges Inbox with
+ * active incoming streams visible to the connected party.
  */
 import { useState, type CSSProperties } from 'react';
 import { NavLink, useLocation } from 'react-router';
@@ -49,11 +43,8 @@ export function Sidebar() {
   const auth = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Inbox badge shows the count of incoming streams (streams where the
-  // connected party is the recipient). The dashboard does not run a
-  // propose/accept ceremony today — funding approval happens in the
-  // wallet — so a "pending requests" count would always be zero and
-  // misleading. Switched to the active-streams hook.
+  // Inbox badges active incoming streams; wallet funding approval is a
+  // separate wallet-side step.
   const incoming = useStreams(auth.party ? { recipient: auth.party } : undefined);
   const pendingCount = incoming.data?.length ?? 0;
 
