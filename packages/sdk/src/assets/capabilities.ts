@@ -1,7 +1,7 @@
 /**
  * @module assets/capabilities
  *
- * V2-only capability resolution (per STR-79 V2-only pivot).
+ * V2-only capability resolution.
  *
  * Per CIP-0112 §5 V2 backwards compatibility, V1 assets are expected to
  * publish V2 interfaces alongside V1; our library integrates with assets
@@ -42,7 +42,7 @@ export interface AssetCapabilities {
   readonly transferEventsV2: boolean;
   /**
    * Pause state surfaced from V2 metadata API. When `true`, dispatch
-   * fails-fast with PausedInstrumentError (STR-96).
+   * fails-fast with PausedInstrumentError.
    */
   readonly paused: boolean;
   readonly pauseInfo?: string;
@@ -163,7 +163,7 @@ export class CapabilityCache {
 // ---------------------------------------------------------------------------
 
 /**
- * Error thrown when an instrument is paused per V2 metadata (STR-96).
+ * Error thrown when an instrument is paused per V2 metadata.
  */
 export class PausedInstrumentError extends Error {
   constructor(public readonly assetKey: string, public readonly pauseInfo?: string) {
@@ -196,7 +196,7 @@ export function assertActionSupported(
     // Should never trigger — the registry validates this at load time.
     // Defense in depth in case a test fixture constructs a bad caps object.
     throw new Error(
-      `Asset "${caps.key}" does not support V2 allocations; ${action} requires V2 (STR-79 V2-only library).`,
+      `Asset "${caps.key}" does not support V2 allocations; ${action} requires CIP-56 V2.`,
     );
   }
   if (action === 'event-subscription' && !caps.transferEventsV2) {

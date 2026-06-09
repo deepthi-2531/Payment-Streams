@@ -4,7 +4,7 @@
  * Shared between the TopBar (network chip) and SettingsPage (full connection
  * status). Refetches every 10s so disconnects surface quickly.
  *
- * STR-112 — Phase 2 of the UI integration.
+ * Fetches proxy health for the dashboard.
  */
 import { useQuery } from '@tanstack/react-query';
 import { useConnectionStore } from '../store/connection.js';

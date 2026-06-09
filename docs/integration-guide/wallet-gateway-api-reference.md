@@ -87,8 +87,7 @@ The Wallet Gateway delegates signing to a **per-party** signing provider.
 | **Blockdaemon** | Blockdaemon infra | ✅ managed | `BLOCKDAEMON_API_URL`, `BLOCKDAEMON_API_KEY` |
 | **Dfns** | Dfns MPC | ✅ enterprise | `DFNS_ORG_ID`, `DFNS_BASE_URL`, `DFNS_CRED_ID`, `DFNS_PRIVATE_KEY`, `DFNS_AUTH_TOKEN` |
 
-**My earlier ticket (STR-84) listed 4 providers (Canton-participant, Fireblocks,
-Blockdaemon, TestOnly-local). The verified list has 5 — Dfns is missing.**
+The current public provider list has five providers, including Dfns.
 
 Provider selection is **per-party at wallet-creation time** (via the User
 API's `createWallet`). One Gateway instance can host parties using different
@@ -138,7 +137,7 @@ The full config schema lives at
    the browser side, or `POST /api/v0/dapp` with method `prepareExecute` on
    the server side.
 
-2. **STR-84 (SigningProvider interface) needs 5 adapters, not 4**:
+2. **SigningProvider interface needs five adapters**:
    - `ParticipantSigningProvider` (replaces our existing in-process Canton signing — production default)
    - `FireblocksSigningProvider`
    - `BlockdaemonSigningProvider`
@@ -170,7 +169,7 @@ The full config schema lives at
 
 ---
 
-## Appendix — Validator-App `/api/wallet-gateway/*` audit (STR-93)
+## Appendix — Legacy Validator-App `/api/wallet-gateway/*` Endpoints
 
 > Verified via GitHub code search + Splice repo file-tree enumeration, May 2026.
 
@@ -190,7 +189,7 @@ or is it safe to delete in the cutover?
    - `"api/wallet-gateway"`
 2. **Zero file paths in the public Splice repo** (`hyperledger-labs/splice`, 12,502 entries searched recursively) contain `wallet-gateway`, `prepare-action`, or `execute-action`.
 3. **The endpoint pattern is not in the canton-network or hyperledger-labs Canton repos** at all.
-4. **Our internal references**:
+4. **Repository references**:
    - `packages/sdk/src/settlement/adapters/amulet.ts` — adapter implementation
    - `packages/proxy/src/host-wallet.ts` — proxy-side helpers
    - `packages/proxy/test/auto-withdraw.test.mjs` — tests against MOCKED endpoints (no real service)
@@ -228,4 +227,5 @@ config points at it; no partner memo references it.
 * **Remove `CANTON_STREAMS_WALLET_GATEWAY_URL` from `docs/DEPLOYMENT.md`**
   and replace with the `SIGNING_PROVIDER` + Splice Wallet Gateway URL config.
 
-Tracked in: STR-93 (this audit) + STR-84 (final adapter list) + STR-83 (proxy auth removal includes `host-wallet.ts` cleanup).
+Keep this note as historical context for why the public JSON-RPC gateway is
+the only supported wallet-gateway integration path.

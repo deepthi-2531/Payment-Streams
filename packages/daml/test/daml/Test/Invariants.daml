@@ -252,7 +252,7 @@ testInvariantRenewable = script do
     exerciseCmd cid2 Renew_Stream with
       additionalDeposit = addDeposit
       newEndTime = newEnd
-      renewTime = newEnd  -- [H2] anchor accrual; <= newEnd satisfies the bound
+      renewTime = newEnd  -- anchor accrual; <= newEnd satisfies the bound
 
   -- After renewal, new total deposit
   let newDeposit = deposit + addDeposit

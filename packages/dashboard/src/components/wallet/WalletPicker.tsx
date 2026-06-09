@@ -1,21 +1,4 @@
-/**
- * @module components/wallet/WalletPicker
- *
- * STR-131 follow-on: the dashboard's wallet-picker UI for
- * hosted-multi-wallet layers (currently PartyLayer).
- *
- * Rendered inline in `ConnectFlow.tsx` when
- * `walletClient.capabilities.hostedMultiWallet === true`. Lists the
- * wallets the layer surfaces via `walletClient.listWallets()`, with
- * per-entry install-state badges. Clicking an entry calls
- * `auth.connect(walletId)`; PartyLayer's adapter then runs the
- * appropriate transport (browser-extension probe, QR popup, deep
- * link, ...).
- *
- * For the single-wallet dapp-sdk layer this component is never
- * mounted — `ConnectFlow` renders the existing one-button connect
- * card instead.
- */
+/** Hosted multi-wallet picker for wallet layers that expose a wallet list. */
 
 import { useEffect, useState, type CSSProperties } from 'react';
 import { ChevronRight, Wallet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';

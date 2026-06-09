@@ -1,8 +1,7 @@
 /**
  * @module transfer-events-subscriber
  *
- * Event-driven settlement reactor for the V2-native AllocationRequest
- * pattern (STR-77 / plan §7.6).
+ * Event-driven settlement reactor for the V2-native AllocationRequest pattern.
  *
  * Replaces the poll-based `auto-withdraw.ts` worker for assets that
  * advertise V2 capabilities. For each asset in the registry, opens a
@@ -24,8 +23,6 @@
  * monitoring layer subscribes to `settlement:completed` / `:failed`
  * / `:retrying` events for observability.
  *
- * Supersedes STR-55 (poll → event migration of auto-withdraw).
- *
  * ## Lifecycle
  *
  *   1. `createSubscriber(config)` instantiates the subscriber but does
@@ -38,11 +35,10 @@
  *      decides whether to crash or continue.
  *   4. `subscriber.stop()` cleanly closes all subscriptions.
  *
- * ## Bypass for V2 DARs not yet present
+ * ## Fallback for assets without TransferEventsV2
  *
- * Until STR-100 lands the dedicated TransferEventsV2 consumer, the raw
- * Ledger API fallback remains as a scoped V2 backstop. The wire
- * event-log calls activate when `TransferEventsV2` is importable.
+ * The raw Ledger API fallback remains as a scoped V2 backstop for assets
+ * that support allocations but have not exposed TransferEventsV2 yet.
  */
 
 import { EventEmitter } from 'node:events';
@@ -50,7 +46,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from '
 import { dirname, resolve } from 'node:path';
 
 /**
- * V2 settlement choice name (V2-only per STR-79).
+ * V2 settlement choice name.
  *
  * The V2 settle choice is `Allocation_Settle`. V1 was dropped from this
  * library; this subscriber only follows configured Token Standard V2 assets.
@@ -80,8 +76,7 @@ export interface Logger {
 // Public types
 // ---------------------------------------------------------------------------
 
-/** Per-asset entry consumed by the subscriber (a subset of AssetConfig).
- * V2-only per STR-79 — V1 assets are not supported. */
+/** Per-asset entry consumed by the subscriber (a subset of AssetConfig). */
 export interface SubscriberAsset {
   readonly key: string;
   readonly displayName: string;
@@ -184,7 +179,7 @@ export function defaultOffsetFilePath(): string {
  * V2 Allocation carries `originalAllocationId : Optional Text` pointing
  * at the first allocation in the chain. Without it, the subscriber would
  * treat each iteration as an unrelated settlement and double-advance the
- * stream state. STR-97.
+ * stream state.
  *
  * For non-iterated allocations and for the first iteration, this equals
  * `allocationCid`.
@@ -223,7 +218,7 @@ export type SubscriberEvent =
   | 'instruction:expired';
 
 /**
- * V2 instruction-created event payload (STR-98).
+ * V2 instruction-created event payload.
  *
  * Per the CIP-0112 update, transfer and allocation instructions
  * carry `expiresAt` — a registry-set TTL distinct from
@@ -244,7 +239,7 @@ export interface InstructionExpiredEvent {
 }
 
 /**
- * Schedule an expiry handler for a known V2 instruction (STR-98).
+ * Schedule an expiry handler for a known V2 instruction.
  *
  * Exposed on the subscriber so callers seeing an instruction-created
  * ledger event can register the corresponding TTL handler. When wall-
@@ -274,7 +269,7 @@ export interface TransferEventsSubscriber extends EventEmitter {
   /** Manually inject a settlement event (for tests). */
   emitSettlement(event: SettlementEvent): void;
   /**
-   * Schedule a single-shot expiry handler for a V2 instruction (STR-98).
+   * Schedule a single-shot expiry handler for a V2 instruction.
    *
    * Returns a cancellable handle; calling `cancel()` clears the timer.
    * The subscriber also auto-cancels all pending handlers on `stop()`.
@@ -300,9 +295,9 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     readonly offsetFile: string;
   };
   private readonly perAssetCleanup = new Map<string, () => void>();
-  /** STR-98 — per-instruction TTL timers. Keyed by instructionCid. */
+  /** Per-instruction TTL timers. Keyed by instructionCid. */
   private readonly pendingExpiries = new Map<string, NodeJS.Timeout>();
-  /** [C4] Persistent offset store; survives restart + reconnect. */
+  /** Persistent offset store; survives restart + reconnect. */
   private readonly offsetStore: OffsetStore;
   private running = false;
 
@@ -355,10 +350,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
   }
 
   async stop(): Promise<void> {
-    // STR-98 — pending instruction TTL timers are independent of the
-    // subscription loop's `running` flag (they can be scheduled before
-    // start() is ever called, e.g. in test setup). Always cancel them
-    // on stop().
+    // Pending instruction TTL timers are independent of the subscription
+    // loop's `running` flag. Always cancel them on stop().
     for (const [cid, timer] of this.pendingExpiries) {
       clearTimeout(timer);
       this.config.logger.debug?.({ instructionCid: cid }, 'Cancelled pending instruction TTL');
@@ -384,7 +377,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
   }
 
   /**
-   * Schedule a single-shot expiry handler for a V2 instruction (STR-98).
+   * Schedule a single-shot expiry handler for a V2 instruction.
    *
    * If the same `instructionCid` is scheduled again (e.g. the registry
    * bumped its `expiresAt`), the prior timer is cancelled before the
@@ -439,10 +432,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
   // -------------------------------------------------------------------------
 
   private startPerAssetSubscription(asset: SubscriberAsset): void {
-    // V2-only per STR-79. Open the V2 TransferEvents subscription if the
-    // asset advertises it; otherwise the auto-withdraw poller stays as
-    // backstop (an asset with `allocationsV2 = true` but `transferEventsV2 = false`
-    // still settles V2 — we just can't get push events for it).
+    // Open the V2 TransferEvents subscription if the asset advertises it;
+    // otherwise the auto-withdraw poller stays as a backstop.
     if (asset.transferEventsV2) {
       this.startV2Subscription(asset);
     } else {
@@ -457,7 +448,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
 
   /**
    * V2 TransferEvents subscription via `EventLog_HoldingsChange` events
-   * from `splice-api-token-transfer-events-v2` (STR-100).
+   * from `splice-api-token-transfer-events-v2`.
    *
    * Per the CIP-0112 update (May 2026, PR #4638), the V2 events
    * package exposes `EventLog_HoldingsChange` — a parsed semantic event
@@ -486,7 +477,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
   }
 
   /**
-   * V2 `EventLog_HoldingsChange` subscription (STR-100).
+   * V2 `EventLog_HoldingsChange` subscription.
    *
    * Opens a long-poll subscription to the asset's holdings-change event
    * endpoint and emits `settlement:completed` for each event that
@@ -557,7 +548,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       headers['authorization'] = `Bearer ${this.config.ledgerApiToken}`;
     }
 
-    // [C4 fix] Resume from last persisted offset instead of replaying from genesis.
+    // Resume from last persisted offset instead of replaying from genesis.
     const resumeOffset = this.offsetStore.getAssetOffset(asset.key);
     this.config.logger.info(
       { assetKey: asset.key, resumeOffset },
@@ -565,8 +556,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     );
     const body = {
       // Filter to this asset only; the scan endpoint hint lets the
-      // server route to the right SV's event source per the per-asset
-      // routing convention (STR-56).
+      // server route to the right SV's event source for this asset.
       assetKey: asset.key,
       scanEndpointUrl: asset.scanEndpointUrl,
       subscribeAs: this.config.subscribeAs,
@@ -620,7 +610,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       this.emit('settlement:completed', settlementEvent);
     }
 
-    // [C4 fix] Persist the highest offset we just processed so a reconnect
+    // Persist the highest offset we just processed so a reconnect
     // resumes here instead of replaying from 0. Save AFTER emitting events
     // — order matters: a crash between emit and save is replayed at most
     // once (idempotent withdraw handlers tolerate this), but a crash
@@ -645,8 +635,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
    * package hashes + V2 `Allocation_Settle` exercises. Reconnects with
    * exponential backoff on disconnect.
    *
-   * This is the temporary path until STR-100 lands the dedicated V2
-   * `splice-api-token-transfer-events-v2` consumer (`EventLog_HoldingsChange`).
+   * This is the fallback path for assets that do not yet expose
+   * `splice-api-token-transfer-events-v2` holdings-change events.
    */
   private startLedgerApiSubscription(asset: SubscriberAsset): void {
     let backoffMs = this.config.initialBackoffMs;
@@ -767,7 +757,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       }
     }
 
-    // [C4] Persist the high-water mark.
+    // Persist the high-water mark.
     const newOffset = payload.endOffset ?? maxOffset;
     if (newOffset !== resumeOffset) {
       try {
@@ -805,9 +795,9 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       settlementRefId: update.exercise.argument?.settlementRefId ?? '',
       updateId: update.updateId,
       recordTime: new Date(update.recordTime ?? Date.now()),
-      // STR-97 — pull through the iteration-chain correlators when present
-      // on the exercise argument. Fall back to allocationCid (the first
-      // iteration is its own original).
+      // Pull through iteration-chain correlators when present on the
+      // exercise argument. Fall back to allocationCid; the first
+      // iteration is its own original.
       originalAllocationId:
         update.exercise.argument?.originalAllocationId ?? update.exercise.contractId,
       originalRequestId: update.exercise.argument?.originalRequestId,
@@ -816,7 +806,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
 }
 
 /**
- * V2 `EventLog_HoldingsChange` event shape (STR-100).
+ * V2 `EventLog_HoldingsChange` event shape.
  *
  * Mirrors the `splice-api-token-transfer-events-v2` event package per
  * the CIP-0112 update. Subscribers receive a typed semantic
@@ -838,9 +828,9 @@ interface HoldingsChangeEvent {
   readonly allocationCid: string;
   /** Settlement reference id from the settled allocation. */
   readonly settlementRefId?: string;
-  /** First allocation in the iteration chain (STR-97). */
+  /** First allocation in the iteration chain. */
   readonly originalAllocationId?: string;
-  /** Originating AllocationRequest cid (STR-97). */
+  /** Originating AllocationRequest cid. */
   readonly originalRequestId?: string;
 }
 
@@ -853,7 +843,7 @@ interface HoldingsChangeEvent {
 interface RawUpdate {
   readonly updateId: string;
   readonly recordTime?: string;
-  /** [C4] Ledger offset of this update, used for checkpoint persistence. */
+  /** Ledger offset of this update, used for checkpoint persistence. */
   readonly offset?: string;
   readonly exercise?: {
     readonly contractId: string;

@@ -6,7 +6,7 @@
  * that only need a low-frequency tick (~1Hz) should pass `1000`; live
  * accrual displays can pass smaller values like 80–100ms.
  *
- * Phase 1 of the Canton Streams UI integration (STR-111).
+ * Shared clock hook for live dashboard values.
  */
 import { useEffect, useState } from 'react';
 

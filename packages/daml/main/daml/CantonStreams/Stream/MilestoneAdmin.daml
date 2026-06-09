@@ -1,5 +1,5 @@
 -- | MilestoneAdmin — V2-only admin/observability for milestone-based
--- streaming (STR-88 / plan §7 / STR-79).
+-- streaming.
 --
 -- ## Architecture
 --
@@ -47,9 +47,8 @@
 --
 -- ## Coexistence with `MilestoneEscrow`
 --
--- Legacy `MilestoneEscrow` is marked DEPRECATED. Consumers must migrate
--- to `MilestoneAdmin` + V2 multi-leg `Allocation` before M4 mainnet
--- promotion.
+-- New token-standard milestone streams should use `MilestoneAdmin` +
+-- V2 multi-leg `Allocation`.
 module CantonStreams.Stream.MilestoneAdmin where
 
 -- DA.List doesn't export partition in this SDK; inline the split below.

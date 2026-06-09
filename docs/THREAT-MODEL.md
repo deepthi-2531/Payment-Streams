@@ -358,7 +358,7 @@ The service token should:
    visibility into stream terms.
 7. **Set Canton time tolerance** appropriately. The default (a few
    seconds) is sufficient for most deployments.
-8. **Audit executor policies** (Phase 3). Regularly review active
+8. **Audit executor policies**. Regularly review active
    `DelegatedPolicy` contracts and execution logs.
 9. **Back up participant state** before DAR upgrades.
 10. **Run Daml script invariant tests** as part of CI/CD before deploying
@@ -366,14 +366,12 @@ The service token should:
 
 ---
 
-## Pre-Audit Coverage Additions (M3)
+## Additional Trust Boundaries
 
-This section was added in advance of the M3 independent audit engagement
-(STR-24). It covers the trust boundaries introduced by changes since the
-original threat model: the V2-only CIP-56 allocation path, V2
-runtime capability gating per CIP-0112, on-ledger DelegatedPolicy
-enforcement, multi-Scan adoption verification, and the CIP-103 dApp
-Provider.
+This section covers the trust boundaries introduced by the V2-only CIP-56
+allocation path, V2 runtime capability gating per CIP-0112, on-ledger
+DelegatedPolicy enforcement, multi-Scan adoption verification, and the
+CIP-103 dApp Provider.
 
 ### V2-Only CIP-56 Settlement Path
 
@@ -386,12 +384,12 @@ party, Scan endpoint, wallet-gateway URL, capability flags) live in
 
 | Threat | Surface | Mitigation |
 |---|---|---|
-| Asset registry tampering | `config/asset-registry.json` is committed in-repo; a malicious edit could route to an attacker-controlled Scan or wallet-gateway | Registry file is reviewed in code review and pinned per release. Adoption-metrics tooling (Foundation-side) consumes the manifest from a known repo + commit, not from the grantee's runtime |
-| Asset advertises V2 but doesn't honor V2 semantics | All routing goes through V2 — no fallback | `getAssetCapabilities` can be refreshed against on-chain metadata. If V2 errors surface, library fails-fast with the asset key + error context; operator decides whether to retry. **V1 fallback path does not exist** (V2-only per STR-79). |
+| Asset registry tampering | `config/asset-registry.json` is committed in-repo; a malicious edit could route to an attacker-controlled Scan or wallet-gateway | Registry file is reviewed in code review and pinned per release. Adoption-metrics tooling consumes the manifest from a known repo + commit, not from mutable runtime config |
+| Asset advertises V2 but doesn't honor V2 semantics | All routing goes through V2 — no fallback | `getAssetCapabilities` can be refreshed against on-chain metadata. If V2 errors surface, library fails-fast with the asset key + error context; operator decides whether to retry. **V1 fallback path does not exist**. |
 | InstrumentRef spoofing | A malicious actor could craft an `InstrumentRef` for a different asset | V2 capability resolution binds the asset to its registry admin and instrument id; stream creation must use a registered V2 asset entry |
 | Settlement reference forgery | A malicious actor could spoof stream metadata | V2 `SettlementInfo` and `AllocationSpecification` are signed ledger arguments; the adoption-metrics aggregator verifies by querying public Scan, not by trusting in-repo data |
 
-### CIP-0112 V2 capability assertion (V2-only per STR-79)
+### CIP-0112 V2 capability assertion
 
 The capabilities layer (`packages/sdk/src/assets/capabilities.ts`)
 asserts V2 capabilities at dispatch time and refuses to route against
@@ -455,18 +453,17 @@ on-ledger: `active` flag, `expiresAt`, `allowedActions`, `streamFilters`
 
 ### Multi-Scan Endpoint Adoption Verification
 
-The adoption-metrics tooling (`scripts/query-adoption-metrics.mjs` after
-STR-56) aggregates across multiple SV Scan endpoints — one per asset in
-the registry. The Foundation runs this tool to verify M4 + M5
-acceptance.
+The adoption-metrics tooling (`scripts/query-adoption-metrics.mjs`)
+aggregates across multiple SV Scan endpoints, one per asset in the
+registry.
 
 **Threats**
 
 | Threat | Mitigation |
 |---|---|
-| Grantee self-dealing inflating burn metrics | Exclusion list of grantee + affiliate party identifiers, published with the grant agreement; the metrics tool excludes their transactions |
-| Forged Scan responses | The Foundation independently picks the Scan endpoint URLs (from the canonical SV network status page), not from grantee runtime |
-| Stale registry routing | Registry is versioned and committed; the Foundation pins to a specific commit at acceptance time |
+| Self-dealing inflating metrics | Exclusion list of affiliate party identifiers; the metrics tool excludes their transactions |
+| Forged Scan responses | Operators independently pick the Scan endpoint URLs from canonical network status, not from app runtime |
+| Stale registry routing | Registry is versioned and committed; operators pin to a specific commit for reporting |
 | Cross-asset aggregation errors | Each Scan endpoint queried separately with the same template-id filter; results joined post-query, no shared trust |
 
 ### CIP-103 dApp Provider Trust Boundary
@@ -488,12 +485,12 @@ wallet. The wallet holds private keys; the dApp never sees them.
 ### Proxy Production-Hardening Trust Boundary
 
 The reference proxy (`packages/proxy/`) is a **dev-grade** server-side
-trust boundary. Production deployments require the hardening items in
-STR-47 (vault, rate limits, CSRF, persistent audit, correlation IDs)
-before being exposed to untrusted networks. The current proxy is **not**
+trust boundary. Production deployments require vault-backed secrets, rate
+limits, CSRF protection, persistent audit logs, and correlation IDs before
+being exposed to untrusted networks. The current proxy is **not**
 appropriate for direct internet exposure.
 
-**Threats not yet mitigated** (tracked in STR-47)
+**Threats not yet mitigated**
 
 - `PROXY_SERVICE_TOKEN` in env-var memory rather than vault
 - Permissive CORS; no origin allowlist
@@ -504,9 +501,9 @@ appropriate for direct internet exposure.
 - Per-role response filtering not implemented
 - Graceful shutdown does not drain auto-withdraw worker
 
-### Audit Scope (STR-24)
+### Security Review Scope
 
-When the M3 audit firm is engaged, the scope covers:
+Independent security reviews should cover:
 
 1. Core escrow templates (`StreamEscrow`, `TokenStandardEscrow`)
 2. `StreamFlow` (rolling top-up) templates
@@ -520,7 +517,7 @@ When the M3 audit firm is engaged, the scope covers:
 
 ---
 
-## AllocationRequest Pattern — Trust Boundaries (STR-74)
+## AllocationRequest Pattern — Trust Boundaries
 
 The V2-native AllocationRequest migration (plan §7) replaces the
 deprecated **settlement-reference path** (off-chain wallet-gateway
@@ -534,14 +531,14 @@ with the **idiomatic CIP-56 Token Standard pattern**:
 3. The escrow operator (or any executor authorized by the
    `SettlementInfo.executor` field) exercises `Allocation_Settle` to
    atomically move the funds and emit settlement events.
-4. The proxy's `TransferEventsSubscriber` (STR-77) reacts to the settle
+4. The proxy's `TransferEventsSubscriber` reacts to the settle
    event and exercises the stream-state-advancing choice
    (`Withdraw_Stream` / `Withdraw_Flow` / `ConfirmMilestone`).
 
 This section enumerates the new trust boundaries and invariants
 introduced by the AllocationRequest pattern.
 
-### ~~Trust boundary 1: dual-interface implementation~~ (REMOVED per STR-79)
+### ~~Trust boundary 1: dual-interface implementation~~
 
 V2-only architecture — templates implement only `AllocationRequestV2`.
 The dual-interface consistency-attack surface is closed because the V1
@@ -565,13 +562,12 @@ timely allocation by computing an overly-tight deadline.
 
 - The view's `requestedAt` is set to `config.startTime` (a stable
   contract field). Per-cycle deadlines are refined at exercise time
-  by the SDK (`buildAllocationSettle` in STR-75) — the view value is
+  by the SDK at settle time; the view value is
   a worst-case upper bound used for advisory display.
 - `defaultSettleBuffer = 5 minutes` (Daml `Bridge.defaultSettleBuffer`)
   matches the SDK default. Both sides must agree on the buffer or the
   settlement deadline check can fail.
-- V1 has no on-ledger deadline enforcement — V1 wallets honor the
-  deadlines as advisory.
+- V1 is not supported by this implementation.
 
 ### Trust boundary 3: AccountV2 provider field (institutional custody)
 
@@ -632,25 +628,21 @@ could mix legs from different streams or include unauthorized legs.
   `Bridge.checkConservationV2` — total leg amount cannot exceed the
   remaining undrawn balance (per stream).
 
-### Trust boundary 6: stub interface modules (until STR-65)
+### Trust boundary 6: interface package alignment
 
-**Risk:** Until STR-65 lands the real Splice V2 DARs, the codebase
-uses stub interfaces in `CantonStreams.Settlement.Stubs.*`. Stubs
-that differ from the real interfaces (e.g. missing fields, different
-choice signatures) would result in a deployment that does not
+**Risk:** If the Daml interface packages used by this repository drift
+from the V2 interfaces implemented by wallets, deployments will not
 interoperate with V2 wallets.
 
 **Mitigation:**
 
-- Each Stubs/ module documents the swap protocol (single-line import
-  change per consumer) at the top of the file.
-- The stub shapes mirror the public V2 spec at
-  `splice@token-standard-v2-upcoming/token-standard/` and are
-  verified during the M3 pre-audit refresh.
-- The `daml.yaml` `-Wno-upgrade-interfaces` flag is documented as
-  temporary and tied to the stub-removal task (STR-65 + STR-70).
+- The Daml dependency fetcher pins upstream package versions in
+  `scripts/fetch-v2-dars.mjs`.
+- `scripts/check-v2-conformance.sh` blocks forbidden V1 command names.
+- Release validation should rebuild the DARs and run the V2 wallet-only
+  Daml scenarios against the pinned interface packages.
 
-### Trust boundary 7: subscriber-driven state advancement (STR-77)
+### Trust boundary 7: subscriber-driven state advancement
 
 **Risk:** The `TransferEventsSubscriber` reacts to `Allocation_Settle`
 events from the ledger and exercises stream-advancing choices. A
@@ -672,16 +664,14 @@ in) and cause the subscriber to advance the wrong stream's state.
 - Reconnect uses exponential backoff to avoid amplifying a malicious
   settlement flood into self-DoS.
 
-### Auditor checklist (M3)
+### Security Review Checklist
 
-When the M3 audit firm reviews the AllocationRequest pattern, the
-scope must include:
+When security teams assess the AllocationRequest pattern, the scope should include:
 
 1. The seven trust boundaries above
-2. Daml-script test coverage (Test.Stream.AllocationWorkflow,
-   Test.Stream.V1V2Mixed)
+2. Daml-script test coverage, including `Test.Stream.AllocationWorkflow`
 3. SDK capability negotiation (`getAssetCapabilities`, `selectAdapter`)
-4. `dispatchSettlement` routing matrix (V1 / V2 / legacy)
+4. `dispatchSettlement` routing matrix for supported V2 flows
 5. Subscriber package-hash + template-id filtering
 6. Asset registry integrity (signatures on the in-repo JSON; CI
    verification that `build-asset-registry.mjs` output matches

@@ -9,7 +9,7 @@
  * by `name`. Reads the validation error from `formState.errors[name]`
  * and renders it via `<FormError>`.
  *
- * Phase 4 / STR-115.
+ * Shared form field wrapper.
  *
  * Usage:
  * ```tsx

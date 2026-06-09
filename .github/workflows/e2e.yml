@@ -1,8 +1,7 @@
 name: E2E — Wallet-backed V2 (manual)
 
-# STR-129 acceptance harness. Runs the live Splice LocalNet Amulet wallet
-# flow against the Streams docker stack and exercises the V2 allocation
-# choices end-to-end.
+# Runs the live Splice LocalNet Amulet wallet flow against the Streams
+# docker stack and exercises the V2 allocation choices end-to-end.
 #
 # This job is intentionally NOT triggered on push. The Splice LocalNet
 # stack takes 10-30 minutes to build on a cold cache and needs sbt +

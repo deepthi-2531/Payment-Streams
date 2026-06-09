@@ -46,27 +46,22 @@ export interface AutoWithdrawConfig {
   readonly synchronizerId?: string;
   /**
    * When true (PROXY_AUTO_WITHDRAW_SUBSCRIBER_MODE=true), the worker
-   * uses the event-driven `TransferEventsSubscriber` (STR-77) instead
+   * uses the event-driven `TransferEventsSubscriber` instead
    * of the poll-based cycle loop. The subscriber reacts to
-   * `Allocation_Settle` events directly from the V1 ledger tx stream
-   * (or TransferEventsV2 when V2 DARs are present). Reduces latency
-   * from ~poll-interval to event-receipt; removes the busy poll loop.
-   *
-   * Defaults to false (poll-based) until M3 hardening validates the
-   * subscriber against real V2 DARs. Supersedes STR-55.
+   * `Allocation_Settle` events from TransferEventsV2 or the raw Ledger
+   * API fallback. This reduces latency from poll-interval to event receipt
+   * and removes the busy poll loop.
    */
   readonly subscriberMode: boolean;
   /**
    * When true (`PROXY_AUTO_WITHDRAW_USE_SIGNING_PROVIDER=true`), the
    * worker routes the interactive submission through
-   * `SigningProvider.prepareExecuteAndWait()` (STR-84) instead of doing
+   * `SigningProvider.prepareExecuteAndWait()` instead of doing
    * an in-process `prepare → node:crypto.sign → execute` trio.
    *
-   * This is the documented architecture (plan §0 + STR-90): signing keys
-   * live in the Wallet Gateway's bound signing provider (Participant /
-   * Fireblocks / Blockdaemon / Dfns / wallet-gateway-internal), never in
-   * the proxy process. The legacy in-process path is the M3 deprecation
-   * fallback only — it warns on every use and is hard-removed in M4.
+   * Signing keys live in the Wallet Gateway's bound signing provider
+   * (Participant / Fireblocks / Blockdaemon / Dfns / wallet-gateway-internal),
+   * never in the proxy process.
    *
    * Requires `CANTON_STREAMS_WALLET_GATEWAY_URL` +
    * `CANTON_STREAMS_WALLET_GATEWAY_TOKEN` in env.
@@ -156,16 +151,8 @@ export function parseAutoWithdrawConfig(
     jsonApiUrl: trimToUndefined(
       env['CANTON_JSON_API_URL'] ?? env['PROXY_CANTON_JSON_API_URL'],
     ),
-    // [M10 fix] Restrict the JSON-API token to its explicitly-named env
-    // var. Previously the fallback chain crossed auth tiers: the
-    // PROXY_SERVICE_TOKEN (service-tier authority) could silently
-    // substitute for the JSON API token (data-read tier), giving the
-    // JSON API broader scope than intended.
-    //
-    // The CANTON_TOKEN / LEDGER_TOKEN fallbacks remain because they're
-    // the standard Canton ecosystem env var names for the same tier
-    // (ledger read) and operators commonly set them. PROXY_SERVICE_TOKEN
-    // is the cross-tier offender; removed from this chain.
+    // Keep JSON-API auth on ledger-read credentials only; do not fall
+    // back to service-tier proxy credentials.
     jsonApiToken: trimToUndefined(
       env['PROXY_TOKEN_STANDARD_AUTOWITHDRAW_JSON_API_TOKEN'] ??
       env['CANTON_TOKEN'] ??
@@ -343,8 +330,8 @@ export async function runTokenStandardAutoWithdrawCycle(
 }
 
 /**
- * Start the auto-withdraw worker. Per STR-77, when
- * `config.subscriberMode` is true, the worker delegates to the
+ * Start the auto-withdraw worker. When `config.subscriberMode` is true,
+ * the worker delegates to the
  * event-driven `TransferEventsSubscriber` and skips the poll loop;
  * the supplied `runCycle` callback is used only as a manual-trigger
  * backstop (e.g. via the admin endpoint).
@@ -691,9 +678,8 @@ export async function executeInteractiveWithdraw(
     );
   }
 
-  // STR-90: SigningProvider-routed path. The gateway holds the key for
-  // `escrowOperator` (Participant / Fireblocks / Blockdaemon / Dfns /
-  // wallet-gateway-internal); we never touch the private material here.
+  // SigningProvider-routed path. The gateway holds the key for
+  // `escrowOperator`; we never touch private material here.
   //
   // The earlier in-process `prepare` call already validated the choice
   // args against on-ledger state, so by the time we reach this branch
@@ -752,7 +738,7 @@ export async function executeInteractiveWithdraw(
     },
   };
 
-  // [H7 / STR-109] Atomicity gap: at this point the off-chain transfer
+  // Atomicity gap: at this point the off-chain transfer
   // (adapter.transfer above) has already moved funds. If executeAndWait
   // fails permanently, the ledger has no record of the withdraw. The
   // `commandId` / `submissionId` (line 617) is Canton's idempotency key —
@@ -766,7 +752,7 @@ export async function executeInteractiveWithdraw(
   // the transfer (compensating transfer is non-trivial without
   // persistent state and creates risk of double-undo).
   //
-  // The long-term fix is the AllocationRequest pattern (STR-86) where
+  // The long-term fix is the AllocationRequest pattern, where
   // the transfer + ledger record happen in one atomic transaction.
   const EXECUTE_RETRY_LIMIT = 3;
   let executeAttempt = 0;
@@ -817,14 +803,14 @@ export async function executeInteractiveWithdraw(
   }
 
   if (executeError !== undefined) {
-    // [H7] Structured error for ops monitoring. Off-chain transfer
+    // Structured error for ops monitoring. Off-chain transfer
     // already executed (settlementReference is the dedup key); operator
     // must reconcile manually or invoke the admin retry endpoint.
     console.error(
       JSON.stringify({
         event: 'autowithdraw.execute_failed_after_transfer',
         severity: 'critical',
-        ticketRef: 'STR-109',
+        riskRef: 'off_chain_transfer_after_ledger_execute_failure',
         streamId: stream.config.streamId,
         commandId,
         settlementReference,
@@ -1374,7 +1360,7 @@ function normalizeSigningCredentials(
 }
 
 // ---------------------------------------------------------------------------
-// STR-90: SigningProvider-routed submission (replaces in-process signing).
+// SigningProvider-routed submission (replaces in-process signing).
 // ---------------------------------------------------------------------------
 
 interface SigningProviderWithdrawArgs {
@@ -1448,10 +1434,10 @@ function warnInProcessSigningOnce(): void {
   warnedInProcess = true;
    
   console.warn(
-    '[canton-streams/proxy] In-process signing path is DEPRECATED (STR-90). ' +
+    '[canton-streams/proxy] In-process signing path is deprecated. ' +
     'Set PROXY_AUTO_WITHDRAW_USE_SIGNING_PROVIDER=true plus ' +
     'CANTON_STREAMS_WALLET_GATEWAY_URL + CANTON_STREAMS_WALLET_GATEWAY_TOKEN ' +
-    'to route signing through the Wallet Gateway. This fallback is hard-removed in M4.',
+    'to route signing through the Wallet Gateway.',
   );
 }
 
@@ -1471,7 +1457,7 @@ function signPreparedHash(
     throw new Error('interactive signing credentials are missing a private key');
   }
 
-  // [M9 fix] Use prefix match, not substring. Previously
+  // Use prefix match, not substring. Previously
   // `includes('BEGIN')` would treat any string containing "BEGIN" anywhere
   // as PEM-encoded, which could misclassify a base64 secret that happens
   // to contain those letters. PEM is always anchored at `-----BEGIN`.
@@ -1733,7 +1719,7 @@ const silentLogger = {
 };
 
 // ---------------------------------------------------------------------------
-// Subscriber-mode worker (STR-77 — event-driven settlement advancement)
+// Subscriber-mode worker — event-driven settlement advancement
 // ---------------------------------------------------------------------------
 
 import {
@@ -1755,7 +1741,6 @@ import {
  * Manual-trigger paths (e.g. the admin HTTP endpoint) remain available
  * and continue to call `runCycle` directly.
  *
- * Supersedes STR-55 (poll → event migration of auto-withdraw).
  */
 export function startSubscriberAutoWithdrawWorker(args: {
   readonly config: AutoWithdrawConfig;

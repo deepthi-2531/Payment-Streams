@@ -4,7 +4,7 @@
  * Ported from `Canton Streams/src/primitives.jsx`. The pulse animation
  * on Active streams comes from the `pulse` class in `cc-streams.css`.
  *
- * Phase 1 — STR-111.
+ * Shared status badge primitive.
  */
 import { Icons } from './Icons.js';
 

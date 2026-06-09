@@ -37,7 +37,7 @@ linearAccrual totalDeposited startTime endTime now
 
 -- | Compute accrued amount for cliff+linear vesting.
 --
--- [M3 fix] Comment clarified to match the actual math.
+-- Comment clarified to match the actual math.
 --
 -- Semantics: the total deposit vests linearly from `startTime` to `endTime`
 -- but nothing is accessible until `cliffTime`. At the instant `cliffTime`

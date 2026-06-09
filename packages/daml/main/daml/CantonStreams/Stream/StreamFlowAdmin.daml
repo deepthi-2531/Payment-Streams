@@ -1,9 +1,9 @@
 -- | StreamFlowAdmin — V2-only admin/observability for the rolling
--- top-up / non-prefunded streaming pattern (STR-87 / plan §7.4 / STR-79).
+-- top-up / non-prefunded streaming pattern.
 --
 -- ## Architecture
 --
--- Like `StreamAdmin` (STR-86), this template is observability-only:
+-- Like `StreamAdmin`, this template is observability-only:
 -- the actual locked funds live in V2 `Allocation` contracts the sender
 -- creates via `AllocationFactory_Allocate` with `committed = True` and
 -- `nextIterationFunding` populated. What differs from `StreamAdmin`:
@@ -45,9 +45,8 @@
 --
 -- The legacy `StreamFlow` template (this module's predecessor) carries
 -- locked balance directly via `fundedAmount` + `totalWithdrawn` fields.
--- That template is marked DEPRECATED and consumers MUST migrate to
--- `StreamFlowAdmin` + a V2 `Allocation` chain before M4 mainnet
--- promotion.
+-- New token-standard flow streams should use `StreamFlowAdmin` + a V2
+-- Allocation chain.
 module CantonStreams.Stream.StreamFlowAdmin where
 
 import CantonStreams.Interface.Types
@@ -83,7 +82,7 @@ template StreamFlowAdmin
     status : StreamStatus
     currentAllocationCid : Optional Text
     originalAllocationId : Optional Text
-      -- ^ First allocation in the chain (STR-97). Stays stable across
+      -- ^ First allocation in the chain. Stays stable across
       -- iterations + top-ups (top-up merges via SettlementFactory_SettleBatch
       -- self-transfer, which preserves originalAllocationId per V2 spec).
     observers : [Party]

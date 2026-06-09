@@ -1,5 +1,5 @@
 /**
- * BalanceDisplay — STR-116 Phase 5 reskin to cc-streams dark theme.
+ * BalanceDisplay — stream balance summary cards.
  *
  * 4-up grid of balance cards (Accrued / Withdrawable / Refundable /
  * Progress). Highlights "Withdrawable" with var(--accent) and renders

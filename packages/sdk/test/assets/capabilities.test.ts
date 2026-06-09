@@ -1,6 +1,5 @@
 /**
  * Unit tests for assets/capabilities.ts — paused / pauseInfo surfacing
- * (STR-96 + STR-79 V2-only).
  *
  * Covers:
  *   - getAssetCapabilitiesFromRegistry surfaces paused + pauseInfo
@@ -108,7 +107,7 @@ describe('assertActionSupported with paused asset', () => {
   });
 });
 
-describe('CapabilityCache.refresh + MetadataFetcher (STR-96 on-chain refresh)', () => {
+describe('CapabilityCache.refresh + MetadataFetcher on-chain refresh', () => {
   it('refresh() picks up paused=true from on-chain fetcher even if registry advertises paused=false', async () => {
     const registry = makeRegistry([makeAsset({ paused: false })]);
     const fetcher: MetadataFetcher = vi.fn(async () =>

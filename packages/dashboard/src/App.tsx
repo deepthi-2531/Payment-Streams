@@ -15,20 +15,9 @@ const queryClient = new QueryClient({
   },
 });
 
-/**
- * Auth gate — Phase 7 / STR-118.
- *
- * Until the user connects a wallet (or supplies dev-mode credentials),
- * we render the split-screen ConnectFlow instead of the dashboard
- * shell. This keeps the protected routes from ever calling the proxy
- * without a real session token.
- */
+/** Render the dashboard only after a wallet or dev session is available. */
 function AuthGate() {
   const { isAuthenticated } = useAuth();
-  // STR-123: any time the wallet's primary party changes (or
-  // disconnects), invalidate every cached query so the dashboard
-  // refetches against the new identity. Lives at the gate so it
-  // mounts once, above all routes.
   useAccountsChangedInvalidation();
   if (!isAuthenticated) return <ConnectFlow />;
   return (

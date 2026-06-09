@@ -1,4 +1,4 @@
--- | Tests for `CantonStreams.Stream.MilestoneAdmin` (STR-88).
+-- | Tests for `CantonStreams.Stream.MilestoneAdmin`.
 module Test.Stream.MilestoneAdminLifecycle where
 
 import Daml.Script

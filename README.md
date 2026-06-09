@@ -184,7 +184,7 @@ Create `packages/dashboard/.env.local`:
 ```bash
 VITE_SKIP_WALLET_PICKER=true
 VITE_WALLET_GATEWAY_URL=http://127.0.0.1:3030/api/v0/dapp
-VITE_WALLET_NAME=Splice Amulet Wallet (LocalNet V2)
+VITE_WALLET_NAME=Splice Amulet Wallet
 ```
 
 With this mode enabled, the dashboard connects directly to the configured

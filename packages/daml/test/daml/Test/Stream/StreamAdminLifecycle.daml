@@ -1,5 +1,5 @@
 -- | Tests for `CantonStreams.Stream.StreamAdmin` — the V2-only admin /
--- observability template per STR-86.
+-- observability template.
 --
 -- These tests exercise the lifecycle observability semantics in
 -- isolation from a real V2 `Allocation` chain. The pattern:
@@ -12,11 +12,11 @@
 --        - totalWithdrawn accumulates correctly across iterations
 --        - status transitions to Completed when fully drawn
 --        - originalAllocationId is set by the FIRST sync and stays
---          stable across subsequent iterations (STR-97)
+--          stable across subsequent iterations
 --        - Mark_Cancelled / Mark_Completed enforce their preconditions
 --
 -- Full end-to-end iteration-chain tests (with real V2 AllocationFactory_Allocate
--- + Allocation_Settle drive) land in `Test.Stream.V2WalletOnly` (STR-89)
+-- + Allocation_Settle drive) land in `Test.Stream.V2WalletOnly`
 -- and require the splice-token-test infrastructure.
 module Test.Stream.StreamAdminLifecycle where
 

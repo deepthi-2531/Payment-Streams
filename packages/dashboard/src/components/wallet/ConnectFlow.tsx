@@ -7,9 +7,8 @@
  *        LocalNet gateway, depending on config), plus a dev-mode fallback
  *        for environments without a real wallet.
  *
- * The actual provider/identity selection is handled inside dapp-sdk's
- * built-in wallet picker (`@canton-network/core-wallet-ui-components`).
- * This component just gates the rest of the dashboard.
+ * Hosted-wallet layers render a wallet list; single-wallet layers render a
+ * direct connect button.
  */
 
 import { useState, type CSSProperties } from 'react';
@@ -230,12 +229,6 @@ export function ConnectFlow() {
               subLabel="The picker will open in a new window if not already shown."
             />
           ) : walletClient.capabilities.hostedMultiWallet ? (
-            // STR-131 hosted-multi-wallet path: render the dashboard
-            // picker that calls auth.connect(walletId). The previous
-            // build called walletClient.connect() with no walletId,
-            // which PartyLayer routed to the first adapter (Console)
-            // and surfaced as a not-installed error — bypassing the
-            // user's choice. The picker fixes that.
             <WalletPicker />
           ) : (
             <button
@@ -332,8 +325,7 @@ export function ConnectFlow() {
                   Connect dev session
                 </button>
                 <p style={{ margin: 0, fontSize: 10.5, color: 'var(--fg-4)' }}>
-                  Dev mode bypasses the wallet — use it only against a local proxy with `unsafe_jwt`
-                  enabled.
+                  Dev mode bypasses the wallet; use it only against a local development proxy.
                 </p>
               </form>
             )}

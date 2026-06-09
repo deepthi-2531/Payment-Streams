@@ -61,7 +61,7 @@ export async function finalizeEscrow(
       return {};
     }
 
-    // [C1 fix — STR-103] Daml template missing; fail closed before submit.
+    // Legacy TokenStandardEscrow templates are not shipped; fail closed before submit.
     assertTokenStandardEscrowAvailable();
 
     if (!params?.escrowReference?.trim()) {

@@ -1,12 +1,9 @@
 /**
  * MonoCounter — smoothly-animated ticking number with tabular figures.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. Uses a requestAnimationFrame
- * loop to approach `value` exponentially (35% of remaining diff per frame),
+ * Uses a requestAnimationFrame loop to approach `value` exponentially,
  * which gives a satisfying live-counter feel without jarring jumps when
  * the underlying value updates.
- *
- * Phase 1 — STR-111.
  *
  * Numeric formatting delegates to `formatAmount` (a typed port of the mock's
  * `fmtAmount`) so all currency display stays consistent.
@@ -25,9 +22,7 @@ export interface MonoCounterProps {
 }
 
 /**
- * Locale-aware decimal formatter. Mirrors the mock's `fmtAmount(n, asset, opts)`
- * without the asset registry lookup (assets aren't typed in this primitive's
- * scope yet — Phase 5 will fold in real asset metadata).
+ * Locale-aware decimal formatter without relying on asset registry metadata.
  */
 function formatAmount(n: number, decimals: number): string {
   if (n === undefined || n === null || Number.isNaN(n)) return '0.00';
@@ -65,7 +60,7 @@ export function MonoCounter({
     };
   }, [value]);
 
-  // `asset` reserved for future per-asset decimal precision (Phase 5).
+  // `asset` is reserved for future per-asset decimal precision.
   void asset;
   const formatted = formatAmount(display, decimals);
 

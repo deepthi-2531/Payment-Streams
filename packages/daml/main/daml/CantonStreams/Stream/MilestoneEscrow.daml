@@ -17,9 +17,7 @@
 --     mainnet launch, 25% on product-market fit signal, 50% on
 --     break-even revenue")
 --
--- Adapted from the `MilestoneStream` template in
--- `Canton_Streams_RewardApp` (STR-62 porting work), but reworked onto
--- the Canton Payment Streams conventions:
+-- This template follows the Canton Payment Streams conventions:
 --
 --   * Settlement via off-chain wallet-gateway transfers (recorded as
 --     settlement references) instead of in-template GrowToken creation
@@ -39,11 +37,7 @@ import DA.Optional (isSome, fromSome)
 import DA.Time (days, addRelTime, time)
 
 import CantonStreams.Interface.Types
--- TokenStandardAdapter import removed by STR-102 Phase 2 — its symbols
--- aren't used here.
 
--- AllocationRequest stubs (swap for real Splice DAR imports when STR-65 lands).
--- V1 stub import removed by the V2-only pivot (STR-79).
 import qualified Splice.Api.Token.AllocationRequestV2 as AR2
 import qualified CantonStreams.Settlement.AllocationBridge as Bridge
 
@@ -268,14 +262,14 @@ template MilestoneEscrow
     --------------------------------------------------------------------
     -- CIP-0112 § 5 dual-interface: AllocationRequest V1 + V2
     --------------------------------------------------------------------
-    -- Per plan §7.3, MilestoneEscrow uses **V2 multi-leg
-    -- AllocationSpecification** as the idiomatic settlement shape: a
+    -- MilestoneEscrow uses **V2 multi-leg AllocationSpecification**:
+    -- a
     -- single AllocationRequest contains one TransferLegSide per
     -- unconfirmed milestone, and confirmed milestones are settled
     -- atomically via `SettlementFactory_SettleBatch` (or per-leg
     -- via `Allocation_Settle` keyed by leg id).
     --
-    -- V1 was dropped per STR-79 V2-only decision. V1 had no multi-leg
+    -- V1 is not supported. V1 had no multi-leg
     -- primitive and would have required per-milestone fresh
     -- AllocationRequestV1 emission — doubling audit surface for
     -- marginal value.
@@ -283,11 +277,11 @@ template MilestoneEscrow
     interface instance AR2.AllocationRequest for MilestoneEscrow where
       -- Real V2 interface impl signature is 2-arg: ContractId + choice record.
       allocationRequest_acceptImpl _ _ = do
-        abort "AllocationRequest_Accept V2 not yet wired on MilestoneEscrow — use ConfirmMilestone (lifecycle migration in STR-88; per-leg Allocation_Settle target)"
+        abort "AllocationRequest_Accept is not wired on MilestoneEscrow; use ConfirmMilestone or the V2 MilestoneAdmin allocation path"
       allocationRequest_rejectImpl _ _ = do
-        abort "AllocationRequest_Reject V2 not yet wired on MilestoneEscrow — use CancelMilestoneStream"
+        abort "AllocationRequest_Reject is not wired on MilestoneEscrow; use CancelMilestoneStream"
       allocationRequest_withdrawImpl _ _ = do
-        abort "AllocationRequest_Withdraw V2 not yet wired on MilestoneEscrow — use CancelMilestoneStream as escrow operator"
+        abort "AllocationRequest_Withdraw is not wired on MilestoneEscrow; use CancelMilestoneStream as escrow operator"
       -- ExtraObservers: no additional disclosure needed; request
       -- signatories (sender + recipient + admin + escrowOperator) cover it.
       allocationRequest_acceptExtraObservers _ = []

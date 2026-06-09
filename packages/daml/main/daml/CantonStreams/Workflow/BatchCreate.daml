@@ -1,6 +1,6 @@
 -- | BatchCreate workflow — create multiple stream requests in a single transaction.
 --
--- Phase 1: Numeric escrow (no Daml Finance dependency).
+-- Numeric escrow (no Daml Finance dependency).
 module CantonStreams.Workflow.BatchCreate where
 
 import CantonStreams.Interface.Types (StreamConfig(..))

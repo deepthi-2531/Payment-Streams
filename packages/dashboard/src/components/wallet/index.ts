@@ -1,5 +1,5 @@
 /**
- * Barrel for `components/wallet/*` — Phase 7 / STR-118.
+ * Barrel for wallet components.
  */
 export { ConnectFlow } from './ConnectFlow.js';
 export { SelectIdentity } from './SelectIdentity.js';

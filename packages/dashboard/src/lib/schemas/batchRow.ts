@@ -1,14 +1,4 @@
-/**
- * @module lib/schemas/batchRow
- *
- * Zod schema for one row of a batch CSV. Validates that every row
- * carries the fields needed to issue a V2-only `useCreateStream`
- * mutation against the proxy. Vesting-specific extras are inferred from
- * the vesting column; funding/account fields must come from the Amulet
- * wallet / token-standard flow and are never defaulted to legacy modes.
- *
- * Phase 6 (STR-117) — BatchPage.
- */
+/** Zod schema for one row of a batch CSV. */
 
 import { z } from 'zod';
 import { VestingMode } from '@canton-streams/sdk/browser';
@@ -138,10 +128,8 @@ export const batchRowSchema = z
     message: 'end must be strictly after start',
     path: ['end'],
   })
-  // Per-variant cross-field requirements. Linear has no extras; the
-  // other three variants must supply their config columns or the proxy
-  // would silently default to 1-day / 30-day shapes (which is what
-  // earlier batch behaviour did — a real reviewer finding).
+  // Per-variant cross-field requirements. Linear has no extra config;
+  // the other variants must provide the columns they need.
   .refine(
     (row) => row.vesting !== VestingMode.CliffLinear || row.cliffTime !== undefined,
     {

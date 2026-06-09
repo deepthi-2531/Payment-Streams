@@ -124,8 +124,8 @@ export { createLogger, setLogLevel } from './utils/logger.js';
 export type { PolicyInfo, ExecutionLogInfo } from './commands/policy.js';
 
 // SigningProvider — wallet-gateway-bound per-party signing for
-// server-side automation (STR-84). Replaces the in-process node:crypto
-// path. See docs/integration-guide/wallet-gateway-api-reference.md.
+// server-side automation. Replaces the in-process node:crypto path.
+// See docs/integration-guide/wallet-gateway-api-reference.md.
 export {
   createSigningFromEnv,
   createSigning,
@@ -162,7 +162,7 @@ export type {
   ListAccountsResult as GatewayListAccountsResult,
 } from './signing/index.js';
 
-// Single-entry-point settlement dispatcher (STR-76). Routes assets that
+// Single-entry-point settlement dispatcher. Routes assets that
 // advertise required V2 allocation support through AllocationRequestV2.
 // V1-only assets and deprecated settlement-reference adapter paths are
 // intentionally unsupported in the V2-only library.
@@ -181,10 +181,10 @@ export type {
   BatchSettleCommand,
 } from './settlement/allocation-dispatch.js';
 
-// AllocationRequestV2 emission + Allocation_Settle dispatch (STR-75 / V2-only per STR-79).
+// AllocationRequestV2 emission + Allocation_Settle dispatch.
 // The escrow templates (StreamEscrow, StreamFlow, MilestoneEscrow) implement
 // AllocationRequestV2 per CIP-0112 §5. This module is the SDK-side surface
-// for emitting and settling V2 Allocation contracts; V1 was dropped (STR-79).
+// for emitting and settling V2 Allocation contracts.
 export {
   buildAllocationRequest,
   buildAllocationSettle,
@@ -203,9 +203,9 @@ export type {
   AllocationView,
 } from './commands/allocation.js';
 
-// StreamAdmin orchestration (STR-86) — admin/observability surface for
-// V2-only iterated-allocation streaming. Records per-stream metadata +
-// pointers to the active V2 Allocation cid; lifecycle proper lives in
+// StreamAdmin orchestration — admin/observability surface for V2
+// iterated-allocation streaming. Records per-stream metadata + pointers
+// to the active V2 Allocation cid; lifecycle proper lives in
 // the V2 Allocation contracts driven by `commands/allocation`.
 export {
   buildStreamAdminCreate,
