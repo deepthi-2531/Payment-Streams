@@ -105,7 +105,7 @@ template AcceptedLocalAssetRequest
               holdingCid = fundingHoldingCid
               amount = depositAmount  -- Will be validated by splitHolding
               owner = config.sender
-              account = recipientAccount  -- placeholder; split preserves original account
+              account = recipientAccount  -- split preserves original account
 
         -- splitHolding exercises Fungible.Split on the holding
         (escrowPortion, _remainderPortion) <- splitHolding fundingEscrow depositAmount

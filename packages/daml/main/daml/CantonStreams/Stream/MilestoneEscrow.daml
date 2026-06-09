@@ -95,7 +95,7 @@ updateMilestone targetName replacement =
 -- milestones via the `ConfirmMilestone` choice, but they are not a
 -- signatory (so the admin's signature is not required at creation time).
 -- Setting `admin == sender` makes the sender the confirmer (sender-gated
--- milestones, useful for grant disbursements). A distinct admin lets an
+-- milestones, useful for staged disbursements). A distinct admin lets an
 -- oracle / KPI-validator confirm.
 template MilestoneEscrow
   with

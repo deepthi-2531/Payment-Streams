@@ -358,7 +358,7 @@ export async function runPreflight(opts) {
             `Asset "${opts.assetKey}" has ${placeholders.length} placeholder value(s): ` +
             placeholders.map((p) => `${p.path}=${p.value}`).join(', ') +
             (targetNetwork === 'mainnet'
-              ? '. Populate from the SV network status (https://canton.foundation/sv-network-status-2/) before mainnet runs.'
+              ? '. Populate from the public SV network status (https://canton.foundation/sv-network-status-2/) before mainnet runs.'
               : '. OK for DevNet; populate before mainnet.'),
           );
         }

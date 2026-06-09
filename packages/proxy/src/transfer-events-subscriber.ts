@@ -450,8 +450,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
    * V2 TransferEvents subscription via `EventLog_HoldingsChange` events
    * from `splice-api-token-transfer-events-v2`.
    *
-   * Per the CIP-0112 update (May 2026, PR #4638), the V2 events
-   * package exposes `EventLog_HoldingsChange` — a parsed semantic event
+   * The V2 events package exposes `EventLog_HoldingsChange` — a parsed semantic event
    * stream describing all holding changes (transfers, locks, burns,
    * mints, allocation settles). This is preferred over raw transaction
    * parsing because:
@@ -462,9 +461,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
    *   - Single event stream covers all V2 holding kinds (not just allocations)
    *
    * Raw transaction fallback is retained for assets that advertise V2
-   * allocations but have not yet published `transferEventsV2`. Per
-   * CIP-0112 § 5, this should be temporary as assets publish V2 event
-   * interfaces alongside their V2 allocation support.
+   * allocations but have not yet published `transferEventsV2`. Assets
+   * should publish V2 event interfaces alongside V2 allocation support.
    */
   private startV2Subscription(asset: SubscriberAsset): void {
     if (!asset.transferEventsV2) {

@@ -186,22 +186,22 @@ data AssetType
 --
 -- Each mode maps to a different on-ledger template and custody path:
 --
---   NumericLegacy          — Phase 1 numeric bookkeeping (no real holdings).
---   UtilityHoldingCustody  — Phase 2 Utility/CIP holdings (Holding_Lock/Split/Transfer).
---   TokenStandardCustody   — Phase 2 external-token custody via token-standard transfers.
---   LocalAssetCustody      — Phase 2 AMM AssetHolding (archive/recreate pattern).
---   Delegated              — Phase 3 executor-delegated settlement (no prefunded escrow).
+--   NumericLegacy          — numeric bookkeeping (no real holdings).
+--   UtilityHoldingCustody  — Utility/CIP holdings (Holding_Lock/Split/Transfer).
+--   TokenStandardCustody   — external-token custody via token-standard transfers.
+--   LocalAssetCustody      — AMM AssetHolding (archive/recreate pattern).
+--   Delegated              — executor-delegated settlement (no prefunded escrow).
 data SettlementMode
   = NumericLegacy
-    -- ^ Phase 1 numeric bookkeeping — no real holdings move.
+    -- ^ Numeric bookkeeping — no real holdings move.
   | UtilityHoldingCustody
-    -- ^ Phase 2 Utility/CIP custody — real holdings locked/split/transferred.
+    -- ^ Utility/CIP custody — real holdings locked/split/transferred.
   | LocalAssetCustody
-    -- ^ Phase 2 local asset custody — AMM AssetHolding archive/recreate.
+    -- ^ Local asset custody — AMM AssetHolding archive/recreate.
   | Delegated
-    -- ^ Phase 3 delegated execution — executor service manages settlement.
+    -- ^ Delegated execution — executor service manages settlement.
   | TokenStandardCustody
-    -- ^ Phase 2 external-token custody — sender/escrow/recipient transfers happen via token-standard flows.
+    -- ^ External-token custody — sender/escrow/recipient transfers happen via token-standard flows.
   deriving (Eq, Show)
 
 -- | Reference to the escrow operator service account.
