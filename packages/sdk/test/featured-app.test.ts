@@ -58,8 +58,8 @@ describe('featured-app', () => {
         cfg,
         'milestoneConfirm',
         new Decimal('25000'),
-        'grant-001',
-        'Foundation::1220...',
+        'milestone-001',
+        'ProgramAdmin::1220...',
         'milestone-mvp-shipped',
       );
       expect(result?.meta).toBe('milestone-mvp-shipped');
@@ -67,11 +67,10 @@ describe('featured-app', () => {
   });
 
   describe('estimateRewardCapUsd', () => {
-    // CIP-0047 is scheduled to be phased out around end of July when
-    // CIP-0104 goes live. We must not bake a fixed reward number into
-    // the SDK — every reward projection must require an explicit,
-    // caller-supplied cap that the caller has verified against the
-    // currently-active Canton Foundation regime.
+    // We must not bake a fixed reward number into the SDK — every
+    // reward projection must require an explicit, caller-supplied cap
+    // that the caller has verified against the currently active network
+    // reward regime.
 
     it('returns undefined when no rewardCapUsd is supplied', () => {
       expect(estimateRewardCapUsd('withdraw')).toBeUndefined();

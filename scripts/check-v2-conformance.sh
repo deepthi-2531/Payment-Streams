@@ -4,7 +4,7 @@
 #
 # Blocks accidental introduction of identifiers that don't exist in the
 # upstream CIP-56 V2 surface, typically because they were V1 names from
-# a deleted code path or stub-era inventions that pre-dated the V2-only
+# a deleted code path or older implementation details that pre-dated the V2-only
 # implementation.
 #
 # Run by CI on every push + PR.

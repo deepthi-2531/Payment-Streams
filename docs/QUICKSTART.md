@@ -85,7 +85,7 @@ For a local SWK setup, see [SWK-WALLET-RUNBOOK.md](SWK-WALLET-RUNBOOK.md).
 2. Pick a stream variant:
    - **Streaming payment** (`StreamAdmin` — prefunded, bounded-term) — for vesting, LP rewards
    - **Subscription** (`StreamFlow` — iterated, variable funding) — for recurring billing
-   - **Milestone** (`MilestoneAdmin` — event-triggered tranches) — for grant unlocks
+   - **Milestone** (`MilestoneAdmin` — event-triggered tranches) — for KPI or delivery unlocks
 3. Fill in:
    - **Recipient**: recipient party id
    - **Asset**: pick from your registered assets (defined in `config/asset-registry.json`)

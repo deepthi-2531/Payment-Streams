@@ -3,7 +3,7 @@
 --
 -- This module is the **integration seam** between Canton Payment Streams'
 -- lifecycle events (Create, Accept, Withdraw, Cancel, Renew, TopUp,
--- Complete) and the Canton Foundation's featured-app marker program.
+-- Complete) and a network featured-app marker program.
 --
 -- ## Why this matters
 --
@@ -19,14 +19,14 @@
 -- ## Integration model
 --
 -- The actual `FeaturedAppActivityMarker` template is published by the
--- Canton Foundation as part of the CIP-0047 standard. Until that
+-- relevant network program as part of the CIP-0047 standard. Until that
 -- template is depended on directly in `.lib/`, this module defines an
 -- **integration record** `FeaturedAppEmission` that captures what
 -- would be emitted, and a helper function `buildEmission` that
 -- consumers can wire into their settlement orchestrator.
 --
 -- When the upstream CIP-0047 DAR is added to `.lib/`, replace the
--- placeholder with the real `FeaturedAppActivityMarker.Create`
+-- integration record with the real `FeaturedAppActivityMarker.Create`
 -- invocation. The consumer surface (the `FeaturedAppEmission` record
 -- + opt-in config field) does not change.
 module CantonStreams.FeaturedApp.Activity where
@@ -43,7 +43,7 @@ module CantonStreams.FeaturedApp.Activity where
 -- Fields:
 --
 --   featuredAppKey   — the dApp's CIP-0047 featured-app key (issued
---                      by the Canton Foundation upon registration)
+--                      by the program administrator upon registration)
 --   activityType     — which lifecycle event triggered the emission
 --   amount           — economic value associated with the event,
 --                      used by the active reward regime, if any
@@ -102,7 +102,7 @@ enabledFeaturedApp key = FeaturedAppConfig with
   featuredAppKey = key
 
 ------------------------------------------------------------------------
--- Recording (placeholder for real CIP-0047 marker creation)
+-- Recording seam for real CIP-0047 marker creation
 ------------------------------------------------------------------------
 
 -- | Build a `FeaturedAppEmission` record from a stream lifecycle event.

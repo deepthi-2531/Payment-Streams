@@ -81,7 +81,7 @@ const usdcx = registry.requireAsset('usdcx');
 
 // 2. Construct the stream params via a use-case helper
 const params = buildVestingStream({
-  streamId: 'employee-alice-grant-1',
+  streamId: 'employee-alice-vesting-1',
   sender: vestingAgentParty,
   recipient: aliceParty,
   totalAmount: '100000',
@@ -123,5 +123,5 @@ into `provider.prepareExecute({...})`. See `cip-103-walkthrough.md`.
 
 - **GitHub Discussions**: architecture + design questions
 - **GitHub Issues**: bugs + feature requests
-- **Canton Foundation Discord**: real-time community
+- **Canton community channels**: real-time community
 - **`security@…`** (see SECURITY.md): private security disclosure

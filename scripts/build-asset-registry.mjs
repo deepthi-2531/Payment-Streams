@@ -9,7 +9,7 @@
  *
  * This script generates / refreshes the registry from:
  *
- *   1. The Canton Foundation SV network status listing
+ *   1. The public SV network status listing
  *      (https://canton.foundation/sv-network-status-2/) — provides the
  *      authoritative list of SV Scan endpoints per network (DevNet,
  *      TestNet, Mainnet)
@@ -136,8 +136,8 @@ function loadSeeds(seedsPath) {
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch the per-network SV Scan endpoint list from the Canton Foundation
- * SV network status page.
+ * Fetch the per-network SV Scan endpoint list from the public SV
+ * network status page.
  *
  * The page is largely JS-rendered, so a robust implementation would
  * either:

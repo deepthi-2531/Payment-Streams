@@ -44,10 +44,10 @@ Compiled to DARs and uploaded to the participant.
 |---|---|---|
 | `StreamAdmin` | `CantonStreams.Stream.StreamAdmin` | Prefunded, bounded-term stream (V2 committed-iterated drive) |
 | `StreamFlow` + `StreamFlowAdmin` | `CantonStreams.Stream.StreamFlow*` | Iterated stream with variable funding (subscriptions, recurring billing) |
-| `MilestoneAdmin` | `CantonStreams.Stream.MilestoneAdmin` | Multi-leg AllocationSpec gated on `ConfirmMilestone` (KPI / grant unlocks) |
+| `MilestoneAdmin` | `CantonStreams.Stream.MilestoneAdmin` | Multi-leg AllocationSpec gated on `ConfirmMilestone` (KPI or delivery unlocks) |
 | `AllocationBridge` | `CantonStreams.Settlement.AllocationBridge` | Shared V2 view-builder helpers + conservation invariants |
 | `DelegatedPolicy` + `PolicyExecutionState` + `ExecutionLog` | `CantonStreams.Policy.*` | Bounded executor authority (rate limit, expiry, scope, action allow-list) |
-| `FeaturedAppActivity` | `CantonStreams.FeaturedApp.Activity` | Opt-in CIP-0047 `FeaturedAppActivityMarker` emission helper (CIP-0047 is scheduled to be replaced by CIP-0104 around end of July; treat as transitional) |
+| `FeaturedAppActivity` | `CantonStreams.FeaturedApp.Activity` | Opt-in CIP-0047 `FeaturedAppActivityMarker` emission helper for networks that still support the marker path |
 | `UnifiedStreamRequest` | `CantonStreams.Workflow.UnifiedStream` | Propose / accept / counter-propose state machine |
 | `BatchCreateRequest` | `CantonStreams.Workflow.BatchCreate` | Sender-side bulk stream creation |
 | `RenewRequest` | `CantonStreams.Workflow.RenewStream` | Per-period renewal for `RenewableTerm` vesting |
@@ -114,7 +114,7 @@ There is one settlement path: **CIP-56 V2 Token Standard** via the CIP-0112 `All
      "transferEventsV2": true   // preferred: V2 events stream available
    }
    ```
-4. Library accepts the asset only when `allocationsV2 = true`. If `transferEventsV2 = true`, the proxy uses the V2 event stream; otherwise the raw Ledger API V2 fallback is temporary backstop coverage.
+4. Library accepts the asset only when `allocationsV2 = true`. If `transferEventsV2 = true`, the proxy uses the V2 event stream; otherwise the raw Ledger API V2 fallback provides compatibility coverage while assets adopt V2 event interfaces.
 
 When an asset is upgraded to advertise V2 interfaces (e.g. when CC or USDCx publish them), only the registry entry needs to change — application code keeps working and benefits from V2 features.
 
