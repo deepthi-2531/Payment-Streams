@@ -1,131 +1,121 @@
 # Canton Payment Streams
 
-Payment streams for Canton, built around the CIP-56 V2 Token Standard.
+Payment streams for Canton, built on CIP-56 Token Standard V2.
 
-This repository contains Daml templates, a TypeScript SDK, a REST proxy, a CLI,
-and a reference React dashboard for creating and operating vesting-aware payment
-streams on Canton.
+Canton Payment Streams gives Canton dApps a reusable way to create, fund,
+observe, and settle time-based payments. It ships Daml templates, a
+TypeScript SDK, a REST proxy, an executor service, and a reference React
+dashboard.
 
-It is Apache-2.0 licensed.
+Use it when you want the ledger to carry both the payment schedule and the
+settlement state: vesting, payroll-like payouts, subscriptions, incentive
+programs, milestone payments, recurring treasury operations, and other
+long-running payment flows.
 
-## Start Here
+Apache-2.0 licensed.
 
-### Should I use this?
+## Table Of Contents
 
-Use Canton Payment Streams if you need one of these product shapes:
+- [Should I Use This?](#should-i-use-this)
+- [What You Can Build](#what-you-can-build)
+- [How It Works](#how-it-works)
+- [Quick Start](#quick-start)
+- [Wallets](#wallets)
+- [Use The SDK](#use-the-sdk)
+- [Integrate Into A Canton dApp](#integrate-into-a-canton-dapp)
+- [Repository Map](#repository-map)
+- [Development](#development)
+- [Read Next](#read-next)
 
-| Need                                        | Use               |
-| ------------------------------------------- | ----------------- |
-| Pay a fixed amount over time                | `StreamAdmin`     |
-| Pay in periods with renewals or top-ups     | `StreamFlow`      |
-| Release funds when milestones are confirmed | `MilestoneAdmin`  |
-| Let a bounded service run recurring actions | `DelegatedPolicy` |
+## Should I Use This?
 
-This is a good fit for vesting, payroll-like distributions, LP incentives,
-subscription-style settlement, treasury grants, milestone payments, and other
-flows where the ledger should show both the schedule and the settlement state.
+Use Canton Payment Streams if you need a V2-token-standard payment flow where
+funds unlock over time or according to an explicit event.
 
-### When should I not use it?
+| If you need to... | Start with |
+| --- | --- |
+| Pay a fixed amount over a fixed schedule | `StreamAdmin` |
+| Pay continuously with top-ups, pauses, or renewals | `StreamFlow` |
+| Release tranches when milestones are confirmed | `MilestoneAdmin` |
+| Let a bounded service execute recurring stream actions | `DelegatedPolicy` + executor |
+| Create many streams from one operator workflow | Batch create |
 
-Do not use this repo if you need:
+This repo is a good fit when:
 
-- A wallet implementation. Use a CIP-103 wallet such as the Splice Amulet wallet.
-- Off-ledger bookkeeping only.
-- Token Standard V1 or legacy settlement. New stream creation is V2-only.
-- A promise about CIP-0047 rewards or economics. CIP-0047 support is transitional
-  and should not be used as a fixed revenue assumption.
+- You are building on Canton.
+- Your asset supports CIP-56 Token Standard V2 allocation semantics.
+- Your users can approve wallet actions through a CIP-103-compatible wallet.
+- You want reusable contracts and SDK helpers instead of inventing a custom
+  stream protocol.
 
-## Current Status
+This repo is not a good fit when:
 
-| Area             | Status                                               |
-| ---------------- | ---------------------------------------------------- |
-| Token standard   | CIP-56 V2 / CIP-0112 only for new streams            |
-| Wallet path      | CIP-103 via `@canton-network/dapp-sdk`               |
-| Reference wallet | Splice Amulet wallet with Token Standard V2 support  |
-| Local app stack  | Docker starts Canton, proxy, and dashboard           |
-| Full wallet E2E  | Requires a separate Splice LocalNet validator wallet |
-| Legacy modes     | Kept only for parsing/migration compatibility        |
+- You need a wallet implementation. Bring a CIP-103 wallet; this repo is the
+  dApp/protocol layer.
+- You only need off-ledger bookkeeping.
+- You need Token Standard V1 for new stream creation. New streams are V2-only.
+- You want to depend on short-lived reward economics. Any featured-app reward
+  support should be treated as optional and network-specific.
 
-The code intentionally fails closed when a new stream tries to use
-`NumericLegacy`, `UtilityHoldingCustody`, or missing V2 funding/account fields.
+## What You Can Build
+
+### Stream Variants
+
+| Variant | What it does | Typical use |
+| --- | --- | --- |
+| `StreamAdmin` | Prefunded bounded stream with a start, end, and vesting mode | Vesting, subscriptions, scheduled payouts |
+| `StreamFlow` | Rolling stream that can be topped up, paused, resumed, and renewed | Payroll-like flows, recurring incentives |
+| `MilestoneAdmin` | Multi-leg release flow where named milestones unlock funds | Project delivery, KPI payouts, staged unlocks |
+
+### Vesting Modes
+
+| Mode | Behavior |
+| --- | --- |
+| `Linear` | Unlocks continuously between start and end. |
+| `CliffLinear` | Unlocks nothing until the cliff, then unlocks linearly. |
+| `Stepped` | Unlocks in discrete steps. |
+| `RenewableTerm` | Unlocks within a term that can be renewed. |
+
+Schedules can be short or long. Per-second and per-minute streams are valid as
+long as the executor cadence, wallet approvals, and network costs make sense
+for your deployment.
+
+### Operational Features
+
+- **Batch create:** upload or submit many stream definitions in one workflow.
+- **Policies:** define bounded delegated execution rules on-ledger.
+- **Executor:** run recurring settlement or policy-backed actions.
+- **Inbox:** show receivers incoming streams truthfully; wallet approval still
+  happens in the wallet.
+- **Reference dashboard:** usable operator UI and integration example.
 
 ## How It Works
 
-The minimal happy path is:
-
-```text
-User in dashboard
-  -> CIP-103 wallet connection through @canton-network/dapp-sdk
-  -> Amulet wallet signs the V2 allocation flow
-  -> StreamAdmin records stream metadata and allocation references
-  -> proxy/executor drives V2 settlement over time
-  -> dashboard and SDK query stream state
-```
-
-The important design split:
+The core split is simple:
 
 - Token custody lives in standard V2 allocation contracts.
-- Stream templates record stream metadata, vesting state, and observability.
-- The wallet signs standard V2 commands; it does not need stream-specific code.
-- The proxy/executor settles periods with V2 vocabulary such as
-  `Allocation_Settle` and `SettlementFactory_SettleBatch`.
-
-## How a Canton dApp Uses This
-
-Think of this project as a payment-streaming module your Canton dApp can embed.
-Your app keeps its own product experience; Canton Payment Streams supplies the
-stream contracts, SDK helpers, settlement worker, and optional reference UI.
-
-You can integrate at three levels:
-
-| Integration style           | Use when                            | What you build                                       |
-| --------------------------- | ----------------------------------- | ---------------------------------------------------- |
-| Use the reference dashboard | You want a ready operator/user UI   | Configure wallet/proxy URLs and deploy it            |
-| Use the SDK + proxy         | You have your own frontend          | Your UI calls the SDK/proxy and opens wallet prompts |
-| Use Daml templates directly | You need deep product customization | Your app owns orchestration, UI, and worker logic    |
-
-Most dApps should start with **SDK + proxy**:
-
-1. Deploy the Streams DAR to the participant/synchronizer used by your app.
-2. Run the Streams proxy/executor next to your app backend.
-3. In your frontend, connect the user's CIP-103 wallet with
-   `@canton-network/dapp-sdk`.
-4. Use the SDK or proxy to create stream metadata with V2 fields:
-   recipient, amount, schedule, instrument id, funding reference, sender account,
-   recipient account, and escrow operator.
-5. Ask the wallet to approve the standard V2 allocation flow.
-6. Show stream status from the SDK/proxy query endpoints.
-
-### End-user flow inside your dApp
-
-This is what a user sees in a host dApp:
+- Streams templates record schedule, metadata, and settlement progress.
+- Wallets sign standard V2 allocation actions.
+- The executor settles each period with V2 settlement commands.
+- The SDK/proxy/dashboard make this usable from TypeScript and the browser.
 
 ```text
-1. User opens your dApp.
-2. User clicks "Connect wallet".
-3. Wallet shows the Canton account(s) available to the dApp.
-4. User chooses "Create payment stream".
-5. Your dApp collects recipient, token, amount, start/end, and vesting schedule.
-6. Wallet displays the Token Standard V2 allocation request.
-7. User approves in the wallet.
-8. Your dApp shows the stream as active/pending based on ledger state.
-9. The Streams executor settles each accrual period.
-10. Recipient sees streamed funds arrive through their wallet/account.
+dApp or dashboard
+  -> CIP-103 wallet connection
+  -> wallet approves V2 allocation
+  -> Streams Daml templates record schedule and state
+  -> executor calls V2 settlement over time
+  -> SDK/proxy/dashboard query stream status
 ```
 
-The user does not need to know about `StreamAdmin`, `Allocation_Settle`, or the
-proxy. Those are implementation details behind your product flow.
+The important V2 commands are:
 
-### What this project provides vs. what your dApp owns
+- `AllocationFactory_Allocate`
+- `Allocation_Settle`
+- `SettlementFactory_SettleBatch`
 
-| Provided here                      | Owned by your dApp                        |
-| ---------------------------------- | ----------------------------------------- |
-| Daml stream/admin templates        | Product-specific UX and copy              |
-| TypeScript SDK and validation      | Recipient selection and business rules    |
-| REST proxy for browser-safe access | Auth/session model around your app        |
-| Executor/settlement worker         | Operator deployment and monitoring        |
-| Reference dashboard                | Final branded frontend, if not using ours |
-| Local Docker app stack             | Production infra and wallet availability  |
+The project intentionally fails closed for unsupported legacy settlement paths
+when creating new streams.
 
 ## Quick Start
 
@@ -133,8 +123,9 @@ proxy. Those are implementation details behind your product flow.
 
 - Node.js 22.14 or newer
 - pnpm 9.15 via Corepack
-- Docker, for the local app stack
-- A CIP-103 wallet gateway for real wallet-backed flows
+- Docker with `docker compose`
+- Daml/DPM 3.4.x if you are changing Daml packages
+- A CIP-103 wallet gateway for live wallet-backed flows
 
 Enable pnpm:
 
@@ -149,7 +140,10 @@ Install dependencies:
 pnpm install
 ```
 
-### Run the local app stack
+If your shell does not expose the `pnpm` shim, use `corepack pnpm` in the
+commands below.
+
+### Try The Local App Stack
 
 ```bash
 docker compose -f docker/docker-compose.yml up -d
@@ -157,62 +151,79 @@ docker compose -f docker/docker-compose.yml up -d
 
 This starts:
 
-| Service                 | URL / port              |
-| ----------------------- | ----------------------- |
-| Dashboard               | `http://localhost:3000` |
-| REST proxy              | `http://localhost:4000` |
-| Canton participant gRPC | `localhost:5001`        |
-| Canton admin API        | `localhost:5002`        |
+| Service | URL / port |
+| --- | --- |
+| Dashboard | `http://localhost:3000` |
+| REST proxy | `http://localhost:4000` |
+| Canton participant gRPC | `localhost:5001` |
+| Canton admin API | `localhost:5002` |
 
-This does not start the Splice Amulet wallet. For wallet-backed E2E, run a
-Splice LocalNet validator wallet with Token Standard V2 support and expose the
-dapp gateway at:
+This local stack is useful for exploring the app shell, proxy, and contracts.
+It does not start an Amulet wallet. For a real wallet-backed E2E run, use a
+Splice LocalNet validator wallet and expose a CIP-103 dApp gateway at:
 
 ```text
 http://localhost:3030/api/v0/dapp
 ```
 
-The full wallet-backed flow is documented in
-[docs/E2E-HARNESS.md](docs/E2E-HARNESS.md) and orchestrated by
-`scripts/start-localnet-e2e.sh`. The same script is wired to a manual
-`workflow_dispatch` job in `.github/workflows/e2e.yml`.
+Then follow [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md).
 
-### Skip the wallet picker in local automation
-
-Create `packages/dashboard/.env.local`:
-
-```bash
-VITE_SKIP_WALLET_PICKER=true
-VITE_WALLET_GATEWAY_URL=http://127.0.0.1:3030/api/v0/dapp
-VITE_WALLET_NAME=Splice Amulet Wallet
-```
-
-With this mode enabled, the dashboard connects directly to the configured
-remote Amulet wallet. If the wallet gateway is not running, the UI shows an
-explicit error instead of opening an unreachable popup.
-
-### Run without Docker
+### Run The Dashboard And Proxy Without Docker
 
 ```bash
 pnpm --filter @canton-streams/proxy dev
 pnpm --filter @canton-streams/dashboard dev --host 127.0.0.1
 ```
 
-See [docs/QUICKSTART.md](docs/QUICKSTART.md) for the longer local setup,
-example payloads, and wallet notes.
+Open `http://localhost:3000`.
+
+### Connect Directly To A Local Wallet Gateway
+
+Create `packages/dashboard/.env.local`:
+
+```env
+VITE_WALLET_LAYER=dapp-sdk
+VITE_SKIP_WALLET_PICKER=true
+VITE_WALLET_GATEWAY_URL=http://127.0.0.1:3030/api/v0/dapp
+VITE_WALLET_NAME=Splice Amulet Wallet
+```
+
+With this mode enabled, the dashboard connects directly to the configured
+remote wallet. If the gateway is unavailable, the UI shows a clear error
+instead of opening a broken popup.
+
+## Wallets
+
+Canton Payment Streams supports two wallet layers through the same dashboard
+contract.
+
+| Layer | Best for | Notes |
+| --- | --- | --- |
+| `dapp-sdk` | LocalNet, Amulet, standards testing | Default. Connects to a CIP-103 wallet gateway. |
+| `partylayer` | Hosted multi-wallet UX | Lets users choose wallets such as 5N Loop or Console through PartyLayer. |
+
+For local standards testing, use the Splice Amulet wallet through a CIP-103
+gateway. For hosted dApps, PartyLayer is the reference multi-wallet layer.
+
+Hosted wallet approval is intentionally truthful: when the selected hosted
+wallet does not expose automatic prepare-and-wait completion to the dashboard,
+the user completes approval in the wallet UI and returns to Streams.
+
+More detail:
+
+- [docs/HOSTED-WALLET-PLAN.md](docs/HOSTED-WALLET-PLAN.md)
+- [docs/SWK-WALLET-RUNBOOK.md](docs/SWK-WALLET-RUNBOOK.md)
+- [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md)
 
 ## Use The SDK
 
-The SDK is intended for host applications that want to create or operate streams
-without copying dashboard code.
-
-New stream creation requires V2 fields:
+Host applications can use the SDK without copying dashboard code.
 
 ```ts
 import Decimal from 'decimal.js';
 import { AssetType, SettlementMode, VestingMode } from '@canton-streams/sdk';
 
-const params = {
+const stream = {
   sender: 'Alice::1220...',
   recipient: 'Bob::1220...',
   totalDeposited: new Decimal('100.00'),
@@ -235,35 +246,58 @@ const params = {
 };
 ```
 
-The SDK rejects old settlement modes for new streams. If you still see legacy
-names in the type system, they exist so older contracts can be read and migrated.
+New stream creation requires V2 funding and account fields. Legacy settlement
+names may still appear in read/migration types so older contracts can be
+decoded, but they are not accepted for new V2 streams.
+
+## Integrate Into A Canton dApp
+
+Most dApps should start with the SDK + proxy path:
+
+1. Upload and vet the Streams DAR on the participant/synchronizer used by your
+   app.
+2. Run the Streams proxy and executor next to your app backend.
+3. Connect the user's CIP-103 wallet in your frontend.
+4. Collect recipient, token, amount, start/end, and vesting schedule.
+5. Create the stream metadata and ask the wallet to approve the V2 allocation.
+6. Show stream state from SDK/proxy queries.
+7. Let the executor settle accrual periods.
+
+End-user flow:
+
+```text
+Connect wallet
+  -> choose or confirm account
+  -> create stream
+  -> approve V2 allocation in wallet
+  -> sender sees active stream
+  -> receiver sees incoming stream
+  -> executor settles over time
+```
+
+What this repo provides vs. what your dApp owns:
+
+| Provided here | Owned by your dApp |
+| --- | --- |
+| Daml stream/admin templates | Product-specific UX and copy |
+| TypeScript SDK and validation | Business rules and recipient selection |
+| REST proxy | App auth/session model |
+| Executor service | Deployment, monitoring, and operations |
+| Reference dashboard | Final branded frontend, if different |
+| Local runbooks | Production infrastructure choices |
 
 ## Repository Map
 
-| Path                  | Purpose                                                       |
-| --------------------- | ------------------------------------------------------------- |
-| `packages/daml/`      | Daml templates and tests                                      |
-| `packages/sdk/`       | TypeScript SDK, transports, validators, V2 allocation helpers |
-| `packages/proxy/`     | Express REST proxy and settlement/event workers               |
-| `packages/dashboard/` | React reference UI with CIP-103 wallet connection             |
-| `packages/cli/`       | Operator CLI                                                  |
-| `packages/executor/`  | Bounded automation runner for delegated policies              |
-| `docker/`             | Local app stack                                               |
-| `docs/`               | Guides, architecture, deployment, runbooks, threat model      |
-
-## Read Next
-
-| If you want to...                            | Read                                                                    |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| Ship one working stream end-to-end           | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
-| Run the app locally                          | [docs/QUICKSTART.md](docs/QUICKSTART.md)                                |
-| Run the wallet-backed V2 E2E harness         | [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md)                              |
-| Understand the design                        | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                            |
-| Integrate as a dapp                          | [docs/integration-guide/README.md](docs/integration-guide/README.md)    |
-| Deploy safely                                | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)                                |
-| Review risks                                 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md)                            |
-| Configure wallet flows                       | [docs/SWK-WALLET-RUNBOOK.md](docs/SWK-WALLET-RUNBOOK.md)                |
-| Check REST endpoints                         | [docs/API.md](docs/API.md)                                              |
+| Path | Purpose |
+| --- | --- |
+| `packages/daml/` | Daml templates, interfaces, and tests |
+| `packages/sdk/` | TypeScript SDK, V2 helpers, validation, transports |
+| `packages/proxy/` | Express REST proxy and settlement/event workers |
+| `packages/dashboard/` | React reference UI with wallet integration |
+| `packages/cli/` | Operator CLI |
+| `packages/executor/` | Delegated execution service |
+| `docker/` | Local app stack |
+| `docs/` | Guides, architecture, deployment, runbooks, threat model |
 
 ## Development
 
@@ -272,25 +306,38 @@ Run the main checks:
 ```bash
 pnpm --filter @canton-streams/sdk test
 pnpm --filter @canton-streams/dashboard test
-pnpm --filter @canton-streams/sdk build
 pnpm --filter @canton-streams/proxy build
 pnpm --filter @canton-streams/dashboard build
-pnpm --filter @canton-streams/cli build
-```
-
-Validate Docker wiring:
-
-```bash
+bash scripts/check-v2-conformance.sh
 docker compose -f docker/docker-compose.yml config
 ```
 
-Daml commands:
+Daml:
 
 ```bash
 pnpm daml:deps
 pnpm daml:build
 pnpm daml:test
 ```
+
+Note: the Daml script package includes example scripts that require real party
+identifiers. If you run all scripts against placeholder parties, those example
+scripts will fail until you replace the placeholders with parties from your
+participant.
+
+## Read Next
+
+| If you want to... | Read |
+| --- | --- |
+| Ship one minimal stream | [docs/MINIMUM-VIABLE-INTEGRATION.md](docs/MINIMUM-VIABLE-INTEGRATION.md) |
+| Run locally | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
+| Test with a real wallet | [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md) |
+| Understand wallet options | [docs/HOSTED-WALLET-PLAN.md](docs/HOSTED-WALLET-PLAN.md) |
+| Integrate into your dApp | [docs/integration-guide/README.md](docs/integration-guide/README.md) |
+| Understand the architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
+| Deploy safely | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| Review risks | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) |
+| Check REST endpoints | [docs/API.md](docs/API.md) |
 
 ## Contributing
 
@@ -300,9 +347,9 @@ Contributions are welcome. Start with:
 - [SECURITY.md](SECURITY.md)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
-For a first PR, prefer small changes with a clear test. Good starter areas are
-documentation clarity, SDK validation tests, dashboard copy, and local runbook
-improvements.
+For a first PR, prefer a small change with a clear test. Good starter areas
+are documentation clarity, SDK validation tests, dashboard copy, and local
+runbook improvements.
 
 ## License
 
