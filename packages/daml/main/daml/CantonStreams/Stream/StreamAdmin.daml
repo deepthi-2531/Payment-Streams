@@ -111,7 +111,7 @@ template StreamAdmin
       -- subsequent allocations in the chain reference this via their
       -- V2 `originalAllocationId` field. Set by the first
       -- `Sync_Iteration`; never changes afterwards. Used by
-      -- subscribers / Foundation adoption-metrics tooling to correlate
+      -- subscribers / adoption-metrics tooling to correlate
       -- all transfers belonging to a single stream.
     observers : [Party]
   where
@@ -175,7 +175,7 @@ template StreamAdmin
     -- | Mark the stream as cancelled. Cancellation itself happens on
     -- the underlying V2 `Allocation` via `Allocation_Cancel`; this
     -- choice only records the terminal state on the admin contract
-    -- for UX + Foundation adoption-metrics queries.
+    -- for UX + adoption-metrics queries.
     --
     -- Controller is `operator` because they observe the on-chain
     -- `Allocation_Cancel` event and react.

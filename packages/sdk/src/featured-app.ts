@@ -30,7 +30,7 @@ export interface FeaturedAppConfig {
   /** True iff this stream emits featured-app markers on lifecycle events. */
   readonly enabled: boolean;
   /**
-   * Featured-app key issued by the Canton Foundation upon CIP-0047
+   * Featured-app key issued by the program administrator upon CIP-0047
    * registration. Empty string when `enabled = false`.
    */
   readonly featuredAppKey: string;
@@ -67,7 +67,7 @@ export interface FeaturedAppEmission {
 export interface FeaturedAppRewardEstimateOptions {
   /**
    * Current reward cap for the target network, supplied by the caller
-   * after checking the active Canton Foundation reward regime.
+   * after checking the active network reward regime.
    */
   readonly rewardCapUsd?: Decimal | string | number;
 }

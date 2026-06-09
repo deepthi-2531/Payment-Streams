@@ -19,7 +19,7 @@ All notable changes to Canton Payment Streams are documented here. The format is
 - **TestNet runbook** (`docs/TESTNET-RUNBOOK.md`) — bring proxy + dashboard up against a remote validator over an SSH tunnel (alt-port scheme to coexist with a local sandbox).
 - **`scripts/check-tunnel.sh`** — watchdog that detects when a local Canton sandbox is shadowing an SSH-tunnel port and would route gRPC to the wrong ledger.
 - **`VITE_SKIP_WALLET_PICKER`** dashboard env flag — auto-selects the configured remote wallet without showing the picker UI (for single-wallet dev environments).
-- **Opt-in `FeaturedAppActivityMarker` emission helper** for the CIP-0047 window. CIP-0047 is scheduled to be replaced by CIP-0104 around end of July; treat the helper as transitional and don't bake CIP-0047 reward amounts into adopter economics.
+- **Opt-in `FeaturedAppActivityMarker` emission helper** for networks that still support the CIP-0047 marker path. Treat the helper as transitional and don't bake CIP-0047 reward amounts into adopter economics.
 - **CIP-103 OpenRPC conformance harness** (`packages/sdk/src/cip103/*.test.ts`) — exercises the dapp/wallet JSON-RPC contract without requiring a browser.
 - **Multi-Scan adoption-metrics aggregator** (`scripts/query-adoption-metrics.mjs`) — aggregates across per-asset Scan endpoints.
 - **OSS-readiness pass**: cleaned organization-specific names from defaults, removed scratch debug scripts, added per-package `repository`/`homepage`/`bugs` URLs, added `packages/dashboard/.env.example`.
@@ -94,18 +94,18 @@ Users on `0.2.7` or earlier that consumed `NumericLegacy` / `UtilityHoldingCusto
 ## [0.2.0] - 2026-02
 
 ### Added
-- Phase 2 type scaffolding: `SettlementMode`, `HoldingFunding`, `InstrumentRef`
+- Settlement type scaffolding: `SettlementMode`, `HoldingFunding`, `InstrumentRef`
 - Utility holding custody Daml templates (escrow, workflow, adapter)
 - `HoldingAdapter.daml` for generic Daml Finance `Fungible.I`/`Transferable.I` operations
 - Batch stream creation (`BatchCreateRequest`)
 - Stream renewal support (`Renew_Stream` choice)
-- Delegated policy templates (Phase 3 scaffolding)
+- Delegated policy templates
 - Dashboard pending requests panel
 
 ## [0.1.0] - 2026-01
 
 ### Added
-- Initial Phase 1 implementation: numeric bookkeeping escrow
+- Initial numeric bookkeeping escrow implementation
 - `StreamEscrow` and `CreateStreamRequest` Daml templates
 - TypeScript SDK with gRPC transport
 - Express REST proxy with dev auth mode

@@ -8,9 +8,9 @@ All examples are V2-only (CIP-56 V2 Token Standard, CIP-0112 `AllocationRequest`
 
 ## Walkthrough 1 — `StreamAdmin`: linear vesting
 
-**Scenario:** Alice grants Bob 6-month linear vesting of 1200 units of `MyAsset`, starting 2026-06-01.
+**Scenario:** Alice streams Bob 1200 units of `MyAsset` over 6 months, starting 2026-06-01.
 
-### Phase 1 — Create
+### Step 1 — Create
 
 Alice opens the dashboard, picks **Create stream**, fills in the form, clicks **Create**.
 
@@ -47,11 +47,11 @@ On-ledger:
 +-----------------------------------+
 ```
 
-Visible to: Alice, Bob, MyAssetAdmin, the escrow operator. Dashboard shows the stream as **Pending acceptance**.
+Visible to: Alice, Bob, MyAssetAdmin, and the escrow operator. Dashboard shows the stream as awaiting wallet funding approval.
 
-### Phase 2 — Accept
+### Step 2 — Approve funding in the wallet
 
-Bob opens his dashboard. The stream shows up in his **Inbox** tab. He clicks **Accept**.
+Bob opens his dashboard and sees the incoming stream. The dashboard can surface the request and deep-link into a capable wallet, but it does not create a separate Streams-level accept contract. The actual approval is the token-standard wallet action for the underlying CIP-0112 `AllocationRequest`.
 
 SDK call:
 
@@ -65,8 +65,8 @@ await dappSDK.prepareExecuteAndWait({
 
 On-ledger, this exercises `AllocationFactory_Allocate(committed=True)`, which atomically:
 
-1. Archives the `AllocationRequest`
-2. Creates the `Allocation` contract
+1. Archives or completes the token-standard `AllocationRequest`
+2. Creates the committed `Allocation` contract
 3. Locks Alice's 1200 units of `MyAsset` against the escrow operator
 
 ```
@@ -80,9 +80,9 @@ On-ledger, this exercises `AllocationFactory_Allocate(committed=True)`, which at
 +-----------------------------------+
 ```
 
-Dashboard moves the stream to **Active**.
+After the wallet action commits, the dashboard refreshes the stream to **Active**. For hosted wallet layers that cannot submit `prepareExecuteAndWait` directly, the user completes the approval in the wallet UI and returns to the dashboard.
 
-### Phase 3 — Settle (per accrual interval)
+### Step 3 — Settle (per accrual interval)
 
 The proxy's `TransferEventsV2` subscriber wakes up every minute. For each `Active` stream, it computes the accrued amount since the last settle and exercises `Allocation_Settle`.
 
@@ -111,7 +111,7 @@ On-chain:
 
 Bob's wallet shows the holding balance increase.
 
-### Phase 4 — Completion
+### Step 4 — Completion
 
 After 6 months (at `endTime`), the accrual reaches 1200. The next settle drains the lock; `Allocation` archives; stream marks `Completed`.
 
@@ -123,7 +123,7 @@ Total Bob received: exactly 1200 (Daml accrual math is exact under V2 atomic set
 
 **Scenario:** Acme charges Bob a recurring infrastructure-billing subscription. Acme bills Bob ~$50/month, but the amount varies based on usage.
 
-### Phase 1 — Create
+### Step 1 — Create
 
 Acme creates a flow stream funded for one period at a time:
 
@@ -145,7 +145,7 @@ const request = buildAllocationRequest({
 
 On-ledger creates a `StreamFlow` with an iterated allocation: `nextIterationFunding = 50 USDCx`.
 
-### Phase 2 — Iterate
+### Step 2 — Iterate
 
 At the end of the month, the proxy settles for the actual usage (say $47.23):
 
@@ -166,7 +166,7 @@ await dappSDK.prepareExecuteAndWait({
 });
 ```
 
-### Phase 3 — Terminate
+### Step 3 — Terminate
 
 When Bob cancels his subscription:
 
@@ -180,23 +180,23 @@ The Allocation completes. Any unused funding refunds to Bob.
 
 ---
 
-## Walkthrough 3 — `MilestoneAdmin`: KPI-gated grant
+## Walkthrough 3 — `MilestoneAdmin`: KPI-gated milestones
 
-**Scenario:** AcmeFoundation grants $100k to a project, disbursed in three tranches gated on KPIs.
+**Scenario:** AcmeSponsor streams $100k to a project, disbursed in three tranches gated on KPIs.
 
-### Phase 1 — Create
+### Step 1 — Create
 
 ```typescript
 const request = buildAllocationRequest({
-  sender: foundationTreasury,
-  recipient: grantee,
+  sender: sponsorTreasury,
+  recipient: projectRecipient,
   asset: { instrumentId: 'USDCx', admin: usdcxAdmin },
   streamType: 'milestone',
   totalAmount: new Decimal('100000'),
   milestones: [
-    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: foundationAdmin },
-    { id: '1k-users',    amount: new Decimal('25000'),  confirmer: foundationAdmin },
-    { id: '10k-users',   amount: new Decimal('50000'),  confirmer: foundationAdmin },
+    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: sponsorAdmin },
+    { id: '1k-users',    amount: new Decimal('25000'),  confirmer: sponsorAdmin },
+    { id: '10k-users',   amount: new Decimal('50000'),  confirmer: sponsorAdmin },
   ],
   settlementMode: SettlementMode.TokenStandardCustody,
 });
@@ -204,20 +204,20 @@ const request = buildAllocationRequest({
 
 On-ledger creates a multi-leg `AllocationSpec` — one leg per milestone, each gated on the named confirmer.
 
-### Phase 2 — Confirm milestone
+### Step 2 — Confirm milestone
 
-When the grantee ships their MVP, the foundation admin confirms:
+When the project ships its MVP, the sponsor admin confirms:
 
 ```typescript
 await dappSDK.prepareExecuteAndWait({
   commands: confirmMilestone({ milestoneId: 'mvp-shipped' }),
-  actAs: [foundationAdmin],
+  actAs: [sponsorAdmin],
 });
 ```
 
-Triggers `Allocation_Settle` for that leg. Grantee receives 25,000 USDCx.
+Triggers `Allocation_Settle` for that leg. The project recipient receives 25,000 USDCx.
 
-### Phase 3 — Optional: claim residual
+### Step 3 — Optional: claim residual
 
 If a milestone is never confirmed by the deadline, the sender can claim the residual refund via the `ClaimResidualRefund` choice.
 

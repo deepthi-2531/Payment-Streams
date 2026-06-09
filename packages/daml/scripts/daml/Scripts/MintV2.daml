@@ -84,6 +84,6 @@ mintForBoth = do
   debug ("admin holding cid: " <> show adminCid)
   -- Mint to swapuser (recipient pre-fund, optional) — needs joint signature
   swapuserCid <- submitMulti [admin, swapuser] [] $
-    createCmd (Token with holding = mkHolding swapuserAccount 0.0001)  -- placeholder receiving account
+    createCmd (Token with holding = mkHolding swapuserAccount 0.0001)  -- minimal receiving account
   debug ("swapuser holding cid: " <> show swapuserCid)
   pure ()

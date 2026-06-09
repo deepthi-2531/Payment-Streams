@@ -1,6 +1,6 @@
 # Featured-App Rewards (CIP-0047) — emission helper
 
-> **Status:** CIP-0047 featured-app rewards are scheduled to be **phased out around end of July** once **CIP-0104** goes live. The reward economics will change with CIP-0104. Treat any specific reward-per-event number you see in older Canton docs as fragile — confirm with the Canton Foundation what's actually in force on your target network before you bake reward assumptions into a budget.
+> **Status:** CIP-0047 featured-app rewards are transitional and may be replaced by **CIP-0104** at the network level. Treat any specific reward-per-event number you see in older Canton docs as fragile — confirm what's actually in force on your target network before you bake reward assumptions into a budget.
 >
 > This library provides a thin **emission helper** so adopters who opt in can mark stream lifecycle events with `FeaturedAppActivityMarker` contracts during the CIP-0047 window. It does not pay rewards itself, and it does not promise any particular reward amount.
 
@@ -14,7 +14,7 @@ supports the CIP-0047 marker path.
 
 ## What the library does not do
 
-- Register your dApp as a featured-app provider with the Canton Foundation.
+- Register your dApp as a featured-app provider with the relevant network program.
 - Claim or distribute rewards.
 - Guarantee any reward amount, eligibility, or schedule.
 - Track CIP-0104 transition state (you must do this yourself).
@@ -29,7 +29,7 @@ const params = buildIncentiveStream({
   // ... other fields ...
   meta: {
     emitFeaturedAppMarker: true,
-    featuredAppKey: 'your-cip-0047-key', // from your Foundation registration
+    featuredAppKey: 'your-cip-0047-key', // from your program registration
   },
 });
 ```
@@ -42,11 +42,11 @@ network economics explicitly if they choose to show projections.
 
 - [CIP-0047 spec](https://github.com/canton-foundation/cips/blob/main/cip-0047/cip-0047.md)
 - [CIP-0104 spec](https://github.com/canton-foundation/cips/blob/main/cip-0104/cip-0104.md)
-- Canton Foundation announcements for the active reward regime and any transition window
+- Network announcements for the active reward regime and any transition window
 
 ## Migration to CIP-0104
 
-CIP-0047's featured-app marker mechanism is expected to be replaced by [CIP-0104](https://github.com/canton-foundation/cips/blob/main/cip-0104/cip-0104.md) at the network level around end of July. When that lands:
+CIP-0047's featured-app marker mechanism may be replaced by [CIP-0104](https://github.com/canton-foundation/cips/blob/main/cip-0104/cip-0104.md) at the network level. When that lands:
 
 1. **`FeaturedAppActivityMarker` emission may be deprecated.** Adopters who registered as CIP-0047 featured-app providers should confirm whether their CIP-0047 markers continue to be rewarded during any transition window, and what the CIP-0104 equivalent looks like (it may be a different marker type, a different scoring model, or a different registration flow).
 2. **`FeaturedAppConfig` may be renamed.** If CIP-0104 introduces a different marker shape, this SDK module will either grow a parallel CIP-0104 config type or be replaced. The current SDK API is opt-in and disabled by default, so existing integrations that don't enable it are unaffected.
@@ -56,6 +56,6 @@ CIP-0047's featured-app marker mechanism is expected to be replaced by [CIP-0104
 
 - [CIP-0047 spec](https://github.com/canton-foundation/cips/blob/main/cip-0047/cip-0047.md)
 - [CIP-0104 spec](https://github.com/canton-foundation/cips/blob/main/cip-0104/cip-0104.md)
-- Canton Foundation announcements for the active reward regime, the transition timeline, and any per-network differences
+- Network announcements for the active reward regime, the transition timeline, and any per-network differences
 
 The library will track CIP-0104 support under a future minor release; see [CHANGELOG.md](../../CHANGELOG.md) for the entry. Until then, treat CIP-0047 as transitional, and treat any economic projection as caller-supplied rather than library-supplied.

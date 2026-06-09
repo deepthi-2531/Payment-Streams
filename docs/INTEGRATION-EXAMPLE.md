@@ -247,18 +247,18 @@ const request = buildAllocationRequest({
 
 The sender keeps the funded balance topped up via `TopUp` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit).
 
-### Milestone-gated grants
+### Milestone-gated releases
 
-For an `AcmeFoundation` grant disbursed as KPIs hit:
+For an `AcmeSponsor` milestone program disbursed as KPIs hit:
 
 ```typescript
 const request = buildAllocationRequest({
   // ...
   streamType: 'milestone',     // → MilestoneAdmin template
   milestones: [
-    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: foundationAdmin },
-    { id: '1k-users',    amount: new Decimal('50000'),  confirmer: foundationAdmin },
-    { id: '10k-users',   amount: new Decimal('100000'), confirmer: foundationAdmin },
+    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: sponsorAdmin },
+    { id: '1k-users',    amount: new Decimal('50000'),  confirmer: sponsorAdmin },
+    { id: '10k-users',   amount: new Decimal('100000'), confirmer: sponsorAdmin },
   ],
 });
 ```

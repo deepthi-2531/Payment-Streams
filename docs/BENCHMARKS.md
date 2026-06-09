@@ -68,7 +68,7 @@ For a typical Linear vesting stream with daily settles for a month, expected tot
 create + accept + 30 settles + complete ≈ $1.50 – $3.50
 ```
 
-CIP-0047 featured-app rewards exist on some Canton networks today, but they're scheduled to be **phased out around end of July** when CIP-0104 goes live, and the reward economics will change. Don't bake any specific reward-per-event number into a budget; verify the active reward regime with the Canton Foundation for your target network before sizing fee assumptions. The library ships an opt-in `FeaturedAppActivityMarker` emission helper for the CIP-0047 window — see [`integration-guide/featured-app-rewards.md`](integration-guide/featured-app-rewards.md) — but makes no claims about the net economics.
+CIP-0047 featured-app rewards exist on some Canton networks today, but they are transitional and may be replaced by CIP-0104 at the network level. Don't bake any specific reward-per-event number into a budget; verify the active reward regime for your target network before sizing fee assumptions. The library ships an opt-in `FeaturedAppActivityMarker` emission helper for networks that still support the CIP-0047 marker path — see [`integration-guide/featured-app-rewards.md`](integration-guide/featured-app-rewards.md) — but makes no claims about the net economics.
 
 ## Hot-path bottlenecks
 
