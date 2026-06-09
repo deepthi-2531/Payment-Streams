@@ -1,5 +1,5 @@
 /**
- * StreamsPage — STR-116 Phase 5 reskin.
+ * Streams list page.
  *
  * Filter chips → direction (all/in/out) + status (Active/Completed/Cancelled).
  * Table re-uses the existing `StreamsTable` component (also reskinned).

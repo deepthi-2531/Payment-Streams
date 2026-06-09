@@ -1,12 +1,9 @@
 /**
  * VestingSparkline — small SVG sparkline of a stream's accrual curve.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. Draws the accrual line +
- * gradient fill + a marker at current progress. Accepts the SDK `Stream`
- * shape and re-derives accrual values via `accrualAt` (Phase 1's
- * pure helper backed by the SDK's accrual formulas).
- *
- * Phase 1 — STR-111.
+ * Draws the accrual line, gradient fill, and a marker at current progress.
+ * Accepts the SDK `Stream` shape and re-derives display values through
+ * `accrualAt`.
  */
 import { useMemo } from 'react';
 import type { Stream } from '@canton-streams/sdk/browser';

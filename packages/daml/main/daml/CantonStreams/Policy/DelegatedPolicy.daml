@@ -127,7 +127,7 @@ template DelegatedPolicy
 
         -- Archive the old state and create the updated one
         archive currentStateCid
-        -- [M6 fix] Prune by period window, not by count. Prior behavior
+        -- Prune by period window, not by count. Prior behavior
         -- `take maxExecutionsPerPeriod (now :: recentExecutions)` was
         -- fragile: it discarded period-window context whenever the list
         -- exceeded the count cap, even though those older timestamps
@@ -170,7 +170,7 @@ template DelegatedPolicy
 -- A single state contract per policy is maintained; it is archived and
 -- recreated each time `ExecutePolicy` runs.
 --
--- [M5 fix] `recipient` added as observer so the recipient (named on the
+-- `recipient` is an observer so the recipient (named on the
 -- parent `DelegatedPolicy`) can read the execution state. Previously the
 -- state was signed by sender+executor only and invisible to the recipient
 -- whose stream was being executed against — broke the threat-model claim
@@ -188,7 +188,7 @@ template PolicyExecutionState
       -- `maxExecutionsPerPeriod` entries on update.
   where
     signatory sender, executor
-    observer recipient   -- [M5 fix] visibility for the rate-limit state
+    observer recipient   -- visibility for the rate-limit state
 
     -- | Reset the rate-limit state.
     --

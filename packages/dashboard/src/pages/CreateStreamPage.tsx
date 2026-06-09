@@ -1,5 +1,5 @@
 /**
- * CreateStreamPage — STR-117 Phase 6.
+ * Create stream page.
  *
  * Renders the 4-step `CreateStreamWizard` ported from mock `wizard.jsx`,
  * driven by the same `createStreamSchema` + `useCreateStream` mutation

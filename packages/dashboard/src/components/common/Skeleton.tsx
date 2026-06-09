@@ -1,13 +1,7 @@
 /**
  * Skeleton — shimmer placeholder for in-flight query state.
  *
- * Rewritten for STR-114 (Phase 3) using the cc-streams design tokens +
- * the `live-stripe` keyframe defined in `cc-streams.css`. Replaces the
- * earlier Tailwind `animate-pulse` skeleton.
- *
- * Backwards-compat: `Skeleton`, `SkeletonText`, `SkeletonCard` remain
- * named exports — same call surface, new visual. New code prefers the
- * static API on `Skeleton`:
+ * New code prefers the static API on `Skeleton`:
  *
  *   {streams.isPending && <Skeleton.Row count={3} height={56} />}
  *   {streams.isError   && <ErrorState error={streams.error} onRetry={streams.refetch} />}

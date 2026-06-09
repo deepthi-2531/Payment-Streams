@@ -10,11 +10,11 @@
  *   - V2 Allocation with multi-leg / batch settlement (when used)
  *   - V2 TransferEvents for event-driven advancement
  *
- * Status: BLOCKED on V2 DARs being present in packages/daml/main/.lib/
- *         (run scripts/fetch-v2-dars.mjs first; see STR-42)
+ * Status: requires V2 DARs in packages/daml/main/.lib/
+ *         (run scripts/fetch-v2-dars.mjs first)
  *
- * Once V2 DARs are vetted and the V2 adapter is wired to real types
- * (STR-43 + STR-13), this probe runs end-to-end against V2-DevNet.
+ * Once V2 DARs are vetted and the V2 adapter is wired to real types,
+ * this probe runs end-to-end against V2-DevNet.
  *
  * Usage (when ready):
  *
@@ -24,8 +24,8 @@
  *   V2_ASSET_KEY=v2-test-asset \
  *   node scripts/testnet-v2-stream-probe.mjs
  *
- * Modeled on testnet-cc-stream-probe.mjs (STR-30). Same JSON Ledger
- * API flow; only the template ids and asset addressing change.
+ * Modeled on testnet-cc-stream-probe.mjs. Same JSON Ledger API flow;
+ * only the template ids and asset addressing change.
  */
 
 import { loadLocalScriptConfig } from './local-config.mjs';
@@ -124,7 +124,7 @@ async function submitCommand({ commands, actAs }) {
 async function main() {
   console.log('========================================');
   console.log(' V2-Native Stream Lifecycle Probe');
-  console.log(' STR-14 — M2 V2 verification gate');
+  console.log(' V2 verification gate');
   console.log('========================================\n');
   preFlightChecks();
 
@@ -137,10 +137,9 @@ async function main() {
   log(`Multi-leg:           ${config.useMultiLeg}`);
   log('');
 
-  // STATUS: V2 templates not yet built into the canton-streams DAR
-  // (the V2 adapter currently uses stub types per STR-43). This probe
-  // verifies the scaffold + asset-registry resolution end-to-end and
-  // will exercise actual V2 transfers once STR-42 + STR-43 land.
+  // This probe verifies the scaffold and asset-registry resolution
+  // end-to-end. It exercises actual V2 transfers once the target
+  // participant has the required V2 DARs and adapters installed.
 
   log('⚠ V2 probe is scaffolded but V2 DARs are not yet present.');
   log('  Steps to make this probe run end-to-end:');

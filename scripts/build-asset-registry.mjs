@@ -4,8 +4,8 @@
  *
  * The asset registry is the binding data layer for per-asset routing
  * (admin party, Scan endpoint URL, wallet-gateway URL, V2 capability
- * flags). It's loaded by the SDK's `AssetRegistry` (STR-6) and consumed
- * by the adoption-metrics aggregator (STR-56).
+ * flags). It's loaded by the SDK's `AssetRegistry` and consumed by the
+ * adoption-metrics aggregator.
  *
  * This script generates / refreshes the registry from:
  *
@@ -97,7 +97,7 @@ function log(...args) {
  * the SV status can't surface (allocationsV2, transferEventsV2 — these
  * come from asset admin metadata, not the SV listing).
  *
- * Format (V2-only per STR-79):
+ * Format:
  *   {
  *     "version": "0.3.0",
  *     "assets": {
@@ -201,8 +201,8 @@ async function fetchSvStatus(network, svStatusUrl) {
  * Returns the `assets` map for the registry file.
  */
 async function buildAssets(network, svStatus, seeds) {
-  // V2-only per STR-79. V1 assets are not eligible for the registry until
-  // they publish V2 interfaces per CIP-0112 §5.
+  // V1 assets are not eligible for the registry until they publish V2
+  // interfaces per CIP-0112 section 5.
   const assets = {};
   for (const [key, seed] of Object.entries(seeds.assets ?? {})) {
     const config = {
@@ -218,8 +218,8 @@ async function buildAssets(network, svStatus, seeds) {
     };
     // Skip assets that don't advertise V2 — V1-only assets aren't supported.
     if (!config.allocationsV2) {
-      log(`skipping "${key}": allocationsV2 is false. V1-only assets are not supported (STR-79). ` +
-          `Per CIP-0112 §5, "${key}" must publish V2 interfaces before it can be registered.`);
+      log(`skipping "${key}": allocationsV2 is false. ` +
+          `Per CIP-0112 section 5, "${key}" must publish V2 interfaces before it can be registered.`);
       continue;
     }
     if (!config.instrumentIdV2) {

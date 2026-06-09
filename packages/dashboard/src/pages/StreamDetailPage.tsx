@@ -1,9 +1,9 @@
 /**
- * StreamDetailPage — STR-122 Phase 6 reskin wrapper.
+ * Stream detail page.
  *
  * Loads the stream via the real `useStream(sender, streamId)` hook and
  * hands the result to the existing `<StreamDetail>` component. Errors +
- * loading states use the Phase 3 primitives.
+ * loading states reuse shared primitives.
  *
  * Note: `<StreamDetail>` itself (425 lines) was rebuilt in an earlier
  * pass against the cc-streams aesthetic; this page is just the

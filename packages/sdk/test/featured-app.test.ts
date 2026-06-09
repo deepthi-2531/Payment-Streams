@@ -67,8 +67,6 @@ describe('featured-app', () => {
   });
 
   describe('estimateRewardCapUsd', () => {
-    // The two test cases the reviewer explicitly called out in STR-127.
-    //
     // CIP-0047 is scheduled to be phased out around end of July when
     // CIP-0104 goes live. We must not bake a fixed reward number into
     // the SDK — every reward projection must require an explicit,

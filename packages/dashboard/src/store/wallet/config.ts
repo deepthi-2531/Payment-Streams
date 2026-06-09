@@ -19,13 +19,8 @@ export const WALLET_GATEWAY_URL =
   env.VITE_WALLET_GATEWAY_URL ?? 'http://localhost:3030/api/v0/dapp';
 
 export const WALLET_NAME =
-  env.VITE_WALLET_NAME ?? 'Splice Amulet Wallet (LocalNet V2)';
+  env.VITE_WALLET_NAME ?? 'Splice Amulet Wallet';
 
-/**
- * PartyLayer connection params (STR-131). Defaults match the
- * recommended LocalNet posture documented in
- * docs/HOSTED-WALLET-PLAN.md "Support matrix".
- */
 export const PARTYLAYER_NETWORK =
   env.VITE_PARTYLAYER_NETWORK ?? env.VITE_WALLET_NETWORK ?? 'devnet';
 

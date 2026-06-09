@@ -1,28 +1,8 @@
 /**
  * Auth context — backed by the dashboard wallet-client abstraction.
  *
- * STR-118 / Phase 7: replaced the JWT-paste session-storage flow with
- * a real wallet connection. The dashboard no longer stores wallet
- * tokens; it asks the active wallet adapter for the current session
- * and forwards the access token to the proxy and ledger reads.
- *
- * Surface (kept compatible with the rest of the app):
- *   • `token` — current `session.accessToken` from the wallet (or null)
- *   • `party` — `partyId` of the primary wallet account (or null)
- *   • `accounts` — every wallet account the user has authorized
- *   • `signingProviderId` — id of the primary wallet's signing provider
- *   • `network` — connected canton network metadata
- *   • `provider` — the selected wallet provider descriptor
- *   • `isAuthenticated` — convenience boolean
- *   • `isConnecting` — flag while the wallet connection is in flight
- *   • `connect()`  — opens the picker, or direct-connects when configured
- *   • `disconnect()` — clears the session (sdk.disconnect)
- *   • `clearCredentials()` — alias of disconnect, kept for older callers
- *
- * The proxy fallback ("dev-mode") path is preserved via
- * `setDevCredentials` so local development without a wallet still works,
- * but it's intentionally separate from `connect()` and exposed only via
- * the Settings page.
+ * The app prefers a connected wallet session. A local dev fallback remains
+ * available through Settings for environments without a wallet.
  */
 
 import {
@@ -108,19 +88,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [devToken, setDevToken] = useState<string | null>(devInitial.token);
   const [devParty, setDevParty] = useState<string | null>(devInitial.party);
 
-  // Cold-start: init wallet client, restore persisted session, subscribe to
-  // status / accounts / connected events.
-  //
-  // No once-only guard: under React 19 StrictMode the effect runs
-  // setup → cleanup → setup. A `useRef(false)` gate would set true
-  // on the first setup, the cleanup would cancel the async chain
-  // (so no subscribers actually got attached), and the second setup
-  // would bail because the ref was still true — leaving the auth
-  // context permanently at empty status. The async block's own
-  // `cancelled` flag + the unsubscribe in the cleanup is what
-  // protects against duplicate handlers across re-mounts; the
-  // `subscriptions` WeakMap inside partyLayerClient further
-  // dedupes if the same listener identity is presented twice.
+  // Let StrictMode remount this effect naturally. The cleanup detaches the
+  // wallet listeners from the previous run.
   useEffect(() => {
     const handleStatus = (event: StreamsWalletStatus) => setStatus(event);
     const handleAccounts = (event: readonly StreamsWalletAccount[]) =>
@@ -142,17 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         await walletClient.init();
         if (cancelled) return;
-        // Attach subscribers BEFORE snapshotting status. Hosted-
-        // multi-wallet adapters (PartyLayer / Loop) restore a
-        // persisted session asynchronously via the wallet's own
-        // ticket-server handshake. That handshake can take several
-        // seconds; on cold-start it commonly resolves after our
-        // initial `walletClient.status()` snapshot has already
-        // returned empty. If we attached our `session:connected`
-        // listener after that, the restore event would have fired
-        // already and our handler would never see it — the UI
-        // would stay stuck on the picker even though the wallet is
-        // already authenticated.
+        // Subscribe before the first snapshot so async wallet restores can
+        // update the app as soon as the provider reports a session.
         await walletClient.onStatusChanged(handleStatus);
         await walletClient.onAccountsChanged(handleAccounts);
         await walletClient.onConnected(handleConnected);
@@ -168,12 +128,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             /* ignore */
           }
         } else if (walletClient.capabilities.hostedMultiWallet) {
-          // Hosted-multi-wallet restore is asynchronous; poll the
-          // status one more time after a short grace window to
-          // pick up sessions that landed between subscribe-attach
-          // and the next event dispatch. Cheap belt-and-braces in
-          // case the SDK ever emits the restore signal slightly
-          // out of band of our listener API.
+          // Some hosted wallets finish restoring shortly after initial load.
+          // A single delayed check keeps refreshes from stranding users on
+          // the connect screen.
           setTimeout(() => {
             if (cancelled) return;
             void walletClient
@@ -269,25 +226,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const party = walletConnected ? walletParty : devParty;
   const devMode = !walletConnected && Boolean(devToken && devParty);
 
-  // Hosted-multi-wallet sessions (PartyLayer-routed: Loop, Cantor8,
-  // Send) authenticate the dashboard via the wallet session itself —
-  // the wallet signs and routes ledger calls through its own
-  // server-side proxy, so the dashboard never gets a JWT bearer
-  // token. The CIP-0103 `status` response leaves both
-  // `network.accessToken` and `session.accessToken` undefined for
-  // these wallets by design.
-  //
-  // Without this branch, the dashboard would stay stuck on the
-  // wallet picker forever because `Boolean(token && party)` would be
-  // false (`token` is null even though the session is real). We
-  // accept the session as auth when the layer is hosted-multi-wallet
-  // and the wallet has handed us a partyId.
-  //
-  // Important: privileged proxy / ledger calls still need to route
-  // through `walletClient.ledgerApi(...)` rather than the
-  // `Authorization: Bearer <jwt>` path. That wiring is tracked
-  // separately — see docs/HOSTED-WALLET-PLAN.md "Known limitations"
-  // and the STR-83 / STR-103 follow-ups.
+  // Hosted wallets may route ledger access through their own provider rather
+  // than exposing a bearer token to the dApp. Treat a connected hosted wallet
+  // with a party id as an authenticated dashboard session.
   const hostedWalletAuth =
     walletConnected &&
     walletClient.capabilities.hostedMultiWallet &&

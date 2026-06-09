@@ -1,9 +1,8 @@
 /**
  * WithdrawButton — opens the cc-streams WithdrawModal for confirmation
- * before submitting the real `useWithdraw` mutation. Phase 6 (STR-122).
+ * before submitting the real `useWithdraw` mutation.
  *
- * Replaces the older one-click instant-submit pattern with a review +
- * confirm flow — matches the mock's `modals.jsx::WithdrawModal` UX.
+ * This avoids one-click ledger writes and gives users a review step.
  */
 
 import { useState } from 'react';

@@ -65,7 +65,7 @@ export async function cancel(
       choiceArgs = { cancelTime: { timestamp: cancelTimeMicros } };
       break;
     case SettlementMode.TokenStandardCustody:
-      // [C1 fix — STR-103] Daml template missing; fail closed.
+      // Legacy TokenStandardEscrow templates are not shipped; fail closed.
       assertTokenStandardEscrowAvailable();
       if (!params) {
         throw new Error('TokenStandardCustody cancellation requires confirmed settlement details');
@@ -157,7 +157,7 @@ export async function mutualCancel(
       choiceArgs = { cancelTime: { timestamp: cancelTimeMicros } };
       break;
     case SettlementMode.TokenStandardCustody:
-      // [C1 fix — STR-103] Daml template missing; fail closed.
+      // Legacy TokenStandardEscrow templates are not shipped; fail closed.
       assertTokenStandardEscrowAvailable();
       if (!params) {
         throw new Error('TokenStandardCustody mutual cancellation requires confirmed settlement details');

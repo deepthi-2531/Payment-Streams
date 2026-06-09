@@ -1,28 +1,4 @@
-/**
- * InboxPage — "Incoming streams" view.
- *
- * The earlier design used this page as a two-tab pending-request inbox
- * with a "Review & accept" button on each incoming request. That UX
- * implied a propose/accept ceremony — the recipient confirms in the
- * dashboard before the stream goes active.
- *
- * That ceremony does not exist in the current implemented V2 path:
- * `commands/create.ts` builds a `StreamAdmin` directly (the V2 metadata
- * + wallet-driven `AllocationFactory_Allocate(committed=True)` shape),
- * with no intermediate request contract for the recipient to accept.
- * Token-standard funding approvals happen in the Amulet wallet via
- * `AllocationRequest`, not in this UI.
- *
- * So this page is now an honest "Incoming streams" view: it lists
- * streams where the connected party is the recipient. The future V2
- * `StreamAdminRequest` propose/accept template will reintroduce a
- * pending tab here, but until then the dashboard does not pretend an
- * acceptance step exists.
- *
- * The existing `usePendingStreamRequests` hook + `PendingStreamRequest`
- * type stay in the SDK and `hooks/useStreams.ts` so that future feature
- * can plug back in without re-deriving the wire shape.
- */
+/** Incoming streams for the connected party. */
 
 import { type CSSProperties } from 'react';
 import { Link } from 'react-router';
@@ -44,9 +20,6 @@ import type { Stream } from '@canton-streams/sdk/browser';
 export function InboxPage() {
   const { party, isAuthenticated } = useAuth();
 
-  // Incoming streams = streams the proxy lists with this party as recipient.
-  // The proxy already supports a `recipient=` filter on /api/streams; we
-  // pass the connected party so the round-trip stays small.
   const incomingQ = useStreams(party ? { recipient: party } : undefined);
 
   if (!isAuthenticated) {

@@ -10,7 +10,7 @@
  *      drilling
  *   3. A `<form>` element with `onSubmit` wired to `handleSubmit`
  *
- * Phase 4 / STR-115.
+ * Shared form wrapper.
  */
 
 import { type ReactNode } from 'react';

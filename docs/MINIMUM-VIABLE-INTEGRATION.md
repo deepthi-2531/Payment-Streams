@@ -17,7 +17,7 @@ Anything beyond that — `StreamFlow`, `MilestoneAdmin`, batch create, `Delegate
 
 - Node 22.14+ and pnpm 9.15+ via Corepack
 - Docker for the local Canton stack
-- A running CIP-103 wallet gateway exposing `:3030/api/v0/dapp` — Splice LocalNet's Amulet wallet on the `token-standard-v2-upcoming` branch is the reference
+- A running CIP-103 wallet gateway exposing `:3030/api/v0/dapp` — Splice LocalNet's Amulet wallet is the reference
 
 You do not need the upstream Splice repo cloned for this path. You do not need to build any DARs from source. The bundled Docker stack carries the canton-streams DAR.
 

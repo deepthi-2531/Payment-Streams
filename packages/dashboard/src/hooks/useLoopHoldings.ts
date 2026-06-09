@@ -2,8 +2,7 @@
  * useLoopHoldings — TanStack Query hook over Loop's REST
  * `/api/v1/.connect/pair/account/holding` endpoint.
  *
- * Used by the Dashboard's "Your wallet" panel and (in a follow-up)
- * by the Create wizard's asset picker. Returns an empty list and
+ * Used by the Dashboard's "Your wallet" panel. Returns an empty list and
  * stops polling when the user is not signed into Loop.
  *
  * Refetch cadence: 15 seconds. Hosted-wallet balances change at

@@ -3,8 +3,7 @@
 How to configure Canton Payment Streams to work with a specific
 Token-Standard-V2 asset.
 
-> **Status (V2-only per [STR-79](https://linear.app/bitdynamics/issue/STR-79))**:
-> this library only supports assets that advertise CIP-56 V2 interfaces
+> **Status:** this library only supports assets that advertise CIP-56 V2 interfaces
 > in their `supportedApis` metadata field. Per
 > [CIP-0112 §5](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility),
 > V1 assets are expected to publish V2 alongside V1; once your asset
@@ -32,7 +31,7 @@ For each asset, you supply:
 | `walletGatewayUrl` | Wallet-gateway base URL (JSON-RPC dApp API) | From the SV listing or the asset admin |
 | `allocationsV2` | true if V2 allocations are supported (required true) | From asset admin metadata |
 | `transferEventsV2` | true if V2 TransferEvents are supported | From asset admin metadata |
-| `paused` | true if V2 metadata signals the instrument is paused | From asset admin metadata (STR-96) |
+| `paused` | true if V2 metadata signals the instrument is paused | From asset admin metadata |
 | `pauseInfo` | Optional explanation for paused state | From asset admin metadata |
 
 ---
@@ -127,8 +126,7 @@ try {
    `allocationsV2: true`
 5. Run `node scripts/build-asset-registry.mjs` to regenerate
 6. Commit the resulting `config/asset-registry.json`
-7. Test with the V2 testnet probe (once `scripts/testnet-v2-stream-probe.mjs`
-   ships per [STR-78](https://linear.app/bitdynamics/issue/STR-78))
+7. Test with the V2 testnet probe when you have a live participant and wallet gateway
 
 ---
 
@@ -139,7 +137,7 @@ If your asset is V1-only today, the path forward is:
 1. **Add V2 interfaces to your asset's Daml package** per the
    [CIP-0112 §5 dual-implementation requirement](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility).
    The compatibility layer in
-   [`splice-token-standard-utils`](https://github.com/canton-network/splice/tree/token-standard-v2-upcoming/token-standard/splice-token-standard-utils)
+   [`splice-token-standard-utils`](https://github.com/canton-network/splice/tree/main/token-standard/splice-token-standard-utils)
    provides V1↔V2 mapping helpers so existing V1 holdings can be allocated
    via the V2 `AllocationFactory_Allocate` without re-issuance.
 2. **Advertise V2 in your metadata**: set `supportedApis` to include the

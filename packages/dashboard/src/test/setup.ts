@@ -1,5 +1,5 @@
 /**
- * Vitest global setup — Phase 8 / STR-119.
+ * Vitest global setup.
  *
  * • Attaches jest-dom matchers so component tests can use `.toBeInTheDocument()` etc.
  * • Boots an msw server with the dashboard's REST handlers so any test that

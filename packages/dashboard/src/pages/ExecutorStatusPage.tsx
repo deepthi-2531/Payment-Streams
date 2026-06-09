@@ -1,5 +1,5 @@
 /**
- * ExecutorStatusPage — STR-121 Phase 5 reskin to cc-streams aesthetic.
+ * Executor status page.
  *
  * Hooks unchanged: `useQuery` for policies + execution logs with 10s
  * refetchInterval. Mock's `ops.jsx::ExecutorPage` layout: 4-stat hero +

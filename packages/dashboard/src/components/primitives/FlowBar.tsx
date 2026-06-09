@@ -9,7 +9,7 @@
  * The shimmer animation applies only when `status === 'Active'`; cancelled
  * streams render in danger color.
  *
- * Phase 1 — STR-111.
+ * Shared flow bar primitive.
  */
 import type { CSSProperties } from 'react';
 import type { StreamStatus } from '@canton-streams/sdk/browser';

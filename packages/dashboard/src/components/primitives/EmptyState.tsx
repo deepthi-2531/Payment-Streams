@@ -3,7 +3,7 @@
  *
  * Ported from `Canton Streams/src/primitives.jsx`.
  *
- * Phase 1 — STR-111. Phase 3 (STR-114) reuses this aesthetic for the global
+ * Shared empty-state primitive.
  * `Skeleton` / `LoadingState` / `ErrorState` primitives.
  */
 import type { ReactNode } from 'react';

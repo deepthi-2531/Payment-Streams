@@ -1,7 +1,7 @@
 /**
  * @module commands/stream-admin
  *
- * SDK surface for the V2-only `StreamAdmin` template (STR-86).
+ * SDK surface for the V2 `StreamAdmin` template.
  *
  * `StreamAdmin` is the admin/observability contract that records
  * per-stream metadata + pointers to the active V2 `Allocation` in the
@@ -30,7 +30,7 @@
  * 6. On natural completion (`nextIterationFunding=None` on the final
  *    settle), operator exercises `buildMarkCompleted`.
  *
- * V1 was dropped per STR-79 V2-only pivot.
+ * V1 is not supported because stream settlement relies on V2 allocations.
  */
 
 import Decimal from 'decimal.js';

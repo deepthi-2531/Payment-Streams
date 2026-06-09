@@ -211,12 +211,7 @@ Template: `packages/dashboard/.env.example`. Never commit `.env.local` (gitignor
 
 ### 6. Amulet wallet gateway
 
-The dashboard talks to any [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md)-compliant wallet via `@canton-network/dapp-sdk`. The reference implementation is the [Splice Wallet Kernel](https://github.com/canton-network/splice-wallet-kernel). To run SWK locally:
-
-For Token Standard V2 flows, use the Amulet wallet that runs on a
-Splice validator LocalNet with Token Standard V2 support.
-Issue [canton-network/splice#5498](https://github.com/canton-network/splice/issues/5498)
-tracks the iterated-settlement wallet support this app depends on.
+The dashboard talks to any [CIP-103](https://github.com/canton-foundation/cips/blob/main/cip-0103/cip-0103.md)-compliant wallet via `@canton-network/dapp-sdk`. For local Token Standard V2 flows, use the Amulet wallet that runs on a Splice validator LocalNet and expose it through a wallet gateway.
 
 1. Build/start a Splice LocalNet with the validator Amulet wallet enabled
 2. Confirm the Amulet wallet gateway is listening on `:3030`

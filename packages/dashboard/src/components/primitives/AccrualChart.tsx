@@ -1,12 +1,8 @@
 /**
  * AccrualChart — full-size vesting curve chart for StreamDetail page.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. Renders the accrual
- * line + gradient fill + gridlines + withdrawn baseline + animated
- * current-position marker (only on Active streams).
- *
- * Phase 1 — STR-111. Replaces the placeholder `streams/AccrualChart.tsx`
- * (which re-exports this primitive from Phase 1 onwards).
+ * Renders the accrual line, gradient fill, gridlines, withdrawn baseline,
+ * and animated current-position marker for active streams.
  */
 import { useMemo } from 'react';
 import type { Stream } from '@canton-streams/sdk/browser';

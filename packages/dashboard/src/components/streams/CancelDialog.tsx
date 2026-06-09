@@ -1,5 +1,5 @@
 /**
- * CancelDialog — Phase 6 (STR-122) reskin. Two-mode component:
+ * CancelDialog — two-mode stream cancellation component:
  *
  *   - `<CancelDialog sender streamId />` (button trigger form) — used in
  *     StreamDetail; clicks open the confirmation modal

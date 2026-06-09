@@ -4,7 +4,7 @@
  * Ported from `Canton Streams/src/icons.jsx`. The mock hardcoded a fixed
  * 4-asset map (USDCx / CC / CBTC / ETHx); we accept the asset key plus an
  * optional `color` so callers wiring through the real asset registry
- * (Phase 5) can pass per-asset colors from config without us baking them
+ * can pass per-asset colors from config without us baking them
  * in here. Falls back to a neutral gradient if no color is provided.
  *
  * The letter mapping:
@@ -14,7 +14,7 @@
  *   - `ETHx` / any `*ETH*` → `Ξ`
  *   - everything else → first letter, uppercased
  *
- * Phase 1 — STR-111.
+ * Shared asset glyph primitive.
  */
 import type { CSSProperties } from 'react';
 

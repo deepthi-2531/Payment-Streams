@@ -1,20 +1,8 @@
 /**
- * CreateStreamWizard — STR-117 Phase 6.
+ * Four-step create-stream wizard.
  *
- * 4-step wizard ported from the mock `wizard.jsx`:
- *
- *   1. Recipient & amount   (recipient, totalDeposited, assetType)
- *   2. Schedule & vesting   (start/end + vesting mode + mode-specific fields + cancellable)
- *   3. Settlement & custody (settlement mode + custody-specific fields)
- *   4. Review & create      (read-only summary + submit)
- *
- * Same source-of-truth as the single-page form: `createStreamSchema`
- * drives every field's validation (per-step we just call
- * `trigger(stepFields)` and only advance if it passes). Final submit
- * uses the real `useCreateStream` mutation — no mock fixtures.
- *
- * The settlement surface is V2-only: TokenStandardCustody via the
- * CIP-0112 AllocationRequest pattern.
+ * `createStreamSchema` is the validation source of truth; each step validates
+ * only the fields it owns, and the final Review button submits the mutation.
  */
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
@@ -177,27 +165,10 @@ export function CreateStreamWizard() {
 
   const onBack = () => setStepIdx((i) => Math.max(0, i - 1));
 
-  // The previous build attached `methods.handleSubmit(...)` to
-  // `<form onSubmit={...}>`, which let an implicit form submission
-  // (Enter key on any text input, browser-native click delegation from
-  // a focused button being replaced mid-transition, etc.) trigger the
-  // create mutation BEFORE the user reached the Review step's
-  // deliberate "Create stream" button. The reviewer hit exactly that:
-  // Step 3 → Step 4 landed on Step 4 already showing "Created".
-  //
-  // Hardening:
-  //   1. `<form>` no longer wires `onSubmit`. The Review step's button
-  //      is `type="button"` with an explicit `onClick={onSubmit}` so
-  //      there is no implicit-submit surface left on the form at all.
-  //   2. `onSubmit` is guarded: a call from any state other than the
-  //      review step is a no-op. Defensive even if a future contributor
-  //      reintroduces form-level submission.
-  //   3. Re-entering the wizard from a "Created" state resets the
-  //      `submitted` flag so the badge can't leak across navigations.
+  // The form intentionally has no implicit submit path; only the final
+  // Review button can create the stream.
   const onSubmit = methods.handleSubmit(async (data) => {
     if (stepIdx !== STEPS.length - 1) {
-      // Never run the mutation from anywhere but the explicit Review
-      // step Create button. See block comment above.
       return;
     }
     if (!party) {

@@ -1,5 +1,5 @@
 /**
- * Canton Streams Delegated Executor Service — Phase 3.
+ * Canton Streams Delegated Executor Service.
  *
  * This service watches for active DelegatedPolicy contracts and
  * automatically executes delegated actions (withdrawals, etc.) on

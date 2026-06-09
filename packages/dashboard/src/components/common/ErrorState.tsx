@@ -1,9 +1,5 @@
 /**
  * ErrorState — display for TanStack queries in `isError` state.
- *
- * Rewritten for STR-116 Phase 5 using cc-streams design tokens
- * (var(--danger), .card surface, var(--font-mono)). Replaces the
- * earlier Tailwind rose-tinted version.
  */
 
 import type { CSSProperties, ReactNode } from 'react';

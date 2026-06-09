@@ -1,5 +1,5 @@
 /**
- * Tests for SigningProviderResolver (STR-84.3).
+ * Tests for SigningProviderResolver.
  *
  * Covers:
  *   - forParty() looks up via listAccounts + caches

@@ -1,7 +1,7 @@
 -- | StreamAdmin — V2-only admin/observability contract for the
--- iterated-allocation streaming pattern (STR-86 / plan §7 / STR-79).
+-- iterated-allocation streaming pattern.
 --
--- ## Architectural pivot (STR-79 V2-only)
+-- ## V2 allocation model
 --
 -- The legacy `StreamEscrow` template (this module's predecessor) carried
 -- the escrowed funds *inside* the contract via an `EscrowBalance` field.
@@ -26,10 +26,10 @@
 --
 -- ## Coexistence with `StreamEscrow`
 --
--- `StreamEscrow` continues to live in this package for the duration of
--- the M3 hardening window. It is marked DEPRECATED and consumers MUST
--- migrate to `StreamAdmin` + a V2 `Allocation` before M4 mainnet promotion.
--- The two templates do not share state; each stream uses one or the other.
+-- `StreamEscrow` continues to live in this package for legacy numeric
+-- escrow compatibility. New token-standard streams should use
+-- `StreamAdmin` + a V2 `Allocation`. The two templates do not share state;
+-- each stream uses one or the other.
 --
 -- ## Lifecycle (V2 vocabulary only)
 --
@@ -53,8 +53,8 @@
 --
 --   * `packages/daml/test/daml/Test/Stream/StreamAdminLifecycle.daml`
 --     — unit tests for the lifecycle observability semantics
---   * `packages/sdk/src/commands/stream-admin.ts` (planned) — SDK
---     orchestration that produces the create command + the
+--   * `packages/sdk/src/commands/stream-admin.ts` — SDK orchestration
+--     that produces the create command + the
 --     `AllocationFactory_Allocate` command for the dApp to dispatch
 module CantonStreams.Stream.StreamAdmin where
 
@@ -107,7 +107,7 @@ template StreamAdmin
       -- on each `Sync_Iteration`. `None` between operator-side
       -- create-allocation and the first `Sync_Iteration`.
     originalAllocationId : Optional Text
-      -- ^ The first allocation in the iteration chain (STR-97). All
+      -- ^ The first allocation in the iteration chain. All
       -- subsequent allocations in the chain reference this via their
       -- V2 `originalAllocationId` field. Set by the first
       -- `Sync_Iteration`; never changes afterwards. Used by

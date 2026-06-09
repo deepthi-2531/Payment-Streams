@@ -1,5 +1,5 @@
-// STR-98 — instruction-expiry scheduling tests for the V2 transfer-events
-// subscriber. Verifies:
+// Instruction-expiry scheduling tests for the V2 transfer-events subscriber.
+// Verifies:
 //   - scheduleInstructionExpiry fires an `instruction:expired` event
 //     when wall-clock crosses expiresAt
 //   - rescheduling the same instructionCid cancels the prior timer

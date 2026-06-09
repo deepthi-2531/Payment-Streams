@@ -1,6 +1,4 @@
 /**
- * createStreamSchema — Phase 8 / STR-119 coverage.
- *
  * Locks the key behaviors the wizard relies on:
  *   • happy-path Linear / TokenStandardCustody
  *   • rejects legacy settlement modes

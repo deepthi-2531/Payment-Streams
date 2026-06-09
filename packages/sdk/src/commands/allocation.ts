@@ -1,14 +1,11 @@
 /**
  * @module commands/allocation
  *
- * AllocationRequestV2 emission + Allocation_Settle dispatch (V2-only per STR-79).
+ * AllocationRequestV2 emission + Allocation_Settle dispatch.
  *
- * Per the V2-only architectural pivot (STR-79), V1 was dropped from this
- * library. The streaming primitive requires V2 committed-iterated
- * allocations; V1 has no iteration primitive that could serve the same role.
- * See STR-79 for the rationale + CIP-0112 §5 for the upstream backwards-
- * compatibility expectation (V1 assets are expected to publish V2 interfaces
- * alongside V1).
+ * The streaming primitive requires V2 committed-iterated allocations;
+ * V1 has no iteration primitive that could serve the same role. Per
+ * CIP-0112 §5, V1 assets are expected to publish V2 interfaces alongside V1.
  *
  * This module is the SDK-side surface for exercising V2 AllocationRequest /
  * Allocation interfaces:
@@ -103,7 +100,7 @@ export interface TransferLegV2 {
  * counter-proposal) with a prior `AllocationRequest`. Per the spec author's
  * CIP-0112 update (May 2026), the V2 `AllocationRequestView` carries
  * `originalRequestId : Optional Text` so wallets + subscribers can
- * trace a request chain. STR-97.
+ * trace a request chain.
  */
 export interface BuildAllocationRequestParams {
   readonly settlement: AllocationSettlementInfo;
@@ -278,7 +275,7 @@ export function buildAllocationRequest(
  * Per the CIP-0112 update (May 2026), `originalAllocationId` is
  * carried on the V2 `AllocationView` so subscribers + dApps can chain
  * iterated settlements (each iteration archives the prior allocation +
- * creates a new one referencing the original). STR-97.
+ * creates a new one referencing the original).
  */
 export interface AllocationView {
   readonly allocationCid: string;
@@ -362,8 +359,7 @@ function defaultAllocationRequestActions(
 /**
  * V2 iterated-allocation funding. When provided to `buildAllocationSettle`,
  * the settle exercise refills funding for the next iteration — the V2
- * primitive that backs StreamFlow's recurring streams and per the spec author's
- * update powers prefunded trading.
+ * primitive that backs recurring streams and prefunded trading patterns.
  */
 export type NextIterationFundingAmounts = Readonly<Record<string, Decimal | string | number>>;
 
@@ -451,9 +447,8 @@ export async function buildAllocationCancel(
 // ---------------------------------------------------------------------------
 
 /**
- * Build a multi-leg batch settlement exercise. Used by MilestoneEscrow
- * (STR-69) and by batched stream advancement (per the CIP-0112 prefunded
- * trading pattern: settle multiple committed allocations atomically).
+ * Build a multi-leg batch settlement exercise for milestones, batched
+ * stream advancement, and other CIP-0112 prefunded trading patterns.
  *
  * @param settlementFactoryCid SettlementFactory contract id on the ledger.
  * @param allocationCids       Per-leg-id → AllocationV2 contract id, all

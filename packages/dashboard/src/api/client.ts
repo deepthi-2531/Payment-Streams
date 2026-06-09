@@ -5,42 +5,9 @@
  * calls to the proxy server. All Decimal values are serialized as
  * strings over the wire and reconstructed on the client side.
  *
- * Hosted-wallet read path (STR-83 / STR-123 follow-up):
- *
- * When the user is signed in via a hosted-multi-wallet (PartyLayer →
- * 5N Loop, Cantor8, Send), the dashboard never receives a JWT — the
- * wallet signs and routes ledger calls through its own server-side
- * proxy. There is no `Authorization: Bearer <jwt>` to send to our
- * REST proxy, and asking our proxy to "log in" on the user's behalf
- * isn't possible without per-wallet integration.
- *
- * In that case the client SHORT-CIRCUITS proxy reads: each read
- * method first probes the wallet's CIP-0103 `ledgerApi` to verify
- * the wallet-routed ledger path is alive, then returns an empty
- * result set. Empty is the truthful answer because our Canton Streams
- * DAR is not deployed to the devnet participant the picked wallet is
- * attached to (Loop on devnet has zero StreamEscrow contracts for the
- * user, by construction).
- *
- * What this DOES give us:
- *   - No more 500 / Internal Server Error when the proxy is absent.
- *   - The dashboard renders 0-stream / 0-policy / 0-pending states
- *     cleanly through Skeleton → empty UI.
- *   - The wallet's `ledgerApi` round-trip is exercised, so when the
- *     DAR ships to a network the wallet can reach, the full decoder
- *     (next step) can swap in here.
- *
- * What the FOLLOW-UP must do:
- *   - Replace the `[]` payloads with a real Ledger-API decoder that
- *     queries by template-id (TEMPLATE_STREAM_ESCROW etc.) via
- *     walletClient.ledgerApi and reuses the SDK's browser-safe Stream
- *     deserializers. Tracked as the STR-83 + STR-123 ledger-routing
- *     work; documented in docs/HOSTED-WALLET-PLAN.md.
- *   - Writes (createStream / accept / withdraw / cancel / renew /
- *     revokePolicy) still throw a clear error today — the wallet
- *     would need to drive `prepareExecuteAndWait` on a real
- *     AllocationRequest, which is gated behind the SDK adding that
- *     method (capabilities.prepareExecuteAndWait flips to true).
+ * Hosted wallets can read through their own CIP-103 `ledgerApi` surface
+ * instead of the REST proxy. Writes still require a wallet provider that can
+ * submit and wait for Daml command execution.
  */
 
 import Decimal from 'decimal.js';
@@ -82,19 +49,13 @@ export class HostedWalletWriteUnsupportedError extends Error {
   constructor(action: string) {
     super(
       `${action} is not yet wired for hosted wallets (5N Loop, Cantor8, Send). ` +
-        `It requires routing the Daml command through ` +
-        `walletClient.prepareExecuteAndWait — that capability is currently false ` +
-        `for the PartyLayer-routed Provider. See HOSTED-WALLET-PLAN.md.`,
+        `This flow needs a wallet provider that can submit the Daml command and wait for completion.`,
     );
     this.name = 'HostedWalletWriteUnsupportedError';
   }
 }
 
-/**
- * [M7] Optional settlement args for TokenStandardCustody cancel /
- * mutualCancel. Required when the stream is TS-custody; omit for
- * NumericLegacy / UtilityHoldingCustody streams.
- */
+/** Optional settlement args for TokenStandardCustody cancel / mutual cancel. */
 export interface TokenStandardCancelArgs {
   readonly recipientSettlementReference?: string;
   readonly senderRefundReference?: string;
@@ -107,10 +68,6 @@ export interface TokenStandardCancelArgs {
 // ---------------------------------------------------------------------------
 
 export class CantonStreamsApi {
-  // `getParty` retained as a constructor arg for backwards-compat with
-  // useCantonClient; not used for request headers anymore (STR-123 Phase
-  // 7). Kept so existing call-sites compile + the constructor signature
-  // doesn't churn ahead of STR-83 proxy cutover.
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
@@ -122,10 +79,6 @@ export class CantonStreamsApi {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     const token = this.getToken();
     if (token) h['Authorization'] = `Bearer ${token}`;
-    // STR-123 Phase 7: identity is read by the proxy from the wallet-issued
-    // bearer token, not from a separate party header. The dashboard no
-    // longer sends `X-Canton-Party`. Once STR-83 lands the proxy stops
-    // accepting it entirely.
     return h;
   }
 
@@ -428,7 +381,7 @@ export class CantonStreamsApi {
       throw new Error(
         'Accept stream from the hosted-wallet flow needs the request ' +
           'contract id, not just (sender, streamId). Use the Inbox UI flow ' +
-          "that drives walletClient.prepareExecuteAndWait once that capability lands.",
+          'when wallet-side command submission is available.',
       );
     }
     return this.request(
@@ -453,7 +406,7 @@ export class CantonStreamsApi {
   }
 
   /**
-   * [M7] Cancel a stream.
+   * Cancel a stream.
    *
    * For TokenStandardCustody streams, the proxy needs settlement
    * references (recipient + sender refund refs) to validate the
@@ -533,7 +486,7 @@ export class CantonStreamsApi {
     );
   }
 
-  // --- Phase 3: Delegated Policies ---
+  // --- Delegated Policies ---
 
   async listPolicies(): Promise<RawPolicy[]> {
     if (this.isHostedWalletSession()) {

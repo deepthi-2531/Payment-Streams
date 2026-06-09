@@ -8,8 +8,7 @@ dependencies:
 data-dependencies:
   - ../interfaces/.daml/dist/canton-streams-interfaces-0.2.3.dar
   # ---------------------------------------------------------------------
-  # CIP-56 Token Standard V2 (STR-79 V2-only / STR-65 DAR fetch / STR-102
-  # legacy delete). Fetched via `node scripts/fetch-v2-dars.mjs`.
+  # CIP-56 Token Standard V2. Fetched via `node scripts/fetch-v2-dars.mjs`.
   #
   # V1 interfaces are NOT bound here. Per CIP-0112 §5, V1 assets are
   # expected to publish V2 alongside V1; once an asset advertises V2 in

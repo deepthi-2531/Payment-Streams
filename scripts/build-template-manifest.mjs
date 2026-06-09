@@ -4,9 +4,8 @@
  *
  * The manifest is the single source of truth for "what counts as a
  * Canton Streams transaction." It binds the library to its on-ledger
- * template ids so any third party (Foundation, reviewer, partner) can
- * compute adoption metrics from the public Canton scan endpoint without
- * grantee-supplied data.
+ * template ids so operators and integrators can compute adoption metrics
+ * from the public Canton scan endpoint without app-supplied data.
  *
  * Output: `dist/template-manifest.json` with the shape:
  *
@@ -36,9 +35,8 @@
  *
  * Requires `damlc inspect-dar --json` on PATH (Daml SDK 2.x or 3.x).
  *
- * The manifest is referenced from the grant agreement at M1; once published,
- * the package hashes are immutable and the Foundation queries them to
- * compute adoption (see scripts/query-adoption-metrics.mjs).
+ * Once published, package hashes are immutable. Metrics tooling can use
+ * this manifest to compute adoption without trusting private app data.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -170,10 +168,8 @@ function main() {
     version: process.env.MANIFEST_VERSION ?? readPackageVersion(),
     buildTime: new Date().toISOString(),
     note:
-      'Canonical template-id manifest. Bound to the Canton Streams grant agreement at M1. ' +
-      'Adoption metrics are computed by the Foundation against the templateIds listed here, ' +
-      'on the public Canton mainnet scan endpoint, excluding grantee/affiliate party identifiers ' +
-      'from the published exclusion list.',
+      'Canonical template-id manifest. Adoption metrics are computed against the templateIds listed here ' +
+      'on public Canton scan endpoints, excluding configured affiliate party identifiers.',
     packages,
   };
 

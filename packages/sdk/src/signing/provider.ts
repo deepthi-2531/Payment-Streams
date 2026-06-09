@@ -5,8 +5,8 @@
  *
  * Replaces the legacy in-process signing path (`amulet.ts` +
  * `hosted-wallet.ts` with `signPreparedHash` calling `node:crypto`).
- * Per plan §0 and STR-84, signing keys live in the Wallet Gateway's
- * bound signing provider — never in our process.
+ * Signing keys live in the Wallet Gateway's bound signing provider,
+ * never in our process.
  *
  * ## Wire contract (verified against upstream)
  *

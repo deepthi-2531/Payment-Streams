@@ -1,10 +1,7 @@
 /**
  * Copyable — monospaced clickable value that copies to clipboard on click.
  *
- * Ported from `Canton Streams/src/primitives.jsx`. Shows a check icon for
- * 1.2s after a successful copy.
- *
- * Phase 1 — STR-111.
+ * Shows a check icon for 1.2s after a successful copy.
  */
 import { useState, type MouseEvent } from 'react';
 import { Icons } from './Icons.js';

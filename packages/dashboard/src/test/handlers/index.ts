@@ -1,5 +1,5 @@
 /**
- * msw request handlers — Phase 8 / STR-119.
+ * MSW request handlers for dashboard tests.
  *
  * Mirrors the proxy's REST surface as used by `src/api/client.ts`. Tests
  * import `server` from `setup.ts` and call `server.use(...)` to override

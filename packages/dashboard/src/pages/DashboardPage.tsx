@@ -1,16 +1,4 @@
-/**
- * DashboardPage — STR-116 Phase 5 reskin to cc-streams aesthetic.
- *
- * Layout adapted from the mock's dashboard.jsx:
- *   - Greeting header with active count + inflow/outflow rate
- *   - Asset breakdown cards (one per asset with positive flow)
- *   - "Awaiting your acceptance" inbox preview when pending != 0
- *   - "Streaming now" list of active streams (first 6)
- *
- * Data wiring unchanged: `useStreams` + `usePendingStreamRequests`
- * TanStack hooks against the proxy. Mutations / live ticker remain
- * as separate concerns (Phase 6 wizard + Phase 7 wallet).
- */
+/** Dashboard overview for wallet holdings, incoming streams, and active streams. */
 
 import { Link } from 'react-router';
 import { Plus, Inbox, ArrowUpRight, TrendingUp, Wallet } from 'lucide-react';
@@ -27,28 +15,15 @@ import {
   StatusBadge,
 } from '../components/common/index.js';
 import type { WalletHolding } from '../lib/walletHoldings.js';
-// Phase 7 (STR-118): AuthGate in App.tsx renders ConnectFlow when the
-// user is unauthenticated, so DashboardPage no longer needs an unauth
-// branch — it's only mounted once we have a session.
 
 export function DashboardPage() {
   const { party } = useAuth();
   const streamsQ = useStreams();
-  // "Inbox preview" surfaces streams where this party is the recipient.
-  // The dashboard does not run a propose/accept ceremony today (V2
-  // funding approval happens in the wallet), so showing
-  // `usePendingStreamRequests()` here always rendered zero and
-  // implied a non-existent acceptance step. Switched to active streams
-  // filtered by recipient.
+  // Incoming preview surfaces streams where this party is the recipient.
   const incomingQ = useStreams(party ? { recipient: party } : undefined);
 
   const streams = streamsQ.data;
   const pendingRequests = incomingQ.data;
-  // Generic wallet holdings — works for every adapter PartyLayer
-  // exposes (Loop via its REST API, Send/Nightly/Console via
-  // canonical CIP-103 ACS, Cantor8/Bron return an empty list with
-  // a `reason` we can surface to the user). The hook is wallet-
-  // neutral; per-wallet logic lives in lib/walletAdapters.
   const holdingsQ = useWalletHoldings();
   const holdingsResult = holdingsQ.data;
   const holdings: readonly WalletHolding[] = holdingsResult?.holdings ?? [];
@@ -128,9 +103,7 @@ export function DashboardPage() {
         }
       />
 
-      {/* Wallet panel — generic across PartyLayer adapters.
-          Loop → REST. Send/Nightly/Console → canonical CIP-103
-          ACS via ledgerApi. Cantor8/Bron → empty + reason hint. */}
+      {/* Wallet holdings */}
       {unsupportedReason && (
         <div
           className="card"
