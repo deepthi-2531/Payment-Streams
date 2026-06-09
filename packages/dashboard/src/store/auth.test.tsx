@@ -1,5 +1,5 @@
 /**
- * AuthProvider — Phase 8 / STR-119.
+ * AuthProvider tests.
  *
  * Verifies the dapp-sdk-backed auth context:
  *   • starts unauthenticated

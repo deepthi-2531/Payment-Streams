@@ -122,9 +122,9 @@ const DEFAULT_TRANSFER_FACTORY_TEMPLATE =
 const DEFAULT_TRANSFER_EXECUTE_BEFORE_SEC = 86_400;
 
 /**
- * @deprecated Since STR-76 (plan §7.4). The settlement-reference path
- * is replaced by V2 AllocationRequest. Use `dispatchSettlement` from
- * `settlement/allocation-dispatch.ts`. Hard-removed in M4.
+ * @deprecated The settlement-reference path is replaced by V2
+ * AllocationRequest. Use `dispatchSettlement` from
+ * `settlement/allocation-dispatch.ts`.
  */
 export class TransferOfferAdapter implements SettlementAdapter {
   private readonly baseUrl?: string;

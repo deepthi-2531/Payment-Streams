@@ -1,14 +1,11 @@
 -- | AllocationBridge — V2 view-builder helpers for the
 -- AllocationRequestV2 interface.
 --
--- ⚠ REWRITTEN against verified CIP-56 V2 spec (May 2026). See
--- `docs/integration-guide/cip-56-v2-types-reference.md` for the
+-- See `docs/integration-guide/cip-56-v2-types-reference.md` for the
 -- verified type listing.
 --
--- Per the V2-only architectural pivot (STR-79), escrow templates
--- (StreamEscrow, StreamFlow, MilestoneEscrow) implement ONLY
--- `AllocationRequestV2.AllocationRequest`. V1 was dropped — see
--- STR-79 for the rationale. This module owns the V2 view builders
+-- Escrow templates implement `AllocationRequestV2.AllocationRequest`.
+-- V1 is not supported. This module owns the V2 view builders
 -- so the per-template `interface instance` blocks stay focused on
 -- lifecycle authorization.
 --
@@ -35,7 +32,7 @@ import CantonStreams.Interface.Types
   , InstrumentRef
   )
 
--- Real Splice V2 imports (STR-102 Phase 2). Stubs are deleted.
+-- Splice V2 imports.
 import qualified Splice.Api.Token.AllocationRequestV2 as AR2
 import qualified Splice.Api.Token.AllocationV2 as A2
 import qualified Splice.Api.Token.HoldingV2 as H2
@@ -57,9 +54,8 @@ emptyMeta = M1.emptyMetadata
 bareV2Account : Party -> H2.Account
 bareV2Account p = H2.Account with owner = Some p; provider = None; id = ""
 
--- | Assert a settlement reference is non-empty. Moved from the deleted
--- TokenStandardAdapter as part of STR-102 Phase 2. Used by StreamFlow +
--- MilestoneEscrow's lifecycle choices to validate that a settlement
+-- | Assert a settlement reference is non-empty. Used by StreamFlow and
+-- MilestoneEscrow lifecycle choices to validate that a settlement
 -- reference was supplied by the executor.
 requireSettlementReference : Text -> Update ()
 requireSettlementReference ref =
@@ -184,7 +180,7 @@ buildV2View :
 buildV2View settlement allocations requestedAt settleAt actions meta =
   -- NOTE: `originalRequestId` was added in the CIP-0112 May 2026
   -- update but is NOT yet in the published spec on the
-  -- `token-standard-v2-upcoming` branch. Add it back when the upstream
+  -- upstream V2 interface. Add it back when the upstream
   -- spec catches up.
   AR2.AllocationRequestView with
     originalRequestCid = None

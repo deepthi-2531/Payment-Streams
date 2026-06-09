@@ -32,32 +32,27 @@
 -- The library does not extend credit; withdrawals strictly stop at the
 -- funded boundary.
 --
--- ## Settlement (V2-only iterated allocation — STR-68 + STR-79)
+-- ## Settlement (V2-only iterated allocation)
 --
 -- StreamFlow uses **V2 iterated allocation** exclusively: a single
 -- `AllocationV2.Allocation` is created when the stream starts, and
 -- `Allocation_Settle.nextIterationFunding` tops it up for each
 -- subsequent accrual period. `numIterations` tracks the cycle count.
 --
--- V1 is not supported (STR-79 V2-only decision). Per the spec author's
--- CIP-0112 update, V2 committed-iterated allocations are the V2
+-- V1 is not supported. Per CIP-0112, V2 committed-iterated allocations are the V2
 -- primitive for prefunded/streaming flows. V1 had no iterated
 -- equivalent and was a degraded fallback we chose to drop entirely.
 --
 -- This template implements the V2 AllocationRequest interface so
 -- V2-aware wallets recognize it as a recurring request and the
--- proxy's TransferEventsV2 subscriber (STR-77) can react.
+-- proxy's TransferEventsV2 subscriber can react.
 module CantonStreams.Stream.StreamFlow where
 
 import qualified DA.Map as Map
 import DA.Time (RelTime, addRelTime, convertRelTimeToMicroseconds, days, microseconds, subTime)
 
 import CantonStreams.Interface.Types
--- TokenStandardAdapter import removed by STR-102 Phase 2 — its symbols
--- (TokenStandardEscrowBalance, assertInstrumentRefMatches) aren't used here.
 
--- AllocationRequest stubs (swap for real Splice DAR imports when STR-65 lands).
--- V1 stub import removed by the V2-only pivot (STR-79).
 import qualified Splice.Api.Token.AllocationRequestV2 as AR2
 import qualified CantonStreams.Settlement.AllocationBridge as Bridge
 import qualified DA.TextMap as TextMap
@@ -107,8 +102,8 @@ flowElapsedMicros startTime cumulativePaused status pausedAt now =
 -- (already in microseconds). `flowRate` is tokens-per-microsecond;
 -- multiplied by elapsed microseconds gives total accrued.
 --
--- [M2 fix] Bound elapsedMicros to Int64 max divided by an expected
--- multiplier safety factor. Daml LF `Int` is 64-bit. Without an
+-- Bound elapsedMicros to Int64 max divided by an expected multiplier
+-- safety factor. Daml LF `Int` is 64-bit. Without an
 -- explicit bound, a stream older than \~292 years overflows Int64.
 -- We pick a conservative bound at 100 years (\~3.15e15 µs) which is
 -- well below Int64 max (\~9.22e18) and gives 60+ years of safety
@@ -151,7 +146,7 @@ flowDebt accrued fundedAmount =
 -- with periodic re-settle via `nextIterationFunding`. The view's
 -- `allocateBefore` describes the NEXT iteration's deadline. We default
 -- to "1 day from stream start"; per-cycle deadlines are recomputed at
--- exercise time by the SDK (STR-75 `buildAllocationSettle`).
+-- exercise time by the SDK.
 defaultIterationPeriod : RelTime
 defaultIterationPeriod = days 1
 
@@ -174,7 +169,7 @@ flowClaimableUpperBound funded withdrawn = max 0.0 (funded - withdrawn)
 -- TokenStandardEscrow so the off-chain wallet-gateway settlement model
 -- applies identically.
 --
--- Implements `AllocationRequestV2` per CIP-0112 V2-only (STR-79).
+-- Implements `AllocationRequestV2` per CIP-0112 V2.
 -- V2 uses iterated allocation (`Allocation_Settle.nextIterationFunding`)
 -- for recurring settlement. V1 was dropped — V1 had no iterated
 -- primitive and would have doubled audit surface for marginal value.
@@ -224,7 +219,7 @@ template StreamFlow
     -- | Sender adds to the funded balance. Always permitted as long as
     -- the stream is not Stopped. Required to clear any outstanding debt.
     --
-    -- V2 iterated semantics (STR-68): TopUp_Flow corresponds to the
+    -- V2 iterated semantics: TopUp_Flow corresponds to the
     -- executor exercising `Allocation_Settle.nextIterationFunding` with
     -- an additional amount — i.e. the V2 wallet sees a top-up as the
     -- next iteration's funding being adjusted upward.
@@ -249,7 +244,7 @@ template StreamFlow
     -- V2 iterated semantics: each Withdraw_Flow increments
     -- `numIterations` and corresponds to one `Allocation_Settle`
     -- exercise on the underlying V2 Allocation. The proxy's
-    -- TransferEventsV2 subscriber (STR-77) reacts to the settle event
+    -- TransferEventsV2 subscriber reacts to the settle event
     -- and exercises this choice to advance contract state.
     nonconsuming choice Withdraw_Flow : ContractId StreamFlow
       with
@@ -339,7 +334,7 @@ template StreamFlow
         assertMsg "Stream already stopped" (status /= FlowStopped)
         assertMsg "Recipient settlement must be non-negative" (recipientSettlement >= 0.0)
         assertMsg "Sender refund must be non-negative" (senderRefund >= 0.0)
-        -- [M1 fix] Bound stopTime to ledger time. Without this, controllers
+        -- Bound stopTime to ledger time. Without this, controllers
         -- could supply a future-dated stopTime to inflate `owedToRecipient`
         -- (the accrued amount is computed at `stopTime` not `getTime`).
         -- All three controllers must collude for the choice to exercise, but
@@ -403,14 +398,14 @@ template StreamFlow
     --------------------------------------------------------------------
     -- CIP-0112 § 5 dual-interface: AllocationRequest V1 + V2
     --------------------------------------------------------------------
-    -- CIP-0112 V2 AllocationRequest interface (V2-only per STR-79)
+    -- CIP-0112 V2 AllocationRequest interface
     --------------------------------------------------------------------
     -- StreamFlow exposes the V2 AllocationRequest shape so V2 wallets
     -- recognize the recurring stream. V2 wallets use the view's
     -- iterated-allocation hints (numIterations, nextSettleBefore in
     -- meta) to drive `Allocation_Settle` with `nextIterationFunding`.
     --
-    -- V1 was removed per the V2-only pivot (STR-79). V1 had no
+    -- V1 is not supported. V1 had no
     -- iterated-allocation primitive — per-period AllocationRequestV1
     -- emission was a degraded fallback that doubled audit surface for
     -- marginal value.
@@ -418,11 +413,11 @@ template StreamFlow
     interface instance AR2.AllocationRequest for StreamFlow where
       -- Real V2 interface impl signature is 2-arg: ContractId + choice record.
       allocationRequest_acceptImpl _ _ = do
-        abort "AllocationRequest_Accept V2 not yet wired on StreamFlow — use Withdraw_Flow (lifecycle migration in STR-87; iterated Allocation_Settle target)"
+        abort "AllocationRequest_Accept is not wired on StreamFlow; use Withdraw_Flow or the V2 StreamFlowAdmin allocation path"
       allocationRequest_rejectImpl _ _ = do
-        abort "AllocationRequest_Reject V2 not yet wired on StreamFlow — use Stop_Flow"
+        abort "AllocationRequest_Reject is not wired on StreamFlow; use Stop_Flow"
       allocationRequest_withdrawImpl _ _ = do
-        abort "AllocationRequest_Withdraw V2 not yet wired on StreamFlow — use Stop_Flow as escrow operator"
+        abort "AllocationRequest_Withdraw is not wired on StreamFlow; use Stop_Flow as escrow operator"
       -- ExtraObservers: no additional disclosure needed; request
       -- signatories (sender + recipient + escrowOperator) see everything.
       allocationRequest_acceptExtraObservers _ = []

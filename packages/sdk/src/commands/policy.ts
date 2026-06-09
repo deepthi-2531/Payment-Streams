@@ -1,5 +1,5 @@
 /**
- * Delegated policy management commands — Phase 3.
+ * Delegated policy management commands.
  *
  * Provides CRUD operations for DelegatedPolicy contracts:
  *   - listPolicies: query active policies

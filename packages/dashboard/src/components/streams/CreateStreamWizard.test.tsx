@@ -1,18 +1,4 @@
-/**
- * CreateStreamWizard regression — review-step submit guard.
- *
- * Locks the contract that the create mutation only fires when the user
- * clicks the explicit "Create stream" button on Step 4 (Review). The
- * earlier wizard wired `methods.handleSubmit(...)` to
- * `<form onSubmit={...}>`, which let stray submission paths (Enter
- * key, button-replacement mid-transition, etc.) fire the mutation
- * during Step 3 → Step 4 navigation. The reviewer hit exactly that:
- * "advancing from Step 3 to Step 4 immediately creates the stream".
- *
- * This spec drives the wizard through every step + a no-op "Continue"
- * to Step 4, and asserts the mutation has NOT been called until the
- * explicit Review-step button is clicked.
- */
+/** Regression tests for the create wizard's explicit-submit contract. */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';

@@ -1,5 +1,5 @@
 /**
- * Unit tests for settlement/allocation-dispatch.ts (STR-76, V2-only per STR-79).
+ * Unit tests for settlement/allocation-dispatch.ts.
  *
  * Covers:
  *   - V2 routing for emit-request, settle, cancel, batch-settle

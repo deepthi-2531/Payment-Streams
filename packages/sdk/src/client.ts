@@ -222,7 +222,7 @@ export class CantonStreamsClient {
     return getStreamHistory(this.transport, sender, streamId, this.config.actAs, this.logger);
   }
 
-  // --- Policy Management (Phase 3) ---
+  // --- Policy Management ---
 
   /**
    * List delegated policies visible to the acting parties.

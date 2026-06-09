@@ -38,7 +38,7 @@ pnpm daml:test      # run Daml scenario tests
 ```
 
 **Note on Daml CI:** the canton-streams DAR depends on CIP-56 V2 Token
-Standard packages from `canton-network/splice@token-standard-v2-upcoming`.
+Standard packages from `canton-network/splice`.
 Building those requires cloning the upstream Splice repo and running
 `daml build` against 6+ source packages — a 10-30 minute operation per
 fresh CI runner. To keep push-triggered CI fast, **the Daml build is
@@ -88,8 +88,8 @@ bash scripts/check-v2-conformance.sh    # block forbidden V1 identifiers
 
 `scripts/check-v2-conformance.sh` runs on every push + PR. It blocks
 identifiers that don't exist in the upstream
-[canton-network/splice@token-standard-v2-upcoming](https://github.com/canton-network/splice/tree/token-standard-v2-upcoming)
-surface — typically V1 names from a deleted code path. Run it locally
+[canton-network/splice](https://github.com/canton-network/splice)
+surface, typically V1 names from a deleted code path. Run it locally
 before pushing.
 
 Before cutting a release, maintainers should also confirm the pin in
@@ -98,7 +98,7 @@ upstream branch head:
 
 ```bash
 # capture current upstream tip
-git ls-remote https://github.com/canton-network/splice.git refs/heads/token-standard-v2-upcoming
+git ls-remote https://github.com/canton-network/splice.git refs/heads/main
 
 # compare with our pin
 grep -E "SPLICE_PINNED_(COMMIT|AS_OF)" scripts/fetch-v2-dars.mjs

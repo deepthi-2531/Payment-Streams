@@ -1,14 +1,4 @@
-/**
- * SettingsPage — STR-121 Phase 5 reskin to cc-streams aesthetic.
- *
- * Two cards: ConnectionStatus (proxy `/api/health` via `useHealth`) +
- * ConnectForm (JWT entry). `ConnectForm` is exported as a named export
- * because DashboardPage's unauthenticated state reuses it directly —
- * keep that export shape intact.
- *
- * Phase 7 (STR-123) replaces `ConnectForm` with the dapp-sdk wallet
- * picker; this file holds the bridge until then.
- */
+/** Settings for proxy health and the active wallet/dev session. */
 
 import { useState, type CSSProperties } from 'react';
 import { Shield, Wifi, WifiOff, AlertTriangle } from 'lucide-react';
@@ -44,7 +34,7 @@ export function SettingsPage() {
       <SectionCard
         icon={<Shield size={16} style={{ color: 'var(--fg-3)' }} />}
         title="Wallet session"
-        subtitle="Connected via @canton-network/dapp-sdk. The proxy reads identity from the wallet-issued bearer token; no party header is sent from the browser (STR-123). The dev-mode fallback below is only used when no real wallet is available."
+        subtitle="Connect a wallet for normal use. The dev-mode fallback is only for local development."
       >
         <ConnectForm />
       </SectionCard>
@@ -88,10 +78,7 @@ function SectionCard({
   );
 }
 
-/**
- * Read-only connection status fetched from the proxy's `/api/health` via
- * the shared `useHealth` hook (STR-112).
- */
+/** Read-only connection status fetched from the proxy health endpoint. */
 function ConnectionStatus() {
   const healthQ = useHealth();
 
@@ -207,16 +194,7 @@ const hostBadgeStyle: CSSProperties = {
   fontSize: 11.5,
 };
 
-/**
- * Wallet session panel — Phase 7 (STR-118) cutover.
- *
- * Replaces the JWT-paste form with a dapp-sdk `connect()` button. The
- * dev-mode fallback (no wallet, just a party + optional JWT against a
- * proxy in `unsafe_jwt` mode) is collapsed behind a toggle.
- *
- * Kept the `ConnectForm` named export because DashboardPage's
- * unauthenticated welcome card imports it directly.
- */
+/** Wallet session panel. */
 export function ConnectForm() {
   const {
     isAuthenticated,
@@ -391,8 +369,7 @@ export function ConnectForm() {
             Connect dev session
           </button>
           <p style={{ margin: 0, fontSize: 10.5, color: 'var(--fg-4)' }}>
-            Dev mode bypasses the wallet — only use against a local proxy
-            with <code>unsafe_jwt</code> enabled.
+            Dev mode bypasses the wallet; use it only against a local development proxy.
           </p>
         </div>
       )}

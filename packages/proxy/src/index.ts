@@ -105,10 +105,8 @@ let stopAutoWithdrawWorker: (() => void) | null = null;
 
 const app = express();
 
-// [C3 fix] CORS — origin allow-list, default deny.
-// Previously `app.use(cors())` set Access-Control-Allow-Origin: * which,
-// combined with a sessionStorage JWT in the dashboard (STR-82), let any
-// malicious page in the user's browser call the proxy via stolen creds.
+// CORS is allow-list only by default. Do not expose authenticated proxy
+// routes to arbitrary browser origins.
 const PROXY_ALLOWED_ORIGINS = (process.env['ALLOWED_ORIGINS'] ?? '')
   .split(',')
   .map((o) => o.trim())
@@ -169,8 +167,7 @@ async function createAuthorizedClient(
  * Same as {@link createAuthorizedClient}, but also returns the resolved
  * caller party so routes that need to enforce party-scoped invariants
  * (e.g. "only the policy sender can revoke") do not have to re-read
- * the X-Canton-Party header, which the dapp-sdk dashboard no longer
- * sends after the STR-123 auth cutover.
+ * the X-Canton-Party header.
  *
  * The caller party comes from the JWT `party`/`sub` claim (auth mode)
  * or from the dev-mode JWT extraction in `authorizeRequest`. This is
@@ -961,7 +958,7 @@ app.post('/api/streams/:sender/:streamId/renew', async (req, res) => {
 /**
  * POST /api/streams/:sender/:streamId/finalize — service-only custody finalization.
  *
- * This route is reserved for Phase 2 custody workflows. The escrow operator
+ * This route is reserved for custody workflows. The escrow operator
  * service uses this to finalize accepted stream requests by locking, splitting,
  * and transferring real holdings into escrow custody.
  *
@@ -1074,7 +1071,7 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Phase 3 — Delegated Policy routes
+// Delegated Policy routes
 // ---------------------------------------------------------------------------
 
 /** GET /api/policies — list delegated policies visible to the caller */
@@ -1095,19 +1092,15 @@ app.get('/api/policies', async (req, res) => {
 app.post('/api/policies/:contractId/revoke', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    // Read both the client AND the resolved caller party from auth so
-    // we do not depend on the X-Canton-Party header — the dapp-sdk
-    // dashboard no longer sends it after the STR-123 auth cutover,
-    // which would otherwise make this route always 401 from the UI.
+    // Read both the client and resolved caller party from auth so this
+    // route does not depend on X-Canton-Party being present.
     const authorized = await createAuthorizedClientWithParty(req, 'cancel');
     client = authorized.client;
     const callerParty = authorized.party;
     const contractId = req.params['contractId']!;
 
-    // [H6 fix] Previously the route called createAuthorizedClient with
-    // action='cancel' but never called enforceRole — so any authenticated
-    // user could revoke any visible DelegatedPolicy. Load the policy first,
-    // then assert the caller is the sender (only party authorized to revoke
+    // Load the policy first, then assert the caller is the sender (only
+    // party authorized to revoke
     // per the Daml template's controller list).
     const policies = await client.listPolicies();
     const policy = policies.find((p) => p.contractId === contractId);

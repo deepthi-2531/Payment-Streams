@@ -2,10 +2,9 @@
 /**
  * Query Canton mainnet adoption metrics for Canton Streams.
  *
- * This script computes the adoption metrics that gate M3-M5 milestone
- * payouts (per the grant agreement) directly from the public Canton
- * scan endpoint. It takes no grantee-supplied data and produces a
- * verifiable JSON report.
+ * This script computes adoption metrics directly from public Canton scan
+ * endpoints. It takes no app-supplied data and produces a verifiable JSON
+ * report.
  *
  * Inputs:
  *   - Canonical template manifest (from build-template-manifest.mjs)
@@ -23,9 +22,8 @@
  *   - Settlements / withdrawals executed
  *   - Cumulative CC burn (best-effort; depends on scan endpoint exposing fees)
  *
- * The Foundation runs this script (or a re-implementation in their
- * preferred stack); the grantee does not produce the numbers. Anyone
- * with the public scan URL and the manifest can independently verify.
+ * Anyone with the public scan URL and template manifest can independently
+ * verify the output.
  *
  * Usage:
  *
@@ -50,7 +48,7 @@ function parseArgs(argv) {
     manifest: 'dist/template-manifest.json',
     exclude: null,
     scan: null,                   // single-Scan mode (backwards-compat)
-    assetRegistry: null,          // multi-Scan mode (preferred, STR-56)
+    assetRegistry: null,          // multi-Scan mode (preferred)
     since: null,
     until: new Date().toISOString(),
     out: 'dist/adoption-report.json',
@@ -315,7 +313,7 @@ async function main() {
   console.error(`[adoption] excluded parties:   ${excludes.size}`);
 
   // -------------------------------------------------------------------
-  // Multi-Scan mode (STR-56): aggregate across asset-registry endpoints
+  // Multi-Scan mode: aggregate across asset-registry endpoints
   // -------------------------------------------------------------------
   let aggregateMetrics;
   let perEndpoint = [];
@@ -380,9 +378,8 @@ async function main() {
     excludedParties: excludes.size,
     metrics: aggregateMetrics,
     note:
-      'Computed against public scan endpoint(s) with no grantee-supplied data. ' +
-      'Re-runnable by any third party. M3-M5 milestone payouts are gated on these ' +
-      'metrics per the grant agreement. Multi-Scan mode aggregates per-asset metrics ' +
+      'Computed against public scan endpoint(s) with no app-supplied data. ' +
+      'Re-runnable by any third party. Multi-Scan mode aggregates per-asset metrics ' +
       'across endpoints from config/asset-registry.json.',
   };
 

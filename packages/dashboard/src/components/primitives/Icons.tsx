@@ -1,8 +1,6 @@
 /**
  * Icons — lucide-style inline SVG icon set, stroke-width 1.5, sized via
- * `currentColor`. Ported from the mock at `Canton Streams/src/icons.jsx`.
- *
- * Phase 1 of the Canton Streams UI integration (STR-111).
+ * `currentColor`.
  *
  * Usage:
  *   <Icons.Dashboard size={16} />

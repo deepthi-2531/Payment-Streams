@@ -29,7 +29,7 @@ const MAIN_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_PACKAGE_ID'] ?? DEFAULT_STREAMS_PACKAGE_REF;
 
 /**
- * Utility/CIP custody package reference (Phase 2 — utility holding escrow + workflows).
+ * Utility/CIP custody package reference.
  * Override: CANTON_STREAMS_UTILITY_PACKAGE_ID
  *
  * Set this when the utility holding custody DAR is deployed in a separate package
@@ -39,7 +39,7 @@ const UTILITY_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_UTILITY_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 /**
- * Token-standard custody package reference (Phase 2 — externally funded escrow).
+ * Token-standard custody package reference.
  * Override: CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID
  *
  * On deployments where TokenStandardEscrow and its workflow templates are in
@@ -55,14 +55,14 @@ const TOKEN_STANDARD_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 /**
- * Local asset custody package reference (Phase 2 — AMM AssetHolding escrow).
+ * Local asset custody package reference.
  * Override: CANTON_STREAMS_LOCAL_ASSET_PACKAGE_ID
  */
 const LOCAL_ASSET_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_LOCAL_ASSET_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 /**
- * Phase 3 policy package reference.
+ * Delegated policy package reference.
  * Override: CANTON_STREAMS_POLICY_PACKAGE_ID
  *
  * Some environments deploy the policy modules in a separate DAR from the
@@ -73,7 +73,7 @@ const POLICY_PACKAGE_ID: string =
   process.env['CANTON_STREAMS_POLICY_PACKAGE_ID'] ?? MAIN_PACKAGE_ID;
 
 // ---------------------------------------------------------------------------
-// Phase 1 — Numeric Escrow templates
+// Numeric escrow templates
 // ---------------------------------------------------------------------------
 
 /** CreateStreamRequest — sender proposes a new payment stream. */
@@ -90,7 +90,7 @@ export const TEMPLATE_BATCH_REQUEST: TemplateId = {
   entityName: 'BatchCreateRequest',
 };
 
-/** StreamEscrow — active numeric escrow (Phase 1). */
+/** StreamEscrow — active numeric escrow. */
 export const TEMPLATE_STREAM_ESCROW: TemplateId = {
   packageId: MAIN_PACKAGE_ID,
   moduleName: 'CantonStreams.Stream.Escrow',
@@ -98,11 +98,11 @@ export const TEMPLATE_STREAM_ESCROW: TemplateId = {
 };
 
 // ---------------------------------------------------------------------------
-// V2-only admin/observability template (STR-86)
+// V2 admin/observability template
 // ---------------------------------------------------------------------------
 
 /**
- * StreamAdmin — V2-only admin/observability template per STR-86.
+ * StreamAdmin — V2 admin/observability template.
  *
  * Records stream metadata + pointers to the active V2 `Allocation` cid
  * in the iteration chain. Real custody lives in the V2 `Allocation`
@@ -116,14 +116,14 @@ export const TEMPLATE_STREAM_ADMIN: TemplateId = {
   entityName: 'StreamAdmin',
 };
 
-/** Choices on StreamAdmin (V2-only per STR-86). */
+/** Choices on StreamAdmin. */
 export const CHOICE_SYNC_ITERATION = 'Sync_Iteration';
 export const CHOICE_MARK_CANCELLED = 'Mark_Cancelled';
 export const CHOICE_MARK_COMPLETED = 'Mark_Completed';
 export const CHOICE_GET_STREAM_ADMIN_INFO = 'GetStreamAdminInfo';
 
 // ---------------------------------------------------------------------------
-// Phase 2 — Utility/CIP Holding Custody templates
+// Utility/CIP Holding custody templates
 // ---------------------------------------------------------------------------
 
 /**
@@ -146,7 +146,7 @@ export const TEMPLATE_UTILITY_ACCEPTED_REQUEST: TemplateId = {
   entityName: 'AcceptedUtilityHoldingRequest',
 };
 
-/** UtilityHoldingEscrow — active custody-backed escrow (Phase 2). */
+/** UtilityHoldingEscrow — active custody-backed escrow. */
 export const TEMPLATE_UTILITY_ESCROW: TemplateId = {
   packageId: UTILITY_PACKAGE_ID,
   moduleName: 'CantonStreams.Stream.UtilityHoldingEscrow',
@@ -154,24 +154,18 @@ export const TEMPLATE_UTILITY_ESCROW: TemplateId = {
 };
 
 // ---------------------------------------------------------------------------
-// Phase 2 — Token-standard external custody templates
+// Deprecated token-standard external custody templates
 // ---------------------------------------------------------------------------
 //
-// [C1 fix — STR-103] These template ids reference Daml templates that
-// DO NOT EXIST in the current canton-streams package:
+// These template ids reference legacy Daml templates that are not present
+// in the current canton-streams package:
 //
 //   - CantonStreams.Workflow.CreateTokenStandardStream (module missing)
 //   - CantonStreams.Stream.TokenStandardEscrow (module missing)
 //
-// Confirmed by `ls packages/daml/main/daml/CantonStreams/Stream/` (no
-// TokenStandardEscrow.daml) and `ls .../Workflow/` (no CreateTokenStandard*).
-// Likely cause: the templates were folded into the dual-interface
-// StreamEscrow under STR-66 but the SDK + proxy weren't updated.
-//
-// Per the STR-79 cutover umbrella, the TokenStandardCustody path is
-// migrating to the standard AllocationRequest flow via the dual-interface
-// StreamEscrow (STR-86). Until that lands, any code that exercises these
-// templates will fail at the ledger with "template not found".
+// TokenStandardCustody uses the standard AllocationRequest + StreamAdmin
+// path. Any code that exercises these legacy templates will fail at the
+// ledger with "template not found".
 //
 // To prevent silent failure at submit time:
 //   - The constants below are retained as exports so existing
@@ -181,16 +175,13 @@ export const TEMPLATE_UTILITY_ESCROW: TemplateId = {
 //     ids until the migration completes. See `assertTokenStandardEscrowAvailable`
 //     below.
 //
-// When STR-86 lands the standard-driven lifecycle on StreamEscrow, these
-// constants are deleted and SDK consumers are redirected to
-// TEMPLATE_STREAM_ESCROW with settlementMode=TokenStandardCustody.
+// These constants are retained only to avoid breaking older imports.
 
 /**
  * @deprecated TokenStandardEscrow Daml template does not exist in the
- * current package. See STR-103. Code paths that depend on this constant
- * must fail closed; do not submit against this template id until STR-86
- * lands the AllocationRequest-driven lifecycle. Prefer TEMPLATE_STREAM_ESCROW
- * with settlementMode=TokenStandardCustody when STR-86 ships.
+ * current package. Code paths that depend on this constant must fail
+ * closed; do not submit against this template id. Prefer the V2
+ * AllocationRequest + StreamAdmin path.
  */
 export const TEMPLATE_TOKEN_STANDARD_CREATE_REQUEST: TemplateId = {
   packageId: TOKEN_STANDARD_PACKAGE_ID,
@@ -217,9 +208,9 @@ export const TEMPLATE_TOKEN_STANDARD_ESCROW: TemplateId = {
 };
 
 /**
- * [C1 fix — STR-103] Runtime guard. Call before any submit that targets
- * the TokenStandardEscrow templates. Throws a clear error pointing at
- * the migration ticket so the failure mode is loud, not "template not found".
+ * Runtime guard. Call before any submit that targets the legacy
+ * TokenStandardEscrow templates so the failure mode is loud, not
+ * "template not found".
  *
  * The guard reads env `CANTON_STREAMS_TOKEN_STANDARD_ESCROW_PRESENT=true`
  * to override after the operator confirms the template exists in their
@@ -231,16 +222,15 @@ export function assertTokenStandardEscrowAvailable(): void {
     return;
   }
   throw new Error(
-    '[STR-103] TokenStandardEscrow Daml template is NOT present in the canton-streams package. ' +
-      'The SDK + proxy reference it but the Daml module was never published (likely folded into ' +
-      'StreamEscrow under STR-66). Any submit against this template will fail at the ledger. ' +
+    'TokenStandardEscrow Daml template is not present in the canton-streams package. ' +
+      'Any submit against this legacy template will fail at the ledger. ' +
       'Use the V2 AllocationRequest + StreamAdmin path instead. Override with ' +
       'CANTON_STREAMS_TOKEN_STANDARD_ESCROW_PRESENT=true only if your deployment includes the template.',
   );
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2 — Local Asset Custody templates (spike-first)
+// Local Asset custody templates
 // ---------------------------------------------------------------------------
 
 /** CreateLocalAssetStreamRequest — sender proposes a local-asset-backed stream. */
@@ -268,7 +258,7 @@ export const TEMPLATE_LOCAL_ASSET_ESCROW: TemplateId = {
 };
 
 // ---------------------------------------------------------------------------
-// Phase 3 — Delegated Execution templates
+// Delegated execution templates
 // ---------------------------------------------------------------------------
 
 /** DelegatedPolicy — sender delegates execution rights to an executor. */
@@ -401,7 +391,7 @@ export const CREATE_REQUEST_TEMPLATES = [
  *
  * @param options.requireUtility — if true, validate utility custody templates
  * @param options.requireLocalAsset — if true, validate local asset templates
- * @param options.requirePolicy — if true, validate Phase 3 policy templates
+ * @param options.requirePolicy — if true, validate delegated policy templates
  */
 export function validateTemplateRegistry(options?: {
   requireUtility?: boolean;
@@ -422,25 +412,25 @@ export function validateTemplateRegistry(options?: {
     }
   };
 
-  // Phase 1 — always required
+  // Always required
   check('TEMPLATE_CREATE_REQUEST', TEMPLATE_CREATE_REQUEST);
   check('TEMPLATE_STREAM_ESCROW', TEMPLATE_STREAM_ESCROW);
 
-  // Phase 2 — Utility Custody
+  // Utility custody
   if (options?.requireUtility) {
     check('TEMPLATE_UTILITY_CREATE_REQUEST', TEMPLATE_UTILITY_CREATE_REQUEST);
     check('TEMPLATE_UTILITY_ACCEPTED_REQUEST', TEMPLATE_UTILITY_ACCEPTED_REQUEST);
     check('TEMPLATE_UTILITY_ESCROW', TEMPLATE_UTILITY_ESCROW);
   }
 
-  // Phase 2 — Local Asset Custody
+  // Local asset custody
   if (options?.requireLocalAsset) {
     check('TEMPLATE_LOCAL_ASSET_CREATE_REQUEST', TEMPLATE_LOCAL_ASSET_CREATE_REQUEST);
     check('TEMPLATE_LOCAL_ASSET_ACCEPTED_REQUEST', TEMPLATE_LOCAL_ASSET_ACCEPTED_REQUEST);
     check('TEMPLATE_LOCAL_ASSET_ESCROW', TEMPLATE_LOCAL_ASSET_ESCROW);
   }
 
-  // Phase 3 — Delegated Execution
+  // Delegated execution
   if (options?.requirePolicy) {
     check('TEMPLATE_DELEGATED_POLICY', TEMPLATE_DELEGATED_POLICY);
     check('TEMPLATE_EXECUTION_LOG', TEMPLATE_EXECUTION_LOG);

@@ -1,6 +1,4 @@
 /**
- * batchRowSchema — Phase 8 / STR-119 coverage.
- *
  * Locks the CSV-row validation behavior the BatchUpload component relies on.
  */
 

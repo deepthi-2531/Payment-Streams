@@ -3,15 +3,15 @@ name: Daml Build & Test (manual)
 # Triggered manually from the Actions tab — NOT on every push.
 #
 # Why manual: the canton-streams DAR depends on CIP-56 V2 Token Standard
-# DARs sourced from `canton-network/splice@token-standard-v2-upcoming`,
-# which require cloning the upstream Splice repo and running
-# `daml build` against 6+ source packages. That's a 10-30 minute
+# DARs sourced from canton-network/splice, which require cloning the
+# upstream Splice repo and running `daml build` against 6+ source packages.
+# That's a 10-30 minute
 # operation per fresh CI runner, which is too heavy to run on every
 # push. Run this when you want to verify the Daml side end-to-end.
 #
 # Inputs:
 #   splice_ref — git ref in canton-network/splice to build V2 DARs from
-#                (default: token-standard-v2-upcoming)
+#                (default: main)
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ on:
       splice_ref:
         description: 'Splice git ref to build V2 DARs from'
         required: false
-        default: 'token-standard-v2-upcoming'
+        default: 'main'
 
 jobs:
   daml:

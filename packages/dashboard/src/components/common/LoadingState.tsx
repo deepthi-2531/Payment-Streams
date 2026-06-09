@@ -5,8 +5,6 @@
  * `animate-spin` borders scattered across pages). For card-level
  * placeholders, prefer `<Skeleton.Card>` instead — it gives the user a
  * sense of layout while data is in flight.
- *
- * Phase 3 — STR-114.
  */
 import type { CSSProperties } from 'react';
 import { Icons } from '../primitives/Icons.js';

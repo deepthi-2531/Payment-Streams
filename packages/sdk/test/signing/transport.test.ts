@@ -1,5 +1,5 @@
 /**
- * Tests for the JSON-RPC 2.0 transport (STR-84.2).
+ * Tests for the JSON-RPC 2.0 transport.
  *
  * Covers:
  *   - Single request: id correlation, headers, body shape

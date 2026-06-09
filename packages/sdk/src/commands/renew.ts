@@ -69,7 +69,7 @@ export async function renew(
       };
       break;
     case SettlementMode.TokenStandardCustody:
-      // [C1 fix — STR-103] Daml template missing; fail closed.
+      // Legacy TokenStandardEscrow templates are not shipped; fail closed.
       assertTokenStandardEscrowAvailable();
       if (!validated.fundingReference?.trim()) {
         throw new Error('fundingReference is required to renew TokenStandardCustody streams');

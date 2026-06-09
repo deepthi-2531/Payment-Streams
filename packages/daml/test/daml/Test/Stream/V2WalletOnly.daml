@@ -1,13 +1,13 @@
--- | V2 Token-Standard wallet-only interop acceptance test (STR-89).
+-- | V2 Token-Standard wallet-only interop acceptance test.
 --
 -- ## What this test proves
 --
 -- A wallet that knows ONLY the V2 `Splice.Api.Token.AllocationV2` and
 -- `Splice.Api.Token.AllocationRequestV2` vocabulary (no
 -- `CantonStreams.*` imports) can complete the full stream lifecycle
--- through the V2-only admin/observability contracts (STR-86/87/88).
+-- through the V2-only admin/observability contracts.
 --
--- ## Two-actor split (per STR-89 spec)
+-- ## Two-actor split
 --
 --   * **Wallet** signs standard V2 interface exercises only —
 --     `AllocationFactory_Allocate`, `Allocation_Cancel`,
@@ -31,9 +31,9 @@
 --      to record the V2 wallet's actions; these are operator-only.
 --
 -- The full real-V2-Allocation-create-and-settle flow lives in the
--- `splice-token-standard-test` infrastructure (STR-101) — these tests
+-- `splice-token-standard-test` infrastructure. These tests
 -- exercise the admin contract semantics against synthetic V2 cids.
--- When the test infrastructure is wired through STR-101 follow-ons,
+-- When the test infrastructure is wired through,
 -- swap the synthetic cids for real ones; the admin contract semantics
 -- don't change.
 module Test.Stream.V2WalletOnly where

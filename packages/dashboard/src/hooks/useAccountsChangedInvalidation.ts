@@ -14,8 +14,6 @@
  *
  * Without this, the dashboard would serve stale cached results from the
  * previous party until manual refresh.
- *
- * STR-123 Phase 7.
  */
 import { useEffect, useRef } from 'react';
 import { useQueryClient } from '@tanstack/react-query';

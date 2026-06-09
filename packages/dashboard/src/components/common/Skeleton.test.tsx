@@ -1,6 +1,4 @@
 /**
- * Skeleton / ErrorState — Phase 8 / STR-119.
- *
  * Smoke-level coverage of the two query-state primitives every page
  * leans on.
  */

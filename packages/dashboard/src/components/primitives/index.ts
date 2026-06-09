@@ -1,9 +1,6 @@
 /**
  * Primitives barrel — Canton Streams UI design system.
  *
- * Phase 1 of the Canton Streams UI integration (STR-111).
- * See plan §8 for the full integration scope.
- *
  * All primitives are self-contained: they read tokens from CSS custom
  * properties exposed by `src/styles/cc-streams.css` and accept SDK types
  * (`Stream`, `VestingModeConfig`, `StreamStatus`) directly. No mock

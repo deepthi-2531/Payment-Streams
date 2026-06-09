@@ -3,9 +3,9 @@
 # Fail-on-find lint for V2 Token Standard conformance.
 #
 # Blocks accidental introduction of identifiers that don't exist in the
-# upstream CIP-56 V2 surface (`canton-network/splice@token-standard-v2-upcoming`),
-# typically because they were V1 names from a deleted code path or
-# stub-era inventions that pre-dated the V2-only pivot.
+# upstream CIP-56 V2 surface, typically because they were V1 names from
+# a deleted code path or stub-era inventions that pre-dated the V2-only
+# implementation.
 #
 # Run by CI on every push + PR.
 #
@@ -106,7 +106,7 @@ cat <<MSG
 
 —
 This lint blocks identifiers that do not exist in the upstream V2
-Token Standard surface (canton-network/splice@token-standard-v2-upcoming).
+Token Standard surface.
 If you genuinely need to reference a forbidden name (e.g. a migration
 note), add the file to ALLOWED_FILES in scripts/check-v2-conformance.sh
 with a comment explaining why.

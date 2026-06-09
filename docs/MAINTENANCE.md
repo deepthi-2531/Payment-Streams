@@ -1,186 +1,82 @@
-# Maintenance and Support
+# Maintenance And Support
 
-Canton Payment Streams ships as production-grade open-source
-infrastructure for the Canton Network. This document defines the
-**maintenance and support window** committed alongside the v1.0.0 release
-so early adopters know what to expect and the wider ecosystem can plan
-around the library's lifecycle.
+Canton Payment Streams is open-source infrastructure for building payment
+streams on Canton. This document describes how the project is maintained and
+what adopters can expect from the release line.
 
-This commitment is part of the project's Milestone 3 acceptance criteria
-(see Canton Payment Streams Linear project, STR-29).
+## Supported Scope
 
----
+The project maintains:
 
-## Support Window
+- Daml templates shipped in this repository.
+- The TypeScript SDK and REST proxy.
+- The dashboard reference implementation.
+- Documentation and local development scripts.
+- Compatibility with CIP-103 wallet connections and CIP-56 V2 token flows.
 
-**6 months of active maintenance** from the date of the v1.0.0 Apache 2.0
-release (target: end of Milestone 3). During this window:
+The project does not operate:
 
-- **Security fixes** for Critical and High severity issues
-- **Bug fixes** for regressions and material correctness issues
-- **CIP-103 / CIP-56 conformance updates** as the Canton standards evolve
-- **CIP-0112 V1→V2 migration support** as CC, USDCx, and other assets
-  publish V2 interfaces
-- **V2 stabilization tracking** as `splice@token-standard-v2-upcoming`
-  graduates to a stable release
-
-The 6-month window may be extended via a follow-on Canton Foundation
-grant if there is demonstrated ecosystem adoption (per the Milestone 5
-adoption-bonus metrics).
-
-After the window closes, the v1.x release line enters **community
-maintenance**: pull requests are reviewed and merged, but the original
-team does not actively fix issues. Adopters are encouraged to upgrade to
-later major versions as they ship.
-
----
+- Validator infrastructure.
+- Third-party wallets.
+- Canton Network services.
+- Custom forks or private deployments.
 
 ## Security Patch SLA
 
-| Severity | Definition | First-response SLA | Patch SLA |
-|---|---|---|---|
-| **Critical** | Loss of funds; signature bypass; ability to spend assets without authorization | 24 hours | **72 hours** |
-| **High** | Privilege escalation; bypass of `DelegatedPolicy` bounds; ability to drain a stream's escrow without authorization; bypass of CIP-103 wallet signing | 48 hours | **2 weeks** |
-| **Medium** | Information disclosure; denial of service against the proxy / dashboard; off-by-one accrual at boundary times | 1 week | **30 days** |
-| **Low** | Cosmetic, documentation, dev-mode only | Best-effort | Next minor release |
+| Severity | Definition | First response | Target patch |
+| --- | --- | --- | --- |
+| Critical | Loss of funds, signature bypass, unauthorized spend | 24 hours | 72 hours |
+| High | Privilege escalation, policy bypass, material authorization flaw | 48 hours | 2 weeks |
+| Medium | Information disclosure, denial of service, correctness bug | 1 week | 30 days |
+| Low | Cosmetic, documentation, local-development issue | Best effort | Next minor release |
 
-**Out-of-band patches** for Critical issues will be tagged as
-`v1.x.y-security` and announced via:
+Do not open a public issue for security reports. Follow `SECURITY.md`.
 
-1. GitHub Security Advisories (private then public)
-2. `SECURITY.md` Hall of Fame for the reporter (if they consent)
-3. Co-Marketing announcement coordinated with the Canton Foundation if
-   the issue is severe enough to warrant ecosystem-wide notice
+## Versioning
 
----
+Canton Payment Streams follows Semantic Versioning.
 
-## Reporting Security Issues
+- Major releases may include breaking Daml template or SDK API changes.
+- Minor releases add backwards-compatible features.
+- Patch releases include bug fixes, security fixes, and documentation updates.
 
-**Do not** open a public GitHub issue for security reports.
+When an on-ledger template change requires adopters to upload a new DAR, the
+release notes must call that out explicitly.
 
-Email: `security@canton-streams.example` (replace with actual mailbox at
-v1.0.0 release time; current placeholder).
+## Token Standard Compatibility
 
-PGP key fingerprint will be published in `SECURITY.md` and on the
-release page.
+This project is V2-only. Assets that expose only older token interfaces are
+not streamable through this library because the implementation relies on V2
+allocation and settlement semantics.
 
-We accept reports in:
+When an asset advertises V2 allocation support, add it to
+`config/asset-registry.json`. The SDK routes through the V2 capability gate
+and fails closed when an asset is not compatible.
 
-- English
-- Reproducible test cases (Daml-script preferred where possible)
-- Threat models with specific contract IDs / template IDs
-- Working exploits (optional but appreciated for severity calibration)
+## Wallet Compatibility
 
-### Disclosure Timeline
+The reference local wallet path is the Splice Amulet wallet through a
+CIP-103-compatible gateway. Hosted deployments can use PartyLayer for
+multi-wallet selection while keeping the same Streams SDK/proxy contract.
 
-1. **Day 0**: Reporter sends private report
-2. **Day 0-2**: Triage + severity assignment + acknowledgement to reporter
-3. **Day 2-N**: Fix developed + tested against the audit baseline
-4. **Day N+1**: Fix merged behind a security-advisory placeholder
-5. **Day N+30 (or sooner for Critical)**: Coordinated disclosure with
-   reporter + Canton Foundation; public GitHub Security Advisory; CVE
-   requested if applicable
+See:
 
----
+- `docs/E2E-HARNESS.md`
+- `docs/HOSTED-WALLET-PLAN.md`
+- `docs/SWK-WALLET-RUNBOOK.md`
 
-## Versioning Policy
+## Contributor Expectations
 
-Canton Payment Streams follows **Semantic Versioning 2.0.0** within the
-v1.x release line:
-
-- **Major (v2.0.0)**: Breaking changes to on-ledger Daml templates,
-  breaking SDK API changes, or breaking CIP conformance changes.
-  Migration path published in `CHANGELOG.md` with at least one minor
-  version of deprecation notice on the preceding line.
-- **Minor (v1.x.0)**: New features, new Daml templates, new SDK methods,
-  new docs. Backwards-compatible.
-- **Patch (v1.x.y)**: Bug fixes, security patches, doc clarifications.
-  Backwards-compatible.
-
-**LTS commitment**: v1.x is the LTS line during the 6-month support
-window. v1.0 → v1.x patch upgrades will never require a Daml DAR
-upgrade unless the patch is a security fix marked `(security-required)`
-in `CHANGELOG.md`.
-
-**Pre-1.0**: not supported. Any 0.x DAR or SDK in the wild should be
-upgraded to v1.0.0 or later.
-
----
-
-## V2 Token Standard Migration
-
-Per CIP-0112, assets are expected to publish V2 interfaces alongside
-V1 during the transition. Canton Payment Streams is V2-only: assets
-advertising V1 only are not streamable with this library because V1 has
-no committed iterated-allocation primitive.
-
-Once an asset advertises V2 allocation support, update
-`config/asset-registry.json` and the SDK will route through the V2
-capability gate. If the asset also advertises `transferEventsV2`, the
-proxy uses the typed V2 event stream; otherwise the raw Ledger API V2
-fallback remains temporary backstop coverage.
-
-The library will track the `splice@token-standard-v2-upcoming` branch
-during V2 stabilization and align with the stable V2 release once
-published. Breaking changes in the V2 preview branch will be surfaced
-in `CHANGELOG.md` and treated as patch-level updates until V2 stable.
-
----
-
-## CIP-103 dApp API Stability
-
-CIP-103 is the foundational architectural choice for end-user dApp
-flows. The library's CIP-103 Provider implementation will track the
-official OpenRPC contract published in `splice-wallet-kernel`. Breaking
-changes in the CIP-103 spec during the 6-month window will be:
-
-- Tracked in `CHANGELOG.md`
-- Released as minor versions until CIP-103 reaches 1.0.0
-- Validated against the official OpenRPC conformance suite before each
-  release (STR-36)
-
----
+- Keep public docs free of internal issue references.
+- Prefer small, reviewable pull requests.
+- Run the relevant package tests before opening a PR.
+- Update the README or integration docs when a user-facing flow changes.
 
 ## Channels
 
 | Channel | Purpose |
-|---|---|
-| **GitHub Issues** | Bug reports, feature requests, documentation feedback |
-| **GitHub Security Advisories** | Coordinated security disclosure (private until patched) |
-| **GitHub Discussions** | Architecture, design questions, ecosystem conversations |
-| **Canton Foundation Discord / Slack** | Real-time community support |
-| **`security@canton-streams.example`** | Private security reports only |
-
----
-
-## Out of Scope
-
-This maintenance window covers the library itself. It does **not**
-cover:
-
-- Customer-deployed infrastructure (proxy hosts, dashboards, executor
-  services) — operated by adopters under their own SLAs
-- The wallet-gateway service — operated by validators / SVs
-- Third-party CIP-103 wallet implementations — operated by their authors
-- The Canton Network itself, including SV-side scan endpoints — operated
-  by the Canton Foundation and validators
-- Custom forks of Canton Payment Streams — fork maintainers are
-  responsible for their forks
-
----
-
-## Acceptance and Renewal
-
-This commitment is published at the v1.0.0 release. Renewal of the
-support window beyond the initial 6 months is contingent on:
-
-1. Demonstrated ecosystem adoption (≥5 featured apps active per M4
-   acceptance, with ≥3 active by month 6 of the support window)
-2. Foundation alignment on a follow-on grant or community maintenance
-   model
-3. Continued strategic relevance of the library to the Canton ecosystem
-
-If renewal is not pursued, this maintenance window enters a 30-day wind-
-down at the end of month 6 with one final patch release containing any
-outstanding security fixes and a `MAINTENANCE-STATUS.md` document
-formally declaring community maintenance.
+| --- | --- |
+| GitHub Issues | Bug reports, feature requests, documentation feedback |
+| GitHub Security Advisories | Coordinated security disclosure |
+| GitHub Discussions | Architecture and ecosystem questions |
+| Canton community channels | Real-time ecosystem support |

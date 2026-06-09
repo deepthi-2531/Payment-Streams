@@ -1,6 +1,6 @@
 -- | CreateStream workflow — propose/accept pattern for stream creation.
 --
--- Phase 1: Numeric escrow (no Daml Finance dependency).
+-- Numeric escrow (no Daml Finance dependency).
 -- The sender creates a CreateStreamRequest. The recipient accepts
 -- (creating a StreamEscrow) or declines.
 --

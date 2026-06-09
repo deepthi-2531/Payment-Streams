@@ -1,6 +1,6 @@
 /**
  * Unit tests for commands/allocation.ts — AllocationRequestV2 emission +
- * Allocation_Settle dispatch (STR-75, V2-only per STR-79).
+ * Allocation_Settle dispatch.
  *
  * Covers:
  *   - Single-leg V2 payload shape
@@ -311,7 +311,7 @@ describe('buildBatchSettlement (V2)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// STR-125 — upstream V2 conformance lock-in
+// Upstream V2 conformance lock-in
 //
 // These tests pin the exact wire-field names against upstream V2 spec at
 // SPLICE_PINNED_COMMIT (recorded in scripts/fetch-v2-dars.mjs). If
@@ -324,7 +324,7 @@ describe('buildBatchSettlement (V2)', () => {
 //   - splice-api-token-allocation-instruction-v2 / AllocationInstructionV2.daml
 // ---------------------------------------------------------------------------
 
-describe('V2 upstream conformance (STR-125)', () => {
+describe('V2 upstream conformance', () => {
   it('AllocationRequest argument carries upstream field names', () => {
     const result = buildAllocationRequest(
       v2Caps,
@@ -345,7 +345,7 @@ describe('V2 upstream conformance (STR-125)', () => {
     expect(arg).toHaveProperty('availableActions');
     expect(arg).toHaveProperty('meta');
     // The renamed-from-V1 field — upstream uses `originalRequestCid`,
-    // NOT `originalRequestId`. STR-125 audit explicitly called this out.
+    // NOT `originalRequestId`.
     expect(arg).toHaveProperty('originalRequestCid');
     expect(arg).not.toHaveProperty('originalRequestId');
 
@@ -356,7 +356,6 @@ describe('V2 upstream conformance (STR-125)', () => {
     expect(Array.isArray(settlementArg['executors'])).toBe(true);
 
     // `allocations` is an array of records, NOT a map keyed by legId.
-    // (STR-125 noted the older builder emitted a `transferLegs` map.)
     expect(Array.isArray(arg['allocations'])).toBe(true);
     expect(arg).not.toHaveProperty('transferLegs');
 
@@ -456,8 +455,7 @@ describe('V2 upstream conformance (STR-125)', () => {
     expect(Array.isArray(arg['transferLegs'])).toBe(true);
     expect(Array.isArray(arg['allocations'])).toBe(true);
 
-    // The older builder shape called out in STR-125 used `allocationCids`
-    // (a map). Make sure we no longer emit that.
+    // Make sure we do not emit the old `allocationCids` map shape.
     expect(arg).not.toHaveProperty('allocationCids');
   });
 

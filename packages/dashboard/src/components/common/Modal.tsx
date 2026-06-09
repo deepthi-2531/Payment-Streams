@@ -1,16 +1,9 @@
 /**
  * Modal — backdrop + centered card with the cc-streams aesthetic.
  *
- * Phase 6 (STR-122) primitive. Built without Radix Dialog to keep the
- * footprint small; for an a11y-stronger version Phase 8 can swap in
- * Radix Dialog without changing the call-site API.
- *
  * Closes on:
  *   - Escape key
  *   - backdrop click (unless `onBackdropClick` is overridden)
- *
- * Doesn't trap focus — accepted limitation for this turn. Phase 8 test
- * coverage will lock the keyboard contract before that's tightened.
  */
 import { useEffect, type ReactNode } from 'react';
 import { Icons } from '../primitives/Icons.js';

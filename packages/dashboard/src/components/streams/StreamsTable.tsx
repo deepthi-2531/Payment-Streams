@@ -1,9 +1,8 @@
 /**
- * StreamsTable — STR-116 Phase 5 reskin to cc-streams dark theme.
+ * StreamsTable — card-wrapped stream list.
  *
- * Card-wrapped row layout (one row per stream) with mono stream id +
- * party hints, flow-bar progress, status + vesting + settlement badges,
- * and a chevron link to the detail page.
+ * One row per stream with mono stream id, party hints, flow-bar progress,
+ * status, vesting, settlement badges, and a link to the detail page.
  */
 
 import { Link } from 'react-router';

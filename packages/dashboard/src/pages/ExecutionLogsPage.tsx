@@ -1,5 +1,5 @@
 /**
- * ExecutionLogsPage — STR-121 Phase 5 reskin to cc-streams aesthetic.
+ * Execution logs page.
  *
  * Hooks unchanged: `useQuery(['execution-logs', policyFilter])` against
  * `client.listExecutionLogs(policyFilter?)`. Layout from mock's

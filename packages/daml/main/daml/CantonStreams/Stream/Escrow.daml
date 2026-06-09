@@ -23,8 +23,7 @@
 -- interface choices are provided so V2 wallets recognize StreamEscrow
 -- as an AllocationRequest contract for read-only purposes; they fail
 -- closed if exercised, redirecting callers to the native choices. This
--- is widened to full interface-driven settlement as part of STR-75
--- (SDK) + STR-77 (proxy event subscriber).
+-- is superseded for V2 flows by the StreamAdmin + Allocation path.
 --
 -- Key: (sender, streamId) — multiple streams between same parties.
 -- Signatories: sender + recipient (both must consent to creation).
@@ -35,8 +34,7 @@ import CantonStreams.Interface.Stream (StreamView(..), WithdrawResult(..), Cance
 import CantonStreams.Stream.Accrual
 import CantonStreams.Settlement.Adapter
 
--- Real Splice V2 AllocationRequest import (STR-102 Phase 2).
--- V1 was removed by the V2-only pivot (STR-79).
+-- Splice V2 AllocationRequest import. V1 is not supported.
 import qualified Splice.Api.Token.AllocationRequestV2 as AR2
 import qualified CantonStreams.Settlement.AllocationBridge as Bridge
 
@@ -261,33 +259,27 @@ template StreamEscrow
             totalWithdrawn = state.totalWithdrawn
 
     --------------------------------------------------------------------
-    -- CIP-0112 V2 AllocationRequest interface (V2-only per STR-79)
+    -- CIP-0112 V2 AllocationRequest interface
     --------------------------------------------------------------------
     -- The V2 interface instance makes StreamEscrow recognizable as an
     -- `AllocationRequest` contract to V2 wallets. The `view` is derived
     -- from current stream state via the shared `Settlement.AllocationBridge`
-    -- builders (STR-71).
+    -- builders.
     --
-    -- V1 was removed per the V2-only architectural pivot (STR-79):
-    -- "deprecated but still supported" doubles audit scope and silently
-    -- rots while attention is on V2. Library requires V2 assets.
+    -- V1 is not supported. The library requires V2-capable assets.
     --
-    -- For the M3 deprecation window the interface choices fail closed
-    -- and redirect to the native `Withdraw_Stream` / `Cancel_Stream`
-    -- choices. STR-86 widens this so the standard V2 interface choices
-    -- become the primary path; STR-77 wires the proxy subscriber to
-    -- react to V2 `Allocation_Settle` events instead of polling.
+    -- Interface choices fail closed and redirect to the native
+    -- `Withdraw_Stream` / `Cancel_Stream` choices.
 
     interface instance AR2.AllocationRequest for StreamEscrow where
-      -- Lifecycle drive will land in STR-86; today the *Impl methods
-      -- fail closed and direct callers to the native Daml choices.
+      -- Fail closed and direct callers to the native Daml choices.
       -- Real V2 interface impl signature is 2-arg: ContractId + choice record.
       allocationRequest_acceptImpl _ _ = do
-        abort "AllocationRequest_Accept not yet wired on StreamEscrow — use Withdraw_Stream (lifecycle migration in STR-86)"
+        abort "AllocationRequest_Accept is not wired on StreamEscrow; use Withdraw_Stream or the V2 StreamAdmin allocation path"
       allocationRequest_rejectImpl _ _ = do
-        abort "AllocationRequest_Reject not yet wired on StreamEscrow — use Cancel_Stream (lifecycle migration in STR-86)"
+        abort "AllocationRequest_Reject is not wired on StreamEscrow; use Cancel_Stream or the V2 StreamAdmin allocation path"
       allocationRequest_withdrawImpl _ _ = do
-        abort "AllocationRequest_Withdraw not yet wired on StreamEscrow — use Cancel_Stream as escrow operator (lifecycle migration in STR-86)"
+        abort "AllocationRequest_Withdraw is not wired on StreamEscrow; use Cancel_Stream as escrow operator or the V2 StreamAdmin allocation path"
       -- ExtraObservers: extra parties to disclose the choice exercise to.
       -- For streams the request signatories (sender + recipient) already
       -- see everything; no additional observers needed.

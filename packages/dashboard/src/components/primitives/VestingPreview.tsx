@@ -1,5 +1,5 @@
 /**
- * VestingPreview — sparkline preview for the CreateWizard (Phase 6).
+ * VestingPreview — sparkline preview for the create wizard.
  *
  * Used in the side panel while the user is configuring a stream that
  * doesn't exist yet. Takes raw inputs (total/start/end/vesting) and
@@ -7,7 +7,7 @@
  *
  * Ported from `Canton Streams/src/primitives.jsx`.
  *
- * Phase 1 — STR-111.
+ * Shared vesting preview primitive.
  */
 import { useMemo } from 'react';
 import Decimal from 'decimal.js';

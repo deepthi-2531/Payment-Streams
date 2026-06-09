@@ -1,4 +1,4 @@
--- | Tests for `CantonStreams.Stream.StreamFlowAdmin` (STR-87).
+-- | Tests for `CantonStreams.Stream.StreamFlowAdmin`.
 module Test.Stream.StreamFlowAdminLifecycle where
 
 import Daml.Script

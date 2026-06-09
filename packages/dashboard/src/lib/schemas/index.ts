@@ -5,7 +5,7 @@
  * separated by lifecycle action so each form imports only what it needs;
  * the barrel exists for one-line consumer imports.
  *
- * Phase 4 / STR-115: zod-driven form validation across the dashboard.
+ * Zod-driven form validation across the dashboard.
  */
 
 export {

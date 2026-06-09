@@ -38,15 +38,15 @@ export enum StreamStatus {
  * and migration tools can report them explicitly.
  */
 export enum SettlementMode {
-  /** Phase 1 numeric bookkeeping — no real holdings move. */
+  /** Legacy numeric bookkeeping — no real holdings move. */
   NumericLegacy = 'NumericLegacy',
-  /** Phase 2 Utility/CIP custody — real holdings locked/split/transferred. */
+  /** Utility/CIP custody — real holdings locked/split/transferred. */
   UtilityHoldingCustody = 'UtilityHoldingCustody',
   /** CIP-56 V2 / CIP-0112 AllocationRequest custody. */
   TokenStandardCustody = 'TokenStandardCustody',
   /** Host-app local asset custody via a deployment-specific adapter. */
   LocalAssetCustody = 'LocalAssetCustody',
-  /** Phase 3 delegated execution — executor service manages settlement. */
+  /** Delegated execution — executor service manages settlement. */
   Delegated = 'Delegated',
 }
 
@@ -170,7 +170,7 @@ export function bridgeAccountFromParty(owner: string): AccountV2 {
 }
 
 // ---------------------------------------------------------------------------
-// Custody references (Phase 2 — live on request/escrow, NOT StreamConfig)
+// Custody references (live on request/escrow, NOT StreamConfig)
 // ---------------------------------------------------------------------------
 
 /**
@@ -359,7 +359,7 @@ export interface Stream {
   /** Mutable stream state. */
   readonly state: StreamState;
   /**
-   * Escrow custody reference — present for holding-backed streams (Phase 2+).
+   * Escrow custody reference — present for holding-backed streams.
    * Populated by query deserialization from the active escrow contract payload.
    * Undefined for NumericLegacy streams.
    */
@@ -376,7 +376,7 @@ export interface PendingStreamRequest {
   readonly recipientAccount?: LedgerRecord;
   /** Additional observer parties on the request. */
   readonly observers: readonly string[];
-  /** Funding reference for custody-backed requests (Phase 2+). */
+  /** Funding reference for custody-backed requests. */
   readonly fundingRef?: FundingRef;
   /** Settlement mode of this request. */
   readonly settlementMode: SettlementMode;
@@ -433,13 +433,13 @@ export interface CreateStreamParams {
   readonly assetType?: AssetType;
   /** Concrete instrument reference. Required for holding-backed streams. */
   readonly instrumentRef?: InstrumentRef;
-  /** Holding CID for deposit. Required for Phase 2 holding-backed escrow. */
+  /** Holding CID for deposit. Required for holding-backed escrow. */
   readonly holdingCid?: string;
   /** Generic sender-side funding reference for token-standard custody. */
   readonly fundingReference?: string;
-  /** Sender custody account. Required for Phase 2 holding-backed escrow. */
+  /** Sender custody account. Required for holding-backed escrow. */
   readonly senderAccount?: LedgerRecord;
-  /** Recipient account for withdrawals. Required for Phase 2 holding-backed escrow. */
+  /** Recipient account for withdrawals. Required for holding-backed escrow. */
   readonly recipientAccount?: LedgerRecord;
   /** Whether the sender may cancel the stream. */
   readonly cancellable: boolean;

@@ -1,6 +1,6 @@
 -- | NumericAdapter — phase 1 numeric-only settlement adapter for testing.
 --
--- Phase 1 numeric-only adapter for testing. Use HoldingAdapter for
+-- Numeric-only adapter for testing. Use HoldingAdapter for
 -- production with Daml Finance.
 --
 -- This module provides pure (non-Update) helper functions that track
@@ -17,7 +17,7 @@
 module CantonStreams.Settlement.Adapter where
 
 -- | Represents a token amount held in escrow.
--- Phase 1: numeric tracking. Phase 1+: ContractId Holding.I
+-- Numeric tracking. Holding-backed paths should use ContractId Holding.I.
 data EscrowBalance = EscrowBalance with
     amount : Decimal
     owner : Party

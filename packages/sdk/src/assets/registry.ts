@@ -1,19 +1,16 @@
 /**
  * @module assets/registry
  *
- * Asset registry for the Canton Payment Streams SDK (V2-only per STR-79).
+ * Asset registry for the Canton Payment Streams SDK.
  *
  * The registry provides per-asset routing (admin party, Scan endpoint URL,
  * wallet-gateway URL, V2 capability flags) without requiring dApps or the
  * library to branch by asset name. The same code path serves any CIP-56
  * V2 asset; what differs per asset is configuration.
  *
- * Per the V2-only architectural pivot (STR-79), V1 is not supported.
- * Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces
- * alongside V1 (dual-implementation); once an asset advertises V2 in
- * `supportedApis`, our library integrates with it. V1-only assets are
- * not supported because the streaming primitive requires V2 iterated
- * allocations (V1 has no iteration primitive).
+ * The library integrates with CIP-56 V2 assets only. Once an asset
+ * advertises V2 in `supportedApis`, it can be configured here; V1-only
+ * assets are not supported because streams require V2 iterated allocations.
  *
  * Sources:
  *   - `config/asset-registry.json` (canonical, in-repo)
@@ -61,9 +58,8 @@ export interface AssetConfig {
 
   /**
    * Wallet-gateway base URL for the JSON-RPC dApp API targeting this
-   * asset. Per STR-92, the gateway is the documented signing surface;
-   * the legacy validator-app /api/wallet-gateway/* endpoints are no
-   * longer used.
+   * asset. The wallet gateway is the documented signing surface for
+   * command submission.
    */
   readonly walletGatewayUrl: string;
 
@@ -80,9 +76,8 @@ export interface AssetConfig {
   readonly transferEventsV2: boolean;
 
   /**
-   * Optional pause state surfaced from V2 metadata API (per the spec author's
-   * CIP-0112 update — STR-96). When `paused = true`, the SDK fails-fast
-   * with a `PausedInstrumentError` at dispatch time.
+   * Optional pause state surfaced from V2 metadata API. When `paused = true`,
+   * the SDK fails-fast with a `PausedInstrumentError` at dispatch time.
    */
   readonly paused?: boolean;
   readonly pauseInfo?: string;
@@ -165,7 +160,7 @@ export class AssetRegistry {
       const ref = typeof refOrKey === 'string' ? refOrKey : JSON.stringify(refOrKey);
       throw new Error(
         `Asset not found in registry: ${ref}. Add it to config/asset-registry.json or pass an override via AssetRegistry constructor. ` +
-        `Note: V1-only assets are not supported (STR-79 V2-only pivot). The asset must advertise V2 per CIP-0112 §5.`,
+        `The asset must advertise CIP-56 V2 support; V1-only assets are not supported.`,
       );
     }
     return asset;
@@ -211,7 +206,7 @@ function validateRegistryFile(file: AssetRegistryFile): void {
     }
     if (!asset.instrumentIdV2 || typeof asset.instrumentIdV2 !== 'object') {
       throw new Error(
-        `Asset "${key}" requires instrumentIdV2 — V1-only assets are not supported (STR-79).`,
+        `Asset "${key}" requires instrumentIdV2; V1-only assets are not supported.`,
       );
     }
     if (typeof asset.instrumentIdV2.admin !== 'string' || asset.instrumentIdV2.admin.length === 0) {
@@ -222,7 +217,7 @@ function validateRegistryFile(file: AssetRegistryFile): void {
     }
     if (asset.allocationsV2 !== true) {
       throw new Error(
-        `Asset "${key}" must set allocationsV2 = true. V1-only assets are not supported (STR-79). ` +
+        `Asset "${key}" must set allocationsV2 = true. V1-only assets are not supported. ` +
         `Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces; once "${key}" advertises ` +
         `V2 in supportedApis, set allocationsV2 = true here.`,
       );

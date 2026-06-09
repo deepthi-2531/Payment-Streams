@@ -6,7 +6,7 @@
  * no hardcoded `canton:da-testnet`. When health is unreachable the chip
  * shows `canton:disconnected` so the user gets immediate feedback.
  *
- * STR-112 — Phase 2 of the UI integration.
+ * Dashboard header.
  */
 import type { CSSProperties } from 'react';
 import { useLocation } from 'react-router';
@@ -67,7 +67,7 @@ export function Header() {
         </span>
       </div>
 
-      {/* Search — UI only in Phase 2; wired to real query in Phase 6 */}
+      {/* Search placeholder */}
       <div style={searchStyle}>
         <Icons.Search size={13} />
         <input

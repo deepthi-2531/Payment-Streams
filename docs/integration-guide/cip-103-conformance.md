@@ -75,11 +75,10 @@ Per CIP-103, a conformant Provider must:
 
 ---
 
-## Two-wallet certification (M4 requirement)
+## Two-wallet certification
 
-The proposal commits to CIP-103 conformance verified against **at least
-two independent wallet implementations** before M4 acceptance. Reference
-wallets:
+For production readiness, verify CIP-103 conformance against **at least
+two independent wallet implementations**. Reference wallets:
 
 1. **Splice Wallet Kernel** (canonical reference) — `canton-foundation/splice-wallet-kernel`
 2. **At least one external wallet** implementing the OpenRPC contract

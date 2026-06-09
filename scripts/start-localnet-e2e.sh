@@ -1,26 +1,25 @@
 #!/usr/bin/env bash
-# STR-129: orchestration entry point for the wallet-backed V2 E2E harness.
+# Orchestration entry point for the wallet-backed V2 E2E harness.
 #
 # This script does not invent a new wallet or stub one. It documents (and,
 # where the prerequisites are present, executes) the chain that the
 # upstream Splice repository already supports:
 #
-#   1. Pin Splice to the `token-standard-v2-upcoming` ref this repo is
-#      built against (`SPLICE_PINNED_COMMIT` exported by
-#      `scripts/fetch-v2-dars.mjs`).
+#   1. Pin Splice to the verified commit exported by
+#      `scripts/fetch-v2-dars.mjs`.
 #   2. Clone + build the Splice LocalNet validator with the V2 Amulet
 #      wallet at the documented endpoint
 #      (`http://localhost:3030/api/v0/dapp`).
 #   3. Bring up Canton + the Streams REST proxy + the Streams dashboard
 #      pointed at the wallet endpoint (`VITE_SKIP_WALLET_PICKER=true`).
-#   4. Print the exact follow-up commands a human or CI worker runs to
+#   4. Print the exact commands a human or CI worker runs to
 #      drive the V2 allocation flow end-to-end through the Amulet wallet.
 #
 # It is intentionally idempotent: every step is `--check` first, build
 # only when needed. Set `LOCALNET_DRY_RUN=1` to print the plan without
 # executing any heavy step.
 #
-# Per STR-129 acceptance the harness uses ONLY V2 vocabulary:
+# The harness uses only V2 vocabulary:
 #   • `AllocationFactory_Allocate`
 #   • `Allocation_Settle`
 #   • `SettlementFactory_SettleBatch`
@@ -80,16 +79,6 @@ resolve_pinned_commit() {
   [[ -n "$SPLICE_PINNED_COMMIT" ]] || fail "could not resolve SPLICE_PINNED_COMMIT from scripts/fetch-v2-dars.mjs"
 }
 
-# Read the PR-5697 preview commit (Amulet wallet V2 iterated-settlement
-# UI) so the announce path can detect whether the operator opted into
-# it. Empty string is fine — that just suppresses the matched-preview
-# annotation.
-resolve_pr5697_preview_commit() {
-  SPLICE_PR5697_PREVIEW_COMMIT="$(grep -m1 -E "^export const SPLICE_PR5697_PREVIEW_COMMIT" \
-    "$ROOT_DIR/scripts/fetch-v2-dars.mjs" 2>/dev/null \
-    | sed -E "s/.*'([0-9a-f]+)'.*/\1/")"
-}
-
 clone_or_update_splice() {
   if [[ ! -d "$SPLICE_CHECKOUT_DIR/.git" ]]; then
     run_step "Cloning Splice into $SPLICE_CHECKOUT_DIR" \
@@ -116,10 +105,8 @@ build_localnet_amulet_wallet() {
   # APIs on x975 ports.
   #
   # The Amulet wallet that ships on every validator node supports the
-  # CIP-56 V2 token standard on the token-standard-v2-upcoming branch we
-  # pin against (full iterated-settlement support tracked upstream in
-  # canton-network/splice#5498). So once LocalNet is running, the wallet
-  # half of the V2 flow can be exercised end-to-end.
+  # CIP-56 V2 token standard. Once LocalNet is running, the wallet half
+  # of the V2 flow can be exercised end-to-end.
   #
   # The LocalNet stack does NOT expose a CIP-103 JSON-RPC wallet gateway
   # at :3030/api/v0/dapp directly. That endpoint comes from the separate
@@ -141,9 +128,7 @@ build_localnet_amulet_wallet() {
       - app-provider wallet UI: http://localhost:3000
       - SV wallet UI          : http://localhost:4000
       - participant JSON APIs : :2975 / :3975 / :4975
-      - Amulet wallet (V2-capable on the token-standard-v2-upcoming
-        branch this commit lives on; full iterated-settlement tracked
-        in canton-network/splice#5498)
+      - Amulet wallet with Token Standard V2 support
 
     HONEST GAP: the LocalNet stack does NOT publish a CIP-103 JSON-RPC
     wallet gateway at $WALLET_GATEWAY_URL on its own. The dashboard
@@ -227,7 +212,7 @@ start_streams_stack() {
     env \
       VITE_WALLET_GATEWAY_URL="$WALLET_GATEWAY_URL" \
       VITE_SKIP_WALLET_PICKER='true' \
-      VITE_WALLET_NAME='Splice Amulet Wallet (LocalNet V2)' \
+      VITE_WALLET_NAME='Splice Amulet Wallet' \
       docker compose -f "$ROOT_DIR/docker/docker-compose.yml" up -d --build
 }
 
@@ -250,7 +235,7 @@ wait_for_health() {
 print_next_steps() {
   cat <<EOF
 
-==> STR-129 harness brought up.
+==> Wallet-backed V2 harness brought up.
 
     Wallet gateway: $WALLET_GATEWAY_URL
     Dashboard:      $DASHBOARD_URL
@@ -276,10 +261,8 @@ Drive the V2 allocation flow end-to-end through the wallet:
      for the recipient to accept, and the inbox "Approve in Amulet
      wallet" button currently calls walletSdk.open() — it does not yet
      call walletSdk.prepareExecuteAndWait(...) with an
-     AllocationRequest_Accept payload. Wiring that is the next
-     focused implementation step; target wallet build is the PR-5697
-     preview commit announced above. See
-     packages/dashboard/src/lib/walletApprovals.ts for the swap site.
+     AllocationRequest_Accept payload. See
+     packages/dashboard/src/lib/walletApprovals.ts for the integration site.
 
   4. Approve in the Amulet wallet directly (its own UI, through the
      wallet gateway). Approval exercises AllocationFactory_Allocate
@@ -302,20 +285,7 @@ main() {
   need curl
 
   resolve_pinned_commit
-  resolve_pr5697_preview_commit
   echo "Pinned Splice commit: $SPLICE_PINNED_COMMIT"
-  if [[ -n "$SPLICE_PR5697_PREVIEW_COMMIT" \
-      && "$SPLICE_PINNED_COMMIT" == "$SPLICE_PR5697_PREVIEW_COMMIT" ]]; then
-    echo "    (canton-network/splice#5697 preview — Amulet wallet V2"
-    echo "     iterated-settlement frontend; opt-in branch"
-    echo "     oriol/initialted-settlement-fe)"
-  elif [[ -n "$SPLICE_PR5697_PREVIEW_COMMIT" ]]; then
-    echo "Preview commit:       $SPLICE_PR5697_PREVIEW_COMMIT"
-    echo "    (export SPLICE_PINNED_COMMIT=$SPLICE_PR5697_PREVIEW_COMMIT to opt"
-    echo "     into the canton-network/splice#5697 preview — Amulet wallet V2"
-    echo "     iterated-settlement frontend, branch"
-    echo "     oriol/initialted-settlement-fe)"
-  fi
   echo "Wallet gateway URL:   $WALLET_GATEWAY_URL"
   echo "Streams checkout:     $ROOT_DIR"
   echo "Splice checkout:      $SPLICE_CHECKOUT_DIR"

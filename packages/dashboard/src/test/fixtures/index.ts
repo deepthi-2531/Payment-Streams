@@ -1,9 +1,9 @@
 /**
- * Test-only fixtures — Phase 8 / STR-119.
+ * Test-only fixtures.
  *
  * IMPORTANT: this file is the **only** allowed home for mock proxy
  * payloads. It lives under `src/test/` so the production
- * mock-fixtures grep gate (Phase 5 acceptance) excludes it.
+ * mock-fixtures grep gate excludes it.
  *
  * Shapes mirror the `RawStream`/`RawPolicy`/`RawExecutionLog` interfaces
  * in `src/api/client.ts`. Date+Decimal fields are kept as strings — the

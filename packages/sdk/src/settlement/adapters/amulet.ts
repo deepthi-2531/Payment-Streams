@@ -54,7 +54,8 @@ interface WalletGatewayPrepareResponse {
 const AMULET_INSTRUMENT_IDS = new Set(['AMULET', 'CC']);
 
 /**
- * @deprecated Since STR-76 + STR-84 + STR-93 (plan §7.4).
+ * @deprecated Use the V2 AllocationRequest dispatcher and SigningProvider
+ * wallet-gateway path instead.
  *
  * **Two layers of deprecation apply here**:
  *
@@ -64,14 +65,10 @@ const AMULET_INSTRUMENT_IDS = new Set(['AMULET', 'CC']);
  *    `settlement/allocation-dispatch.ts` instead.
  *
  * 2. The transport this adapter uses (`POST /api/wallet-gateway/prepare-action`
- *    + `POST /api/wallet-gateway/execute-action`) is **not a documented
- *    public Canton API** — STR-93 audited GitHub code search + the
- *    Splice repo file tree and found zero references. It is either a
- *    pre-1.0 Splice gateway shape or a vendor-specific endpoint.
- *    The current Splice Wallet Gateway uses JSON-RPC 2.0 at `/api/v0/dapp`;
- *    the new `SigningProvider` interface
- *    (`packages/sdk/src/signing/provider.ts` + `factory.ts`) wraps that
- *    JSON-RPC API directly with per-party provider routing.
+ *    + `POST /api/wallet-gateway/execute-action`) is not the current
+ *    public Wallet Gateway dApp API. The current gateway uses JSON-RPC
+ *    2.0 at `/api/v0/dapp`; `SigningProvider` wraps that API directly
+ *    with per-party provider routing.
  *
  * For new code, prefer:
  *
@@ -82,9 +79,7 @@ const AMULET_INSTRUMENT_IDS = new Set(['AMULET', 'CC']);
  * await provider.prepareExecuteAndWait({ commands, actAs: [escrowOperator] });
  * ```
  *
- * This adapter is kept callable through the M3 deprecation window. It
- * is hard-removed in M4 (per plan §7.4); private-fork consumers should
- * cut over to the SigningProvider during M3.
+ * This adapter remains only for backwards compatibility.
  */
 export class AmuletWalletGatewayAdapter implements SettlementAdapter {
   private readonly baseUrl?: string;
@@ -194,7 +189,7 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
 
     if (execute._retryRequired) {
       throw new Error(
-        `wallet-gateway transfer for ${params.from.split('::')[0]} requires a follow-up ` +
+        `wallet-gateway transfer for ${params.from.split('::')[0]} requires an additional ` +
           `${trimToUndefined(execute._retryAction) ?? 'action'} before it can complete.`,
       );
     }

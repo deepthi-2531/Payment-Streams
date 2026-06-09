@@ -101,7 +101,7 @@ export class SettlementOrchestrator {
     logger: Logger,
     acceptedRequestContractId?: string,
   ): Promise<OrchestratedFinalizeResult> {
-    // [C1 fix — STR-103] Daml TokenStandardEscrow + workflow modules missing.
+    // Legacy TokenStandardEscrow workflow templates are not shipped.
     // Fail closed before any ledger submission to avoid an opaque "template
     // not found" error from the participant.
     assertTokenStandardEscrowAvailable();
@@ -213,7 +213,7 @@ export class SettlementOrchestrator {
     actAs: string[],
     logger: Logger,
   ): Promise<OrchestratedWithdrawResult> {
-    // [C1 fix — STR-103] Daml TokenStandardEscrow missing; fail closed.
+    // Legacy TokenStandardEscrow templates are not shipped; fail closed.
     assertTokenStandardEscrowAvailable();
     logger.info({ sender, streamId }, 'Orchestrator: withdrawing from TokenStandard stream');
 
@@ -357,7 +357,7 @@ export class SettlementOrchestrator {
       throw new Error(`Stream ${streamId} is not cancellable by sender alone`);
     }
 
-    // [C1 fix — STR-103] Daml TokenStandardEscrow + workflow modules missing.
+    // Legacy TokenStandardEscrow workflow templates are not shipped.
     assertTokenStandardEscrowAvailable();
 
     // [H1 fix] Single `now` for the entire cancel flow. Previously
@@ -471,7 +471,7 @@ export class SettlementOrchestrator {
     actAs: string[],
     logger: Logger,
   ): Promise<OrchestratedRenewResult> {
-    // [C1 fix — STR-103] Daml TokenStandardEscrow missing; fail closed.
+    // Legacy TokenStandardEscrow templates are not shipped; fail closed.
     assertTokenStandardEscrowAvailable();
     logger.info({ sender, streamId, additionalAmount: params.additionalAmount.toString() }, 'Orchestrator: renewing TokenStandard stream');
 
@@ -569,13 +569,10 @@ export class SettlementOrchestrator {
     depositAmount: Decimal;
     config: { instrumentRef?: { issuer: string; instrumentId: string }; recipient: string };
   }> {
-    // [M4 fix] Use server-side filter on the Ledger API where supported,
-    // rather than full-scanning the ACS and filtering in-process. Falls
-    // back to client-side filter for transports that don't accept
-    // arg-payload filters. The `query` call passes a `queryFilter`
-    // object whose keys are interpreted by the transport as payload
-    // filters; transports that don't support it ignore it (and we
-    // re-filter client-side as defense in depth).
+    // Use server-side filters where the Ledger API supports them rather
+    // than full-scanning the ACS. Transports that do not support payload
+    // filters ignore the query object, and we re-filter client-side as
+    // defense in depth.
     if (contractId) {
       const results = await transport.query<any>(
         TEMPLATE_TOKEN_STANDARD_ACCEPTED_REQUEST,
