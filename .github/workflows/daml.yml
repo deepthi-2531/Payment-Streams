@@ -10,16 +10,18 @@ name: Daml Build & Test (manual)
 # push. Run this when you want to verify the Daml side end-to-end.
 #
 # Inputs:
-#   splice_ref — git ref in canton-network/splice to build V2 DARs from
-#                (default: main)
+#   splice_ref — git ref in canton-network/splice to build V2 DARs from.
+#                Defaults to the pinned commit baked into
+#                scripts/fetch-v2-dars.mjs; the build verifies fetched DAR
+#                hashes against scripts/v2-dar-pins.json either way.
 
 on:
   workflow_dispatch:
     inputs:
       splice_ref:
-        description: 'Splice git ref to build V2 DARs from'
+        description: 'Splice git ref to build V2 DARs from (empty = pinned commit)'
         required: false
-        default: 'main'
+        default: ''
 
 # Least-privilege default token scope.
 permissions:
@@ -64,9 +66,11 @@ jobs:
         env:
           SPLICE_REF: ${{ inputs.splice_ref }}
         run: |
-          node scripts/fetch-v2-dars.mjs \
-            --mode source-build \
-            --splice-ref "$SPLICE_REF"
+          if [ -n "$SPLICE_REF" ]; then
+            node scripts/fetch-v2-dars.mjs --mode source-build --splice-ref "$SPLICE_REF"
+          else
+            node scripts/fetch-v2-dars.mjs --mode source-build
+          fi
 
       - name: Verify V2 DARs are in place
         run: |

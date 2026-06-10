@@ -233,14 +233,26 @@ async function requestJson<T>(
     readonly body?: Record<string, unknown>;
   },
 ): Promise<T> {
-  const response = await fetchImpl(url, {
-    method: init.method,
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    ...(init.body ? { body: JSON.stringify(init.body) } : {}),
-  });
+  // Never follow a 3xx on an authenticated call (the default redirect
+  // replays the Authorization header to the target), and bound the call so
+  // a hung wallet host cannot wedge the caller.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetchImpl(url, {
+      method: init.method,
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      redirect: 'error',
+      signal: ac.signal,
+      ...(init.body ? { body: JSON.stringify(init.body) } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   let payload: unknown = null;

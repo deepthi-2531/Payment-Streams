@@ -572,11 +572,23 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       beginExclusive: { offset: resumeOffset },
     };
 
-    const res = await this.config.fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    // Never follow a 3xx on an authenticated call (the default redirect
+    // replays the Authorization header to the target), and bound the call
+    // so a hung event source cannot wedge the poll loop.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await this.config.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       throw new Error(`V2 events endpoint ${url} returned ${res.status}`);
@@ -733,11 +745,22 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       beginExclusive: { offset: resumeOffset },
     };
 
-    const res = await this.config.fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    // Same authenticated-call guards as the V2 events poll: no redirect
+    // follow, bounded duration.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await this.config.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       throw new Error(`Ledger API ${url} returned ${res.status}`);
