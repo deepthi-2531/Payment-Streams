@@ -29,6 +29,47 @@ REQUIRED_DARS=(
   "daml-finance-holding"
 )
 
+# [H-6] Expected SHA-256 of each downloaded DAR. A downloaded artifact is
+# verified against this map; a mismatch (upstream tamper, release re-cut,
+# MITM) aborts the build. Populate by running once, recording the printed
+# `sha256` for each DAR, and committing the values here. Until populated,
+# the script enforces "checksum required" only when DAML_FINANCE_REQUIRE_SHA=1
+# so existing local dev isn't broken by the rollout — set that in CI.
+declare -A EXPECTED_SHA256=(
+  # ["daml-finance-interface-types-common"]="<sha256>"
+  # ["daml-finance-interface-holding"]="<sha256>"
+  # ["daml-finance-interface-util"]="<sha256>"
+  # ["daml-finance-holding"]="<sha256>"
+)
+REQUIRE_SHA="${DAML_FINANCE_REQUIRE_SHA:-0}"
+
+verify_sha() {
+  # $1 = dar name, $2 = file path
+  local name="$1" file="$2"
+  local actual
+  actual="$(shasum -a 256 "$file" 2>/dev/null | awk '{print $1}')"
+  [ -z "$actual" ] && actual="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')"
+  local expected="${EXPECTED_SHA256[$name]:-}"
+  if [ -z "$expected" ]; then
+    if [ "$REQUIRE_SHA" = "1" ]; then
+      echo "  FAILED: no pinned sha256 for $name (DAML_FINANCE_REQUIRE_SHA=1)"
+      rm -f "$file"
+      return 1
+    fi
+    echo "  NOTE: $name sha256=$actual (no pin recorded — add to EXPECTED_SHA256)"
+    return 0
+  fi
+  if [ "$actual" != "$expected" ]; then
+    echo "  FAILED: $name sha256 mismatch"
+    echo "    expected: $expected"
+    echo "    actual:   $actual"
+    rm -f "$file"
+    return 1
+  fi
+  echo "  OK: $name sha256 verified"
+  return 0
+}
+
 echo "Fetching Daml Finance library DARs (v${DAML_FINANCE_VERSION})..."
 echo "Target: $LIB_DIR"
 echo ""
@@ -48,12 +89,14 @@ for dar in "${REQUIRED_DARS[@]}"; do
   echo "  Downloading: $dar..."
 
   if curl -sSL --fail -o "$TARGET_FILE" "$URL" 2>/dev/null; then
-    echo "  OK: $dar"
+    echo "  OK: $dar (downloaded)"
+    verify_sha "$dar" "$TARGET_FILE" || FAILED=1
   else
     # Fallback: try without version suffix in filename
     URL2="${DAML_FINANCE_REPO}/v${DAML_FINANCE_VERSION}/${dar}.dar"
     if curl -sSL --fail -o "$TARGET_FILE" "$URL2" 2>/dev/null; then
-      echo "  OK: $dar"
+      echo "  OK: $dar (downloaded)"
+      verify_sha "$dar" "$TARGET_FILE" || FAILED=1
     else
       echo "  FAILED: $dar"
       echo "    Could not download from:"
