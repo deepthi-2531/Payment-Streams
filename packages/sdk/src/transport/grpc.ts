@@ -219,6 +219,28 @@ function commandId(): string {
  * Supports plaintext, TLS, and mTLS channels with optional JWT bearer-token
  * authentication.
  */
+
+/**
+ * [M-1] Convert a ledger offset string (an int64) to the JS number the
+ * proto field expects, WITHOUT silently losing precision. `parseInt`
+ * truncates above 2^53, which would resolve a money-bearing ACS/update
+ * read to the WRONG offset. We assert the value is within
+ * Number.MAX_SAFE_INTEGER and throw loudly otherwise — a real ledger
+ * won't reach 2^53 offsets for ~centuries, so this is safe in practice
+ * and fails visibly if that assumption ever breaks.
+ */
+function toSafeOffset(offset: string): number {
+  const big = BigInt(offset);
+  if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `Ledger offset ${offset} exceeds Number.MAX_SAFE_INTEGER; refusing to ` +
+        `truncate it to a wrong offset. The transport needs a BigInt-aware ` +
+        `proto mapping for offsets this large.`,
+    );
+  }
+  return Number(big);
+}
+
 export class GrpcTransport implements Transport {
   private readonly commandService: CommandServiceClient;
   private readonly stateService: StateServiceClient;
@@ -507,7 +529,7 @@ export class GrpcTransport implements Transport {
     const offset = await this.getLedgerEnd();
 
     const request = {
-      active_at_offset: parseInt(offset, 10),
+      active_at_offset: toSafeOffset(offset),
       event_format: {
         filters_by_party: Object.fromEntries(
           uniqueParties.map((party) => [party, partyFilters]),
@@ -599,7 +621,7 @@ export class GrpcTransport implements Transport {
     };
 
     const request: Record<string, unknown> = {
-      begin_exclusive: beginOffset ? parseInt(beginOffset, 10) : 0,
+      begin_exclusive: beginOffset ? toSafeOffset(beginOffset) : 0,
       update_format: {
         include_transactions: {
           event_format: eventFormat,
@@ -609,7 +631,7 @@ export class GrpcTransport implements Transport {
     };
 
     if (endOffset !== undefined) {
-      request['end_inclusive'] = parseInt(endOffset, 10);
+      request['end_inclusive'] = toSafeOffset(endOffset);
     }
 
     const metadata = this.buildMetadata();

@@ -95,6 +95,7 @@ template StreamEscrow
       && config.startTime < config.endTime
       && state.totalWithdrawn >= 0.0
       && state.totalWithdrawn <= config.totalDeposited
+      && validVestingMode config.vestingMode  -- [M-4]
       && escrow.amount >= 0.0
 
     -- | Withdraw accrued tokens. Only the recipient can call this.

@@ -49,6 +49,7 @@ template StreamHoldingEscrow
       && state.totalWithdrawn >= 0.0
       && state.totalWithdrawn <= config.totalDeposited
       && escrow.amount >= 0.0
+      && validVestingMode config.vestingMode  -- [M-4]
 
     -- | Compute accrued amount based on vesting mode.
     let computeAccrued : Time -> Decimal

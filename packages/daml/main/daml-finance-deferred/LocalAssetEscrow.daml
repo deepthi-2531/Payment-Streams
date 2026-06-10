@@ -63,6 +63,7 @@ template LocalAssetEscrow
       && state.totalWithdrawn >= 0.0
       && state.totalWithdrawn <= config.totalDeposited
       && escrow.amount >= 0.0
+      && validVestingMode config.vestingMode  -- [M-4]
 
     -- | Withdraw accrued tokens to the recipient's account.
     nonconsuming choice Withdraw_LocalAsset : WithdrawResult
