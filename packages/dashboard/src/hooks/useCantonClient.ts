@@ -12,7 +12,7 @@
 
 import { useMemo } from 'react';
 import { CantonStreamsApi } from '../api/client.js';
-import { useConnectionStore } from '../store/connection.js';
+import { useConnectionStore, safeProxyUrl } from '../store/connection.js';
 import { useAuth } from '../store/auth.js';
 
 /**
@@ -29,8 +29,9 @@ export function useCantonClient(): CantonStreamsApi | null {
   return useMemo(() => {
     if (!party) return null;
 
-    // Use the configured proxy URL, or default to same-origin /api
-    const baseUrl = proxyUrl || '';
+    // Use the validated proxy URL, or default to same-origin /api.
+    // Malformed/hostile stored values fall back to same-origin.
+    const baseUrl = safeProxyUrl(proxyUrl);
 
     return new CantonStreamsApi(
       baseUrl,

@@ -151,6 +151,33 @@ describe('CapabilityCache.refresh + MetadataFetcher on-chain refresh', () => {
     cache.clear();
     expect(cache.get('test-asset').paused).toBe(false);
   });
+
+  it('fails safe to paused when on-chain metadata omits the paused flag', async () => {
+    const registry = makeRegistry([makeAsset({ paused: false })]);
+    const fetcher: MetadataFetcher = vi.fn(async () => ({ allocationsV2: true }));
+    const cache = new CapabilityCache(registry, fetcher);
+    const refreshed = await cache.refresh('test-asset');
+    expect(refreshed.paused).toBe(true);
+  });
+
+  it('fails safe to paused when on-chain paused is a non-boolean value', async () => {
+    const registry = makeRegistry([makeAsset({ paused: false })]);
+    // A malformed endpoint that returns a truthy string instead of a boolean.
+    const fetcher: MetadataFetcher = vi.fn(async () =>
+      ({ paused: 'false' as unknown as boolean }),
+    );
+    const cache = new CapabilityCache(registry, fetcher);
+    const refreshed = await cache.refresh('test-asset');
+    expect(refreshed.paused).toBe(true);
+  });
+
+  it('only un-pauses on a strict boolean false from on-chain metadata', async () => {
+    const registry = makeRegistry([makeAsset({ paused: true })]);
+    const fetcher: MetadataFetcher = vi.fn(async () => ({ paused: false }));
+    const cache = new CapabilityCache(registry, fetcher);
+    const refreshed = await cache.refresh('test-asset');
+    expect(refreshed.paused).toBe(false);
+  });
 });
 
 describe('getAssetCapabilities (unified lookup)', () => {

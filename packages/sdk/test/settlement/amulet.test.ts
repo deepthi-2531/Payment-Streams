@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import Decimal from 'decimal.js';
 import { AmuletWalletGatewayAdapter } from '../../src/settlement/adapters/amulet.js';
@@ -30,13 +30,17 @@ describe('AmuletWalletGatewayAdapter', () => {
   it('executes transfer_cc through the hosted wallet gateway', async () => {
     const { privateKey } = generateKeyPairSync('ed25519');
     const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    // Raw 32-byte Ed25519 public key derived from the same key, base64-encoded —
+    // must match what the signer derives, since the loader now verifies the pair.
+    const spki = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+    const publicKeyBase64 = Buffer.from(spki.subarray(spki.length - 32)).toString('base64');
     const preparedTransactionHash = Buffer.from('prepared-transaction-hash').toString('base64');
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const pathname = new URL(String(input)).pathname;
       if (pathname.endsWith('/prepare-action')) {
         return new Response(JSON.stringify({
           sessionId: 'session-123',
-          expectedPublicKey: 'escrow-public-key',
+          expectedPublicKey: publicKeyBase64,
           prepared: {
             preparedTransactionHash,
           },
@@ -59,7 +63,7 @@ describe('AmuletWalletGatewayAdapter', () => {
       credentials: {
         'Escrow::1220abc': {
           appToken: 'escrow-app-token',
-          publicKey: 'escrow-public-key',
+          publicKey: publicKeyBase64,
           privateKey: privateKeyPem,
         },
       },
@@ -104,7 +108,7 @@ describe('AmuletWalletGatewayAdapter', () => {
     const executeBody = JSON.parse(String(fetchImpl.mock.calls[1]?.[1]?.body));
     expect(executeBody.party).toBe('Escrow::1220abc');
     expect(executeBody.sessionId).toBe('session-123');
-    expect(executeBody.publicKey).toBe('escrow-public-key');
+    expect(executeBody.publicKey).toBe(publicKeyBase64);
     expect(typeof executeBody.signature).toBe('string');
     expect(executeBody.signature.length).toBeGreaterThan(10);
   });
