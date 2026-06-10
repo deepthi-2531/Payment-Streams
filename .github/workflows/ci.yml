@@ -1,5 +1,9 @@
 name: CI
 
+# [L-16] Least-privilege default GITHUB_TOKEN scope — CI only reads the repo.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]

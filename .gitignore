@@ -44,3 +44,7 @@ docker/data/
 
 # Logs
 *.log
+
+# [L-7] Local debugging scratch files — never commit.
+.tmp-*.mjs
+debug-config.mjs

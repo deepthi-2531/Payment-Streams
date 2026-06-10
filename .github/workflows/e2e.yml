@@ -32,6 +32,10 @@ on:
         type: boolean
         default: false
 
+# [L-16] Least-privilege default token scope.
+permissions:
+  contents: read
+
 jobs:
   e2e:
     name: Wallet-backed V2 E2E
@@ -46,20 +50,35 @@ jobs:
 
       - name: Resolve effective Splice pinned commit
         id: splicepin
+        # [L-17] User-controlled input via env, never interpolated into the
+        # script body. Also validate it's a hex git sha before use.
+        env:
+          INPUT_PINNED_COMMIT: ${{ inputs.splice_pinned_commit }}
         run: |
-          if [ -n "${{ inputs.splice_pinned_commit }}" ]; then
-            echo "commit=${{ inputs.splice_pinned_commit }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_PINNED_COMMIT" ]; then
+            if ! printf '%s' "$INPUT_PINNED_COMMIT" | grep -Eq '^[0-9a-f]{7,40}$'; then
+              echo "splice_pinned_commit must be a hex git sha" >&2
+              exit 1
+            fi
+            echo "commit=$INPUT_PINNED_COMMIT" >> "$GITHUB_OUTPUT"
           else
             commit="$(grep -m1 SPLICE_PINNED_COMMIT scripts/fetch-v2-dars.mjs | sed -E "s/.*'([0-9a-f]+)'.*/\1/")"
             echo "commit=$commit" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Print resolved configuration
+        # [L-17] Inputs via env, not interpolated into the echo (a crafted
+        # wallet_gateway_url with backticks/$() would otherwise run in shell).
+        env:
+          RESOLVED_COMMIT: ${{ steps.splicepin.outputs.commit }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_SKIP_BUILD: ${{ inputs.skip_localnet_build }}
+          INPUT_GATEWAY: ${{ inputs.wallet_gateway_url }}
         run: |
-          echo "Resolved SPLICE_PINNED_COMMIT: ${{ steps.splicepin.outputs.commit }}"
-          echo "Dry run: ${{ inputs.dry_run }}"
-          echo "Skip LocalNet build: ${{ inputs.skip_localnet_build }}"
-          echo "Wallet gateway override: ${{ inputs.wallet_gateway_url }}"
+          echo "Resolved SPLICE_PINNED_COMMIT: $RESOLVED_COMMIT"
+          echo "Dry run: $INPUT_DRY_RUN"
+          echo "Skip LocalNet build: $INPUT_SKIP_BUILD"
+          echo "Wallet gateway override: $INPUT_GATEWAY"
 
       # Drives scripts/start-localnet-e2e.sh with the operator-provided
       # overrides. SPLICE_PINNED_COMMIT, LOCALNET_DRY_RUN, and

@@ -21,6 +21,10 @@ on:
         required: false
         default: 'main'
 
+# [L-16] Least-privilege default token scope.
+permissions:
+  contents: read
+
 jobs:
   daml:
     name: Daml Build & Test
@@ -44,10 +48,15 @@ jobs:
           ls -la "$HOME/.daml/bin"
 
       - name: Fetch Splice V2 DARs (source build)
+        # [L-17] Pass the user-controlled input via the environment, not by
+        # interpolating `${{ inputs.* }}` directly into the run block (which
+        # would let a crafted ref inject shell). `$SPLICE_REF` is quoted.
+        env:
+          SPLICE_REF: ${{ inputs.splice_ref }}
         run: |
           node scripts/fetch-v2-dars.mjs \
             --mode source-build \
-            --splice-ref "${{ inputs.splice_ref }}"
+            --splice-ref "$SPLICE_REF"
 
       - name: Verify V2 DARs are in place
         run: |
