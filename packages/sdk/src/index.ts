@@ -162,12 +162,17 @@ export type {
   ListAccountsResult as GatewayListAccountsResult,
 } from './signing/index.js';
 
-// Single-entry-point settlement dispatcher. Routes assets that
-// advertise required V2 allocation support through AllocationRequestV2.
-// V1-only assets and deprecated settlement-reference adapter paths are
-// intentionally unsupported in the V2-only library.
+// Settlement dispatchers. V2 (`dispatchSettlement`) is the preferred
+// lane for assets advertising V2 allocation support; V1
+// (`dispatchSettlementV1`) is the transitional lane for MainNet-live
+// assets (CC / Amulet, USDCx) that have not yet published V2 interfaces.
+// Resolve the lane once via `resolveSettlementVersion(caps)`. The V1
+// lane is deprecated from birth and is removed once the reference
+// assets advertise V2.
 export {
   dispatchSettlement,
+  dispatchSettlementV1,
+  resolveSettlementVersion,
   buildWithdrawalSettleCommand,
   buildWithdrawalRequestCommand,
 } from './settlement/allocation-dispatch.js';
@@ -179,6 +184,14 @@ export type {
   SettleCommand,
   CancelCommand,
   BatchSettleCommand,
+  DispatchActionV1,
+  DispatchCommandV1,
+  DispatchResultV1,
+  EmitRequestV1Command,
+  SettleV1Command,
+  CancelV1Command,
+  WithdrawV1Command,
+  SettlementApiVersion,
 } from './settlement/allocation-dispatch.js';
 
 // AllocationRequestV2 emission + Allocation_Settle dispatch.
@@ -202,6 +215,43 @@ export type {
   AllocationMetadata,
   AllocationView,
 } from './commands/allocation.js';
+
+// CIP-56 V1 lane builders (transitional — see commands/allocation-v1.ts
+// for the removal plan). Self-contained so the lane deletes cleanly.
+export {
+  buildAllocationRequestV1,
+  buildAllocationExecuteTransferV1,
+  buildAllocationCancelV1,
+  buildAllocationWithdrawV1,
+  META_KEY_STREAMS_REF,
+  META_KEY_STREAMS_VERSION,
+  META_KEY_STREAMS_APP,
+  META_STREAMS_VERSION,
+} from './commands/allocation-v1.js';
+
+// Registry choice-context fetcher for the V1 lane (Amulet: served by
+// Scan). Deleted together with the lane.
+export {
+  fetchAllocationChoiceContext,
+  fetchAllocationFactory,
+  RegistryApiError,
+} from './settlement/choice-context.js';
+export type {
+  AllocationChoiceContextAction,
+  FetchChoiceContextParams,
+  AllocationFactoryRequest,
+  AllocationFactoryResult,
+} from './settlement/choice-context.js';
+export type { DisclosedContract, CommandOptions } from './transport/base.js';
+export type {
+  AllocationRequestV1Payload,
+  BuildAllocationRequestV1Params,
+  SettlementInfoV1,
+  TransferLegV1,
+  InstrumentIdV1,
+  ChoiceContextV1,
+  AllocationMetadataV1,
+} from './commands/allocation-v1.js';
 
 // StreamAdmin orchestration — admin/observability surface for V2
 // iterated-allocation streaming. Records per-stream metadata + pointers

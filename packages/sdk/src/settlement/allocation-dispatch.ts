@@ -1,19 +1,28 @@
 /**
  * @module settlement/allocation-dispatch
  *
- * Single dispatcher for V2 stream settlement.
+ * Dispatchers for stream settlement — V2 (preferred) and V1 (transitional).
  *
- * Routes through `commands/allocation.ts` to emit `AllocationRequestV2`,
- * create `AllocationV2` via `AllocationFactory_Allocate`, settle via
- * `Allocation_Settle` (single-leg + iterated) or `SettlementFactory_SettleBatch`
- * (multi-leg).
+ * **V2 lane** (`dispatchSettlement`): routes through `commands/allocation.ts`
+ * to emit `AllocationRequestV2`, create `AllocationV2` via
+ * `AllocationFactory_Allocate`, settle via `Allocation_Settle` (single-leg +
+ * iterated) or `SettlementFactory_SettleBatch` (multi-leg).
  *
- * V1-only assets are not supported. Per CIP-0112 §5, V1 assets are
- * expected to publish V2 interfaces alongside V1; once an asset advertises
- * V2 in `supportedApis`, this dispatcher routes against it.
+ * **V1 lane** (`dispatchSettlementV1`): routes through
+ * `commands/allocation-v1.ts` (`splice-api-token-allocation-v1`) for assets
+ * live on MainNet that have not yet published V2 interfaces (Canton Coin /
+ * Amulet, USDCx). No iteration, no batch factory — recurring streams run one
+ * allocation cycle per withdrawal. Deprecated from birth; delete
+ * `dispatchSettlementV1`, its command types, and `commands/allocation-v1.ts`
+ * once the reference assets advertise V2 (`allocationsV2 = true`).
  *
- * The legacy settlement-reference adapters are deprecated; no asset that
- * lacks V2 allocation support is routed through this dispatcher.
+ * Lane selection: callers resolve the lane once via
+ * `resolveSettlementVersion(caps)` and pick the matching dispatcher. The
+ * command payloads are wire-incompatible between lanes (V2 Accounts vs V1
+ * plain parties), so the lanes deliberately do not share command types.
+ *
+ * The legacy settlement-reference adapters remain deprecated; assets enter
+ * a dispatcher only via registry capability flags.
  */
 
 import Decimal from 'decimal.js';
@@ -22,7 +31,9 @@ import type { Logger } from 'pino';
 import type { Transport, TemplateId } from '../transport/base.js';
 import {
   type AssetCapabilities,
+  type SettlementApiVersion,
   assertActionSupported,
+  resolveSettlementVersion,
 } from '../assets/capabilities.js';
 import {
   buildAllocationRequest,
@@ -36,6 +47,16 @@ import {
   type AllocationSettlementInfo,
   type BatchSettlementParams,
 } from '../commands/allocation.js';
+import {
+  buildAllocationRequestV1,
+  buildAllocationExecuteTransferV1,
+  buildAllocationCancelV1,
+  buildAllocationWithdrawV1,
+  type BuildAllocationRequestV1Params,
+  type ChoiceContextV1,
+  type SettlementInfoV1,
+  type TransferLegV1,
+} from '../commands/allocation-v1.js';
 
 // ---------------------------------------------------------------------------
 // Public dispatch surface
@@ -179,6 +200,135 @@ export async function dispatchSettlement(
 }
 
 // ---------------------------------------------------------------------------
+// V1 lane (transitional — see module doc for the removal plan)
+// ---------------------------------------------------------------------------
+
+/**
+ * V1 action categories. `withdraw` is V1-only (sender-side
+ * `Allocation_Withdraw`); there is no batch action because V1 has no
+ * settlement factory.
+ */
+export type DispatchActionV1 = 'emit-request' | 'settle' | 'cancel' | 'withdraw';
+
+/**
+ * V1 dispatch commands. Deliberately a separate union from
+ * {@link DispatchCommand}: the request payloads are wire-incompatible
+ * (V1 plain-party legs vs V2 Account legs), and keeping the types apart
+ * lets the whole V1 lane be deleted without touching V2 call-sites.
+ */
+export type DispatchCommandV1 =
+  | EmitRequestV1Command
+  | SettleV1Command
+  | CancelV1Command
+  | WithdrawV1Command;
+
+export interface EmitRequestV1Command {
+  readonly action: 'emit-request';
+  readonly request: BuildAllocationRequestV1Params;
+  readonly templateId: TemplateId;
+  readonly actAs: ReadonlyArray<string>;
+}
+
+export interface SettleV1Command {
+  readonly action: 'settle';
+  readonly allocationCid: string;
+  readonly templateId: TemplateId;
+  readonly actAs: ReadonlyArray<string>;
+  /**
+   * Registry choice context (e.g. Amulet's AmuletRules / OpenMiningRound
+   * references fetched from the registry's choice-context endpoint).
+   */
+  readonly context?: ChoiceContextV1 | undefined;
+}
+
+export interface CancelV1Command {
+  readonly action: 'cancel';
+  readonly allocationCid: string;
+  readonly templateId: TemplateId;
+  readonly actAs: ReadonlyArray<string>;
+  readonly context?: ChoiceContextV1 | undefined;
+}
+
+export interface WithdrawV1Command {
+  readonly action: 'withdraw';
+  readonly allocationCid: string;
+  readonly templateId: TemplateId;
+  readonly actAs: ReadonlyArray<string>;
+  readonly context?: ChoiceContextV1 | undefined;
+}
+
+/** Result envelope for the V1 lane. `version` is always `'v1'`. */
+export interface DispatchResultV1 {
+  readonly version: 'v1';
+  readonly action: DispatchActionV1;
+  readonly payload: unknown;
+}
+
+/**
+ * Single entry point for V1 stream settlement actions. Parallel to
+ * {@link dispatchSettlement}; see the module doc for lane selection.
+ *
+ * @deprecated from birth — transitional until CC / USDCx advertise V2.
+ */
+export async function dispatchSettlementV1(
+  transport: Transport,
+  caps: AssetCapabilities,
+  cmd: DispatchCommandV1,
+  logger: Logger,
+): Promise<DispatchResultV1> {
+  // Fail fast for paused instruments and V2-only capability mistakes.
+  assertActionSupported(caps, 'transfer', 'v1');
+
+  switch (cmd.action) {
+    case 'emit-request': {
+      const payload = buildAllocationRequestV1(caps, cmd.request, cmd.templateId);
+      logger.info({ version: 'v1', action: 'emit-request' }, 'Creating AllocationRequest (V1)');
+      const created = await transport.create(payload.templateId, payload.argument, [...cmd.actAs]);
+      return { version: 'v1', action: 'emit-request', payload: created };
+    }
+
+    case 'settle': {
+      const settled = await buildAllocationExecuteTransferV1(
+        transport,
+        caps,
+        cmd.allocationCid,
+        cmd.templateId,
+        [...cmd.actAs],
+        logger,
+        cmd.context !== undefined ? { context: cmd.context } : undefined,
+      );
+      return { version: 'v1', action: 'settle', payload: settled.result };
+    }
+
+    case 'cancel': {
+      const cancelled = await buildAllocationCancelV1(
+        transport,
+        caps,
+        cmd.allocationCid,
+        cmd.templateId,
+        [...cmd.actAs],
+        logger,
+        cmd.context !== undefined ? { context: cmd.context } : undefined,
+      );
+      return { version: 'v1', action: 'cancel', payload: cancelled.result };
+    }
+
+    case 'withdraw': {
+      const withdrawn = await buildAllocationWithdrawV1(
+        transport,
+        caps,
+        cmd.allocationCid,
+        cmd.templateId,
+        [...cmd.actAs],
+        logger,
+        cmd.context !== undefined ? { context: cmd.context } : undefined,
+      );
+      return { version: 'v1', action: 'withdraw', payload: withdrawn.result };
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Convenience builders (for proxy/orchestrator integration)
 // ---------------------------------------------------------------------------
 
@@ -244,6 +394,16 @@ export type {
   TransferLegV2,
   BatchSettlementParams,
 };
+
+// V1 lane re-exports (transitional — removed with the lane).
+export type {
+  BuildAllocationRequestV1Params,
+  ChoiceContextV1,
+  SettlementInfoV1,
+  TransferLegV1,
+  SettlementApiVersion,
+};
+export { resolveSettlementVersion };
 
 // Re-export Decimal so callers don't need a separate dependency line
 // for setting up TransferLeg amounts.

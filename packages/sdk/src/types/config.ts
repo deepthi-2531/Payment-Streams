@@ -18,6 +18,15 @@ export interface ClientConfig {
   readonly useTls: boolean;
 
   /**
+   * [H-4] Acknowledge sending a bearer token over a plaintext channel to
+   * a non-loopback host. The SDK refuses to do so by default because the
+   * token is sniffable/replayable on the wire. Only set this for a
+   * trusted private network where TLS termination happens at a sidecar.
+   * Loopback hosts (localhost/127.0.0.1/::1) never require it.
+   */
+  readonly allowInsecureToken?: boolean;
+
+  /**
    * JWT bearer token for authentication.
    * Required when the participant enforces token-based auth.
    */

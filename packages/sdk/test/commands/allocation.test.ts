@@ -39,6 +39,7 @@ const TEMPLATE_SF: TemplateId = {
 const v2Caps: AssetCapabilities = {
   key: 'v2-asset',
   allocationsV2: true,
+  allocationsV1: false,
   transferEventsV2: true,
   paused: false,
   source: 'registry',
@@ -47,6 +48,7 @@ const v2Caps: AssetCapabilities = {
 const pausedCaps: AssetCapabilities = {
   key: 'paused-asset',
   allocationsV2: true,
+  allocationsV1: false,
   transferEventsV2: true,
   paused: true,
   pauseInfo: 'admin-action pending review',

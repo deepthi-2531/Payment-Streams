@@ -18,6 +18,12 @@ COPY tsconfig.base.json ./
 RUN pnpm --filter @canton-streams/sdk build
 RUN pnpm --filter @canton-streams/proxy build
 
+# [L-22] Drop root. The node:alpine image ships an unprivileged `node`
+# user; run the fund-moving proxy as it so a container escape doesn't
+# start from uid 0.
+RUN chown -R node:node /app
+USER node
+
 EXPOSE 4000
 
 CMD ["node", "packages/proxy/dist/index.js"]

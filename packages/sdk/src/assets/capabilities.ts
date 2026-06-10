@@ -1,13 +1,20 @@
 /**
  * @module assets/capabilities
  *
- * V2-only capability resolution.
+ * Capability resolution for the V2 (preferred) and V1 (transitional)
+ * settlement lanes.
  *
- * Per CIP-0112 §5 V2 backwards compatibility, V1 assets are expected to
- * publish V2 interfaces alongside V1; our library integrates with assets
- * once they advertise V2 in `supportedApis`. V1-only assets are not
- * supported because the streaming primitive requires V2 iterated
- * allocations.
+ * V2 is the primary lane: per CIP-0112 §5 V2 backwards compatibility,
+ * V1 assets are expected to publish V2 interfaces alongside V1, and
+ * once an asset advertises V2 in `supportedApis` the library routes V2.
+ *
+ * The V1 lane (`allocationsV1`) exists so assets that are live on
+ * MainNet today but have not yet published V2 (Canton Coin / Amulet,
+ * USDCx) can settle via `splice-api-token-allocation-v1`. V1 lacks
+ * committed-iterated allocations and batch settlement, so those actions
+ * remain V2-only; recurring streams on V1 run one allocation cycle per
+ * withdrawal. The V1 lane is deprecated from birth and is removed once
+ * the reference assets advertise V2.
  *
  * This module centralizes capability resolution so dApps and the
  * library never branch by asset name — they branch by capability.
@@ -27,17 +34,26 @@ import type { AssetConfig, AssetRegistry, InstrumentIdV2 } from './registry.js';
 // Capabilities
 // ---------------------------------------------------------------------------
 
+/** Settlement API generation a dispatch can route against. */
+export type SettlementApiVersion = 'v1' | 'v2';
+
 /**
- * Resolved capabilities for a single V2 asset.
+ * Resolved capabilities for a single asset.
  */
 export interface AssetCapabilities {
   readonly key: string;
   /**
    * Asset supports V2 allocation features (multi-leg, batch settlement,
-   * committed + iterated allocations). Always `true` for a V2-only
-   * registry; kept as a field so call-sites can read it explicitly.
+   * committed + iterated allocations). Preferred lane whenever `true`.
    */
   readonly allocationsV2: boolean;
+  /**
+   * Asset supports CIP-56 V1 allocations (`splice-api-token-allocation-v1`).
+   * Transitional lane for assets live on MainNet that have not yet
+   * published V2 interfaces. Iterated and batch actions are not
+   * available on this lane.
+   */
+  readonly allocationsV1: boolean;
   /** Asset supports V2 TransferEvents (event-driven advancement). */
   readonly transferEventsV2: boolean;
   /**
@@ -76,11 +92,50 @@ export function getAssetCapabilitiesFromRegistry(
   return {
     key: asset.key,
     allocationsV2: asset.allocationsV2,
+    allocationsV1: asset.allocationsV1 === true,
     transferEventsV2: asset.transferEventsV2,
     paused: asset.paused === true,
     ...(asset.pauseInfo !== undefined ? { pauseInfo: asset.pauseInfo } : {}),
     source: 'registry',
   };
+}
+
+/**
+ * Resolve which settlement API generation to route for an asset.
+ *
+ *   - With no `prefer`: V2 when available, else V1.
+ *   - With `prefer`: validates the asset actually supports that lane
+ *     (so a caller pinning `'v1'` against a V2-only asset fails loudly
+ *     instead of emitting the wrong vocabulary).
+ *
+ * Throws if the asset supports neither lane — the registry validates
+ * this at load time, so hitting it indicates a hand-built caps object.
+ */
+export function resolveSettlementVersion(
+  caps: AssetCapabilities,
+  prefer?: SettlementApiVersion,
+): SettlementApiVersion {
+  if (prefer === 'v2') {
+    if (!caps.allocationsV2) {
+      throw new Error(
+        `Asset "${caps.key}" does not support V2 allocations; cannot route the requested 'v2' lane.`,
+      );
+    }
+    return 'v2';
+  }
+  if (prefer === 'v1') {
+    if (!caps.allocationsV1) {
+      throw new Error(
+        `Asset "${caps.key}" does not support V1 allocations; cannot route the requested 'v1' lane.`,
+      );
+    }
+    return 'v1';
+  }
+  if (caps.allocationsV2) return 'v2';
+  if (caps.allocationsV1) return 'v1';
+  throw new Error(
+    `Asset "${caps.key}" supports neither V2 nor V1 allocations; it should have been rejected at registry load.`,
+  );
 }
 
 /**
@@ -176,27 +231,33 @@ export class PausedInstrumentError extends Error {
 }
 
 /**
- * Assert that the given action is supported by the asset's V2 capabilities.
- * Throws with a descriptive message if not. Also throws `PausedInstrumentError`
- * if the asset is paused.
+ * Assert that the given action is supported by the asset's capabilities
+ * on the resolved settlement lane. Throws with a descriptive message if
+ * not. Also throws `PausedInstrumentError` if the asset is paused.
  *
- * Rules (V2-only):
- *   - All actions require `allocationsV2` (enforced at registry-load time)
- *   - `event-subscription` additionally requires `transferEventsV2`
+ * Rules:
  *   - Any action is blocked if `paused = true`
+ *   - Without an explicit `version`, the lane is resolved via
+ *     {@link resolveSettlementVersion} (V2 preferred)
+ *   - `allocation-iterated` and `allocation-batch` are V2-only —
+ *     V1 has no committed-iterated allocation and no batch factory
+ *   - `event-subscription` requires `transferEventsV2` on either lane
  */
 export function assertActionSupported(
   caps: AssetCapabilities,
   action: StreamAction,
+  version?: SettlementApiVersion,
 ): void {
   if (caps.paused) {
     throw new PausedInstrumentError(caps.key, caps.pauseInfo);
   }
-  if (!caps.allocationsV2) {
-    // Should never trigger — the registry validates this at load time.
-    // Defense in depth in case a test fixture constructs a bad caps object.
+  const lane = resolveSettlementVersion(caps, version);
+  if (lane === 'v1' && (action === 'allocation-iterated' || action === 'allocation-batch')) {
     throw new Error(
-      `Asset "${caps.key}" does not support V2 allocations; ${action} requires CIP-56 V2.`,
+      `Asset "${caps.key}" routes the V1 settlement lane, which has no ${
+        action === 'allocation-iterated' ? 'committed-iterated allocations' : 'batch settlement factory'
+      }; ${action} requires CIP-56 V2. ` +
+      `On V1, run one allocation cycle per withdrawal instead.`,
     );
   }
   if (action === 'event-subscription' && !caps.transferEventsV2) {

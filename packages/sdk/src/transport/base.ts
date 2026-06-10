@@ -28,6 +28,52 @@ export interface TemplateId {
 }
 
 /**
+ * An explicitly disclosed contract attached to a command submission.
+ *
+ * Registry token-standard APIs (e.g. Amulet's choice-context endpoints)
+ * return contracts the submitter is not a stakeholder of (AmuletRules,
+ * OpenMiningRound, …) that must be disclosed for the choice to execute.
+ *
+ * `templateId` accepts the structured form or the `"pkg:Module:Entity"`
+ * string that registry APIs return verbatim.
+ */
+export interface DisclosedContract {
+  readonly templateId: TemplateId | string;
+  readonly contractId: string;
+  /** Base64-encoded created-event blob, as returned by the registry API. */
+  readonly createdEventBlob: string;
+  /** Synchronizer the contract lives on (required by some participants). */
+  readonly synchronizerId?: string;
+}
+
+/**
+ * Optional per-command options for create/exercise submissions.
+ */
+export interface CommandOptions {
+  /** Contracts to disclose alongside the command. */
+  readonly disclosedContracts?: ReadonlyArray<DisclosedContract>;
+}
+
+/**
+ * Parse a `TemplateId | string` into the structured form. The string
+ * form is `"packageRef:Module.Name:Entity"` — module names may contain
+ * dots, so split on the first and last colon.
+ */
+export function parseTemplateId(t: TemplateId | string): TemplateId {
+  if (typeof t !== 'string') return t;
+  const first = t.indexOf(':');
+  const last = t.lastIndexOf(':');
+  if (first === -1 || last === first) {
+    throw new Error(`Invalid template id string: "${t}" (expected "pkg:Module:Entity")`);
+  }
+  return {
+    packageId: t.slice(0, first),
+    moduleName: t.slice(first + 1, last),
+    entityName: t.slice(last + 1),
+  };
+}
+
+/**
  * Transport abstraction over the Canton Ledger API.
  *
  * All methods accept explicit `actAs` / `readAs` parties so a single
@@ -48,6 +94,7 @@ export interface Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<CreateResult<T>>;
 
   /**
@@ -68,6 +115,7 @@ export interface Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T>;
 
   /**
@@ -88,6 +136,7 @@ export interface Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T>;
 
   /**

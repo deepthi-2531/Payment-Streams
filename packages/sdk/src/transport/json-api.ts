@@ -15,7 +15,8 @@
  * @license Apache-2.0
  */
 
-import type { Transport, CreateResult, TemplateId } from './base.js';
+import type { Transport, CreateResult, TemplateId, CommandOptions, DisclosedContract } from './base.js';
+import { parseTemplateId } from './base.js';
 
 /**
  * Configuration for the JSON API transport.
@@ -42,6 +43,27 @@ export interface JsonApiConfig {
  */
 function formatTemplateId(t: TemplateId): string {
   return `${t.packageId}:${t.moduleName}:${t.entityName}`;
+}
+
+/**
+ * Encode disclosed contracts for the JSON API command `meta`. The
+ * created-event blob stays base64 on this wire.
+ */
+function formatDisclosedContracts(
+  disclosed: ReadonlyArray<DisclosedContract> | undefined,
+): Array<Record<string, unknown>> | undefined {
+  if (!disclosed || disclosed.length === 0) return undefined;
+  return disclosed.map((dc) => {
+    const entry: Record<string, unknown> = {
+      templateId: formatTemplateId(parseTemplateId(dc.templateId)),
+      contractId: dc.contractId,
+      createdEventBlob: dc.createdEventBlob,
+    };
+    if (dc.synchronizerId !== undefined) {
+      entry['synchronizerId'] = dc.synchronizerId;
+    }
+    return entry;
+  });
 }
 
 /**
@@ -80,13 +102,16 @@ export class JsonApiTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<CreateResult<T>> {
+    const disclosed = formatDisclosedContracts(opts?.disclosedContracts);
     const body = {
       templateId: formatTemplateId(templateId),
       payload: argument,
       meta: {
         actAs: actAs.length > 0 ? actAs : this.defaultActAs,
         readAs: readAs ?? this.defaultReadAs,
+        ...(disclosed ? { disclosedContracts: disclosed } : {}),
       },
     };
 
@@ -111,7 +136,9 @@ export class JsonApiTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T> {
+    const disclosed = formatDisclosedContracts(opts?.disclosedContracts);
     const body = {
       templateId: formatTemplateId(templateId),
       contractId,
@@ -120,6 +147,7 @@ export class JsonApiTransport implements Transport {
       meta: {
         actAs: actAs.length > 0 ? actAs : this.defaultActAs,
         readAs: readAs ?? this.defaultReadAs,
+        ...(disclosed ? { disclosedContracts: disclosed } : {}),
       },
     };
 
@@ -141,7 +169,9 @@ export class JsonApiTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T> {
+    const disclosed = formatDisclosedContracts(opts?.disclosedContracts);
     const body = {
       templateId: formatTemplateId(templateId),
       key,
@@ -150,6 +180,7 @@ export class JsonApiTransport implements Transport {
       meta: {
         actAs: actAs.length > 0 ? actAs : this.defaultActAs,
         readAs: readAs ?? this.defaultReadAs,
+        ...(disclosed ? { disclosedContracts: disclosed } : {}),
       },
     };
 

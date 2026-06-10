@@ -40,11 +40,10 @@ yargs(hideBin(process.argv))
     describe: 'Use TLS for the connection',
     global: true,
   })
-  .option('token', {
-    type: 'string',
-    describe: 'JWT bearer token for authentication',
-    global: true,
-  })
+  // [H-5] The JWT token is NOT accepted as a CLI flag. A `--token eyJ...`
+  // argument is visible to any local user via `ps` / /proc/<pid>/cmdline
+  // and is persisted to shell history. Supply it through the
+  // CANTON_TOKEN environment variable instead.
   .option('party', {
     type: 'string',
     describe: 'Canton party to act as',
