@@ -78,8 +78,12 @@ template DelegatedPolicy
     --      maxExecutionsPerPeriod
     --
     -- The companion `PolicyExecutionState` is consumed and recreated with
-    -- updated counters; an `ExecutionLog` is emitted regardless of success
-    -- so failures are also auditable.
+    -- updated counters; an `ExecutionLog` is emitted on SUCCESS. Note
+    -- (L-11): a failed execution aborts the whole transaction — Daml has
+    -- no partial commit — so failures are NOT written to the on-ledger
+    -- log; `ExecutionLog.success` is therefore always True. Auditors
+    -- detect a failure by the ABSENCE of an expected log entry, not by a
+    -- success=False row.
     nonconsuming choice ExecutePolicy : (ContractId PolicyExecutionState, ContractId ExecutionLog)
       with
         executionId : Text
@@ -104,11 +108,24 @@ template DelegatedPolicy
           (null streamFilters || targetStreamId `elem` streamFilters)
 
         -- 4. Per-execution amount cap
+        -- [M-3] Also require a strictly-positive amount. A zero/negative
+        -- amount trivially passes `amount <= cap` and would let the executor
+        -- log unbounded "executions" (or a negative-amount clawback) without
+        -- tripping the per-execution cap.
+        assertMsg "Execution amount must be positive" (amount > 0.0)
         assertMsg "Execution amount exceeds policy cap"
           (amount <= rateLimit.maxAmountPerExecution)
 
-        -- Load and validate the rate-limit state
-        currentState <- fetch currentStateCid
+        -- Load and validate the rate-limit state.
+        -- [M-2] Resolve the CANONICAL state by key and reject a
+        -- caller-supplied cid that isn't it. This stops the executor from
+        -- passing a freshly-minted empty PolicyExecutionState (same
+        -- policyId) to reset the counters and bypass the rate limit.
+        (canonicalCid, canonicalState) <- fetchByKey @PolicyExecutionState (sender, policyId)
+        assertMsg
+          "currentStateCid is not the canonical rate-limit state for this policy"
+          (currentStateCid == canonicalCid)
+        let currentState = canonicalState
         assertMsg "ExecutionState policy id mismatch"
           (currentState.policyId == policyId)
 
@@ -189,6 +206,17 @@ template PolicyExecutionState
   where
     signatory sender, executor
     observer recipient   -- visibility for the rate-limit state
+
+    -- [M-2] Canonical key: exactly one active rate-limit state per policy.
+    -- Without a key, ExecutePolicy accepted a caller-supplied state cid and
+    -- only checked `policyId`, so the executor could mint a fresh empty
+    -- PolicyExecutionState with the same policyId and pass THAT to reset the
+    -- counters and bypass the rate limit. Keying by (sender, policyId) lets
+    -- ExecutePolicy fetch the canonical state by key and reject any cid that
+    -- isn't it. Daml enforces uniqueness: two active states for one policy
+    -- cannot coexist.
+    key (sender, policyId) : (Party, Text)
+    maintainer key._1
 
     -- | Reset the rate-limit state.
     --
