@@ -29,19 +29,21 @@ REQUIRED_DARS=(
   "daml-finance-holding"
 )
 
-# Expected SHA-256 of each downloaded DAR. A downloaded artifact is
-# verified against this map; a mismatch (upstream tamper, release re-cut,
-# MITM) aborts the build. Populate by running once, recording the printed
-# `sha256` for each DAR, and committing the values here. Until populated,
-# the script enforces "checksum required" only when DAML_FINANCE_REQUIRE_SHA=1
-# so existing local dev isn't broken by the rollout — set that in CI.
+# Expected SHA-256 of each downloaded DAR. A downloaded artifact is verified
+# against this map; a mismatch (upstream tamper, release re-cut, MITM) aborts
+# the build. Verification is enforced by default: an unpinned DAR fails closed
+# rather than silently trusting whatever was downloaded.
+#
+# To establish trust the first time (or after an intentional version bump),
+# run once with DAML_FINANCE_ALLOW_UNPINNED=1, copy the printed sha256 for
+# each DAR into EXPECTED_SHA256 below, and commit it.
 declare -A EXPECTED_SHA256=(
   # ["daml-finance-interface-types-common"]="<sha256>"
   # ["daml-finance-interface-holding"]="<sha256>"
   # ["daml-finance-interface-util"]="<sha256>"
   # ["daml-finance-holding"]="<sha256>"
 )
-REQUIRE_SHA="${DAML_FINANCE_REQUIRE_SHA:-0}"
+ALLOW_UNPINNED="${DAML_FINANCE_ALLOW_UNPINNED:-0}"
 
 verify_sha() {
   # $1 = dar name, $2 = file path
@@ -51,13 +53,15 @@ verify_sha() {
   [ -z "$actual" ] && actual="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')"
   local expected="${EXPECTED_SHA256[$name]:-}"
   if [ -z "$expected" ]; then
-    if [ "$REQUIRE_SHA" = "1" ]; then
-      echo "  FAILED: no pinned sha256 for $name (DAML_FINANCE_REQUIRE_SHA=1)"
-      rm -f "$file"
-      return 1
+    if [ "$ALLOW_UNPINNED" = "1" ]; then
+      echo "  NOTE: $name sha256=$actual — add to EXPECTED_SHA256 and commit"
+      return 0
     fi
-    echo "  NOTE: $name sha256=$actual (no pin recorded — add to EXPECTED_SHA256)"
-    return 0
+    echo "  FAILED: no pinned sha256 for $name (refusing trust-on-first-use)."
+    echo "    Establish trust explicitly: re-run with DAML_FINANCE_ALLOW_UNPINNED=1,"
+    echo "    record the printed sha256 in EXPECTED_SHA256, and commit it."
+    rm -f "$file"
+    return 1
   fi
   if [ "$actual" != "$expected" ]; then
     echo "  FAILED: $name sha256 mismatch"
@@ -81,6 +85,7 @@ for dar in "${REQUIRED_DARS[@]}"; do
 
   if [ -f "$TARGET_FILE" ]; then
     echo "  OK: $dar (already present)"
+    verify_sha "$dar" "$TARGET_FILE" || FAILED=1
     continue
   fi
 

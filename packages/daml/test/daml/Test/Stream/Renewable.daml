@@ -142,7 +142,7 @@ testRenewableRenewWithTopUp = script do
     exerciseCmd updatedCid Renew_Stream with
       additionalDeposit
       newEndTime = newEnd
-      renewTime = newEnd
+      renewTime = midpoint
 
   -- Verify renewed state
   renewedEscrows <- query @StreamEscrow bob
@@ -189,7 +189,7 @@ testRenewableMultipleRenewals = script do
     exerciseCmd escrowCid Renew_Stream with
       additionalDeposit = 3000.0
       newEndTime = end2
-      renewTime = end2
+      renewTime = start
 
   -- Second renewal
   escrows1 <- query @StreamEscrow bob
@@ -201,7 +201,7 @@ testRenewableMultipleRenewals = script do
     exerciseCmd cid1' Renew_Stream with
       additionalDeposit = 3000.0
       newEndTime = end3
-      renewTime = end3
+      renewTime = start
 
   -- Third renewal
   escrows2 <- query @StreamEscrow bob
@@ -213,7 +213,7 @@ testRenewableMultipleRenewals = script do
     exerciseCmd cid2' Renew_Stream with
       additionalDeposit = 3000.0
       newEndTime = end4
-      renewTime = end4
+      renewTime = start
 
   -- Verify final state
   escrows3 <- query @StreamEscrow bob
