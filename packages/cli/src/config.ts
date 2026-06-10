@@ -79,8 +79,9 @@ export function resolveConfig(argv: GlobalOptions): ClientConfig {
     file.tls ??
     false;
 
+  // [H-5] Token comes from the environment or config file only — never a
+  // CLI flag (process-list / shell-history leak).
   const token =
-    argv.token ??
     process.env['CANTON_TOKEN'] ??
     file.token ??
     undefined;

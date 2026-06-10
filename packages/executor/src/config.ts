@@ -32,7 +32,11 @@ export function loadConfig(): ExecutorConfig {
   return {
     ledgerHost: env('EXECUTOR_LEDGER_HOST', 'localhost'),
     ledgerPort: parseInt(env('EXECUTOR_LEDGER_PORT', '6865'), 10),
-    ledgerTls: env('EXECUTOR_LEDGER_TLS', 'false') === 'true',
+    // [H-4] The executor is a long-lived daemon carrying delegated-payout
+    // authority; its token must not travel in plaintext. TLS defaults ON.
+    // Set EXECUTOR_LEDGER_TLS=false only for a loopback/dev participant
+    // (the SDK additionally refuses tokens on insecure non-loopback links).
+    ledgerTls: env('EXECUTOR_LEDGER_TLS', 'true') !== 'false',
     ledgerToken: env('EXECUTOR_LEDGER_TOKEN', ''),
     executorParty: env('EXECUTOR_PARTY', ''),
     pollIntervalMs: parseInt(env('EXECUTOR_POLL_INTERVAL_MS', '10000'), 10),

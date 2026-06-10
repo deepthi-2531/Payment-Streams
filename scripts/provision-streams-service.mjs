@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
 const USAGE = `Usage:
+  CANTON_ADMIN_TOKEN=<jwt> \\
   node scripts/provision-streams-service.mjs \\
     --api-url http://host:7575 \\
-    --admin-token <jwt> \\
     --user-id streams-service-testnet \\
     [--primary-party <party>] \\
     [--identity-provider-id <id>] \\
@@ -45,7 +45,13 @@ function parseArgs(argv) {
         result.apiUrl = argv[++i] || "";
         break;
       case "--admin-token":
-        result.adminToken = argv[++i] || "";
+        // [H-5] A JWT on the command line leaks via `ps` and shell
+        // history. Refuse the flag; require the CANTON_ADMIN_TOKEN env var.
+        fail(
+          "--admin-token is no longer accepted: a JWT passed as a CLI " +
+            "argument is visible in the process list and shell history. " +
+            "Pass it via the CANTON_ADMIN_TOKEN environment variable instead.",
+        );
         break;
       case "--user-id":
         result.userId = argv[++i] || "";
