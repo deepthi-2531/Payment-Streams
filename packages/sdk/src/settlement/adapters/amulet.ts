@@ -236,14 +236,26 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
     body: Record<string, unknown>,
     token: string,
   ): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
+    // Never follow a 3xx on an authenticated call (the default redirect
+    // replays the Authorization header to the target), and bound the call
+    // so a hung gateway cannot wedge the caller.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;

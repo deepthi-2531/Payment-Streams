@@ -687,14 +687,26 @@ export class TransferOfferAdapter implements SettlementAdapter {
   }
 
   private async requestRegistryJson<T>(url: string, body: Record<string, unknown>): Promise<T> {
-    const response = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.registryToken ? { authorization: `Bearer ${this.registryToken}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
+    // Never follow a 3xx on an authenticated call (the default redirect
+    // replays the Authorization header to the target), and bound the call
+    // so a hung upstream cannot wedge the caller.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(this.registryToken ? { authorization: `Bearer ${this.registryToken}` } : {}),
+        },
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;
@@ -748,14 +760,25 @@ export class TransferOfferAdapter implements SettlementAdapter {
       );
     }
 
-    const response = await this.fetchImpl(`${this.jsonApiUrl}${path}`, {
-      method: options.method,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.ledgerToken}`,
-      },
-      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-    });
+    // Same authenticated-call guards as requestRegistryJson: no redirect
+    // follow, bounded duration.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.jsonApiUrl}${path}`, {
+        method: options.method,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.ledgerToken}`,
+        },
+        redirect: 'error',
+        signal: ac.signal,
+        ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;
@@ -898,14 +921,25 @@ export class TransferOfferAdapter implements SettlementAdapter {
       url.searchParams.set('party', party);
     }
 
-    const response = await this.fetchImpl(url, {
-      method: body ? 'POST' : 'GET',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+    // Same authenticated-call guards as requestRegistryJson: no redirect
+    // follow, bounded duration.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: body ? 'POST' : 'GET',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        redirect: 'error',
+        signal: ac.signal,
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;

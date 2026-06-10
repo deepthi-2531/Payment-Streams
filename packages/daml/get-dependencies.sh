@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Downloads Daml Finance library DAR files required by canton-streams-main.
-# These are data-dependencies referenced in packages/daml/main/daml.yaml.
+# Downloads Daml Finance library DAR files for the deferred Daml-Finance
+# escrow path (main/daml-finance-deferred/). These templates are not part
+# of the current build; this script is only needed when that path is
+# activated.
 #
-# The Daml Finance library provides the Holding, Fungible, Transferable,
-# and Settlement interfaces used by the production utility holding adapter.
+# NOTE: upstream daml-finance releases are tagged per package
+# (e.g. Daml.Finance.Holding.V4/4.0.0) — there is no repo-wide v3.0.0
+# DAR bundle, so the download URLs below will not resolve as-is. When
+# activating the deferred path: update DAML_FINANCE_VERSION/URLs to the
+# real per-package release scheme, run once with
+# DAML_FINANCE_ALLOW_UNPINNED=1, and commit the printed checksums into
+# EXPECTED_SHA256. Until then the script fails closed by design.
 #
 # Usage: ./get-dependencies.sh
 # Prerequisite: curl must be on PATH.
