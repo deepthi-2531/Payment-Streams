@@ -119,17 +119,36 @@ withdrawal. This is by design and always favors the sender.
 **Threat:** A malicious party submits a transaction with a fabricated
 future timestamp to unlock tokens early.
 
-**Mitigation:** Canton enforces bounded ledger time. Transaction
-timestamps must be within the participant's time tolerance window
-(typically a few seconds). A party cannot submit a transaction with a
-timestamp significantly in the future.
+**Mitigation:** Two distinct layers, and the distinction matters:
 
-The `withdrawTime` and `cancelTime` parameters passed to choices are
-provided by the submitter but validated against ledger effective time
-by the Canton runtime.
+1. **The transaction's ledger effective time** is bounded by Canton —
+   a submission's record time must fall within the participant's time
+   tolerance window (typically a few seconds), so it cannot be
+   significantly in the future.
 
-**Residual risk:** Minimal. The tolerance window (seconds) is
-negligible relative to stream durations (days to months).
+2. **The `withdrawTime` / `cancelTime` / `completeTime` / `renewTime` /
+   `pauseTime` / `resumeTime` choice arguments are ordinary data.**
+   Canton does NOT validate a `Time` *field* against ledger time — it
+   only bounds the transaction's record time. Each fund-moving choice
+   must therefore assert the bound itself:
+
+   ```daml
+   now <- getTime
+   assertMsg "withdrawTime must be at or before ledger time" (withdrawTime <= now)
+   ```
+
+   This guard is present on every withdraw, cancel, mutual-cancel,
+   complete, renew, pause, and resume choice in `Escrow.daml`,
+   `HoldingEscrow.daml`, `LocalAssetEscrow.daml`, and `StreamFlow.daml`.
+   Without it (CR-1/CR-2 in the v0.2.7 audit) a recipient could pass
+   `withdrawTime = endTime` to drain the escrow day one, or a sender
+   could pass `cancelTime = startTime` to clawback already-vested funds.
+
+**Residual risk:** Minimal. `getTime` returns the transaction's ledger
+time, which Canton bounds to the tolerance window (seconds) — negligible
+relative to stream durations (days to months). An earlier-than-now value
+is permitted but never benefits the submitter: under-stating the time can
+only *reduce* what a withdrawer or canceller can extract.
 
 ### 6. Front-running
 
@@ -274,8 +293,15 @@ reference.
   where the recipient wants to delegate the withdraw action to a
   service without trusting it fully, `DelegatedPolicy` provides
   on-ledger bounded authority (rate limit, expiry, scope,
-  action allow-list, cooldown). Every execution is recorded in an
-  append-only `ExecutionLog`. Revocable at any time by the delegator.
+  action allow-list, cooldown). Every *successful* execution is
+  recorded in an append-only `ExecutionLog`. Note: a failed
+  execution aborts the whole transaction (Daml has no partial
+  commit), so the failure is NOT written to the on-ledger log —
+  it surfaces only in the executor's off-ledger logs. The
+  `ExecutionLog.success` field is therefore always `True`; treat
+  the absence of an expected log entry, not a `success=False`
+  entry, as the signal that an execution failed. Revocable at any
+  time by the delegator.
 
 ---
 

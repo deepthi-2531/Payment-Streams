@@ -1,0 +1,114 @@
+-- | Daml Script tests for the transitional V1 allocation-request shim.
+-- Deleted together with the V1 lane (see "V1 lane retirement").
+module Test.V1Shim.AllocationRequestShimTest where
+
+import DA.Assert ((===))
+import DA.TextMap qualified as TextMap
+import DA.Time
+import Daml.Script
+
+import Splice.Api.Token.MetadataV1
+import Splice.Api.Token.HoldingV1 (InstrumentId(..))
+import Splice.Api.Token.AllocationV1
+import qualified Splice.Api.Token.AllocationRequestV1 as AR1
+
+import CantonStreams.V1Shim.AllocationRequestShim
+
+data Fixture = Fixture with
+  operator : Party
+  sender : Party
+  recipient : Party
+  executor : Party
+  requestCid : ContractId StreamAllocationRequestV1
+
+setupRequest : Script Fixture
+setupRequest = do
+  operator <- allocateParty "Operator"
+  sender <- allocateParty "Sender"
+  recipient <- allocateParty "Recipient"
+  executor <- allocateParty "Executor"
+  now <- getTime
+  let leg = TransferLeg with
+        sender
+        receiver = recipient
+        amount = 25.0
+        instrumentId = InstrumentId with admin = operator, id = "Amulet"
+        meta = emptyMetadata
+  let settlement = SettlementInfo with
+        executor
+        settlementRef = Reference with id = "stream-001:cycle-7", cid = None
+        requestedAt = now
+        allocateBefore = addRelTime now (minutes 10)
+        settleBefore = addRelTime now (minutes 15)
+        meta = emptyMetadata
+  requestCid <- submit operator do
+    createCmd StreamAllocationRequestV1 with
+      requestedBy = operator
+      settlement
+      transferLegs = TextMap.fromList [("leg-1", leg)]
+      meta = emptyMetadata
+  pure Fixture with operator, sender, recipient, executor, requestCid
+
+-- | The V1 interface view exposes the settlement + legs, and the leg
+-- sender (whose wallet must allocate) can see the contract.
+test_viewExposesV1Shape : Script ()
+test_viewExposesV1Shape = do
+  f <- setupRequest
+  Some shim <- queryContractId f.sender f.requestCid
+  shim.settlement.settlementRef.id === "stream-001:cycle-7"
+  let legs = TextMap.toList shim.transferLegs
+  map fst legs === ["leg-1"]
+  case legs of
+    [(_, leg)] -> do
+      leg.sender === f.sender
+      leg.receiver === f.recipient
+      leg.amount === 25.0
+    _ -> abort "expected exactly one leg"
+
+-- | A leg sender can reject via the interface choice; the request archives.
+test_senderCanReject : Script ()
+test_senderCanReject = do
+  f <- setupRequest
+  let icid = toInterfaceContractId @AR1.AllocationRequest f.requestCid
+  _ <- submit f.sender do
+    exerciseCmd icid AR1.AllocationRequest_Reject with
+      actor = f.sender
+      extraArgs = ExtraArgs with
+        context = ChoiceContext with values = TextMap.empty
+        meta = emptyMetadata
+  requests <- query @StreamAllocationRequestV1 f.operator
+  requests === []
+
+-- | A non-sender (e.g. the recipient) cannot reject.
+test_nonSenderCannotReject : Script ()
+test_nonSenderCannotReject = do
+  f <- setupRequest
+  let icid = toInterfaceContractId @AR1.AllocationRequest f.requestCid
+  submitMustFail f.recipient do
+    exerciseCmd icid AR1.AllocationRequest_Reject with
+      actor = f.recipient
+      extraArgs = ExtraArgs with
+        context = ChoiceContext with values = TextMap.empty
+        meta = emptyMetadata
+
+-- | The executor can withdraw the request (e.g. cycle expired).
+test_executorCanWithdraw : Script ()
+test_executorCanWithdraw = do
+  f <- setupRequest
+  let icid = toInterfaceContractId @AR1.AllocationRequest f.requestCid
+  _ <- submit f.executor do
+    exerciseCmd icid AR1.AllocationRequest_Withdraw with
+      extraArgs = ExtraArgs with
+        context = ChoiceContext with values = TextMap.empty
+        meta = emptyMetadata
+  requests <- query @StreamAllocationRequestV1 f.operator
+  requests === []
+
+-- | The requester can clean up via the native choice.
+test_requesterCanArchive : Script ()
+test_requesterCanArchive = do
+  f <- setupRequest
+  submit f.operator do
+    exerciseCmd f.requestCid ShimArchive
+  requests <- query @StreamAllocationRequestV1 f.operator
+  requests === []
