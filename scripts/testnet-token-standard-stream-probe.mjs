@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { createPrivateKey, sign as cryptoSign } from "node:crypto";
 import {
   GrpcTransport,
   createDefaultOrchestrator,
   createLogger,
+  createSigningFromEnv,
 } from "../packages/sdk/dist/index.js";
 import { loadLocalScriptConfig } from "./local-config.mjs";
 
@@ -24,9 +24,10 @@ const config = {
     localConfig.tokenStandardPackageId ?? "",
   ),
   senderParty: env("SENDER_PARTY"),
-  senderPrivateKey: env("SENDER_PRIVATE_KEY"),
   recipientParty: env("RECIPIENT_PARTY"),
-  recipientPrivateKey: env("RECIPIENT_PRIVATE_KEY"),
+  // Signing goes through the Wallet Gateway via SigningProvider.
+  // Private key env vars (SENDER_PRIVATE_KEY / RECIPIENT_PRIVATE_KEY) are
+  // intentionally NOT read here — the gateway holds the keys.
   escrowParty: env("ESCROW_PARTY"),
   amount: env("DEPOSIT_AMOUNT", env("AMOUNT", "1.0000000000")),
   streamId: env("STREAM_ID", `token-standard-stream-${Date.now()}`),
@@ -101,35 +102,9 @@ function normalizeVestingMode(mode) {
   }
 }
 
-function fingerprintFromParty(party) {
-  const pieces = String(party || "").split("::");
-  return pieces[pieces.length - 1] || "";
-}
-
-function signPreparedHash(preparedTransactionHash, privateKeyBase64) {
-  const naclSecret = Buffer.from(privateKeyBase64, "base64");
-  if (naclSecret.length !== 64) {
-    throw new Error(`privateKey must decode to 64 bytes, got ${naclSecret.length}`);
-  }
-
-  const seed = naclSecret.subarray(0, 32);
-  const pkcs8Header = Buffer.from([
-    0x30, 0x2e,
-    0x02, 0x01, 0x00,
-    0x30, 0x05,
-    0x06, 0x03, 0x2b, 0x65, 0x70,
-    0x04, 0x22,
-    0x04, 0x20,
-  ]);
-  const pkcs8Der = Buffer.concat([pkcs8Header, seed]);
-  const privateKey = createPrivateKey({
-    key: pkcs8Der,
-    format: "der",
-    type: "pkcs8",
-  });
-
-  return cryptoSign(null, Buffer.from(preparedTransactionHash, "base64"), privateKey).toString("base64");
-}
+// signPreparedHash() is gone. The Wallet Gateway signs prepared
+// transactions on behalf of the configured party; the probe delegates
+// the entire prepare → sign → execute flow via SigningProvider.
 
 async function requestLedger(path, { method = "POST", body } = {}) {
   const response = await fetch(`${config.apiUrl}${path}`, {
@@ -263,77 +238,41 @@ async function waitForContract(matchFn, parties, label, attempts = 40) {
   throw new Error(`Timed out waiting for ${label}`);
 }
 
-async function prepareAndExecute({ party, privateKeyBase64, commands, commandId, readAs = [] }) {
-  const prepared = await requestLedger("/v2/interactive-submission/prepare", {
-    body: {
-      userId: config.commandUserId,
-      commandId,
-      commands,
-      actAs: [party],
-      readAs,
-      synchronizerId: config.synchronizerId,
-      disclosedContracts: [],
-      verboseHashing: false,
-      packageIdSelectionPreference: [],
-    },
-  });
+// prepareAndExecute delegates to the Wallet Gateway via
+// SigningProvider.prepareExecuteAndWait. The gateway performs the
+// prepare → sign → execute round-trip server-side using whichever
+// signing-provider kind holds the party's key. `setSigningResolver`
+// must be called in main() before any prepareAndExecute() invocation.
+let _signingResolverHandle = null;
 
-  const preparedTransactionHash = String(prepared?.preparedTransactionHash || "").trim();
-  const preparedTransaction = String(prepared?.preparedTransaction || "").trim();
-  if (!preparedTransactionHash || !preparedTransaction) {
+function setSigningResolver(resolver) {
+  _signingResolverHandle = resolver;
+}
+
+async function prepareAndExecute({ party, commands, commandId, readAs = [] }) {
+  if (!_signingResolverHandle) {
     throw new Error(
-      `Interactive prepare response missing hash/transaction: ${JSON.stringify(prepared, null, 2)}`,
+      "SigningProvider resolver not initialized — call setSigningResolver() in main() before any prepareAndExecute() invocation.",
     );
   }
 
-  const signature = signPreparedHash(preparedTransactionHash, privateKeyBase64);
-  const executePayload = {
-    userId: config.commandUserId,
-    preparedTransaction,
-    hashingSchemeVersion:
-      String(prepared?.hashingSchemeVersion || "").trim() || "HASHING_SCHEME_VERSION_V2",
-    submissionId: commandId,
-    deduplicationPeriod:
-      prepared?.deduplicationPeriod && typeof prepared.deduplicationPeriod === "object"
-        ? prepared.deduplicationPeriod
-        : { Empty: {} },
-    partySignatures: {
-      signatures: [
-        {
-          party,
-          signatures: [
-            {
-              signature,
-              signedBy: fingerprintFromParty(party),
-              format: "SIGNATURE_FORMAT_CONCAT",
-              signingAlgorithmSpec: "SIGNING_ALGORITHM_SPEC_ED25519",
-            },
-          ],
-        },
-      ],
-    },
+  const provider = await _signingResolverHandle.forParty(party);
+  const result = await provider.prepareExecuteAndWait({
+    commandId,
+    commands,
+    actAs: [party],
+    readAs,
+    synchronizerId: config.synchronizerId,
+    disclosedContracts: [],
+    packageIdSelectionPreference: [],
+  });
+
+  // Return shape kept compatible with prior body (`updateId` etc.).
+  return {
+    updateId: result.tx.payload.updateId,
+    completionOffset: result.tx.payload.completionOffset,
+    commandId: result.tx.commandId,
   };
-
-  try {
-    return await requestLedger("/v2/interactive-submission/executeAndWait", {
-      body: executePayload,
-    });
-  } catch (error) {
-    const message = String(error?.message || error).toLowerCase();
-    const isFallback =
-      message.includes("404") ||
-      message.includes("405") ||
-      message.includes("method not allowed") ||
-      message.includes("unsupported endpoint") ||
-      message.includes("not found");
-    if (!isFallback) {
-      throw error;
-    }
-
-    return requestLedger("/v2/interactive-submission/execute", {
-      body: executePayload,
-    });
-  }
 }
 
 function buildCreateArguments(startTime, endTime) {
@@ -508,15 +447,31 @@ async function main() {
   required(config.cantonHost, "CANTON_HOST");
   required(config.packageId, "CANTON_STREAMS_TOKEN_STANDARD_PACKAGE_ID");
   required(config.senderParty, "SENDER_PARTY");
-  required(config.senderPrivateKey, "SENDER_PRIVATE_KEY");
   required(config.recipientParty, "RECIPIENT_PARTY");
-  required(config.recipientPrivateKey, "RECIPIENT_PRIVATE_KEY");
   required(config.escrowParty, "ESCROW_PARTY");
+  // Wallet Gateway connection is the only signing config required.
+  required(
+    env("CANTON_STREAMS_WALLET_GATEWAY_URL"),
+    "CANTON_STREAMS_WALLET_GATEWAY_URL (signing via gateway)",
+  );
+  required(
+    env("CANTON_STREAMS_WALLET_GATEWAY_TOKEN"),
+    "CANTON_STREAMS_WALLET_GATEWAY_TOKEN (signing via gateway)",
+  );
   required(config.instrumentAdmin, "INSTRUMENT_ADMIN");
   required(config.instrumentDepository, "INSTRUMENT_DEPOSITORY");
 
   const logger = createLogger("token-standard-probe", env("LOG_LEVEL", "info"));
   const orchestrator = createDefaultOrchestrator();
+
+  // Bootstrap the SigningProvider resolver from env. The resolver
+  // lazy-binds each party to its gateway-owned key on first use.
+  const signingFactory = await createSigningFromEnv();
+  setSigningResolver(signingFactory.resolver);
+  log("Signing", {
+    gatewayUrl: env("CANTON_STREAMS_WALLET_GATEWAY_URL"),
+    resolver: "wallet-gateway",
+  });
   const serviceTransport = new GrpcTransport({
     host: config.cantonHost,
     port: config.cantonPort,
@@ -543,7 +498,6 @@ async function main() {
 
     const createResult = await prepareAndExecute({
       party: config.senderParty,
-      privateKeyBase64: config.senderPrivateKey,
       commandId: `token-standard-create-${config.streamId}-${Date.now()}`,
       commands: [
         {
@@ -566,7 +520,6 @@ async function main() {
 
     const acceptResult = await prepareAndExecute({
       party: config.recipientParty,
-      privateKeyBase64: config.recipientPrivateKey,
       commandId: `token-standard-accept-${config.streamId}-${Date.now()}`,
       commands: [
         {

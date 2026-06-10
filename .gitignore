@@ -51,3 +51,8 @@ debug-config.mjs
 
 # Internal reports (third-party operational detail; not for publication)
 docs/reports/
+
+# Runtime state files
+.proxy-settlement-journal.json
+.executor-guard
+.executor-offset

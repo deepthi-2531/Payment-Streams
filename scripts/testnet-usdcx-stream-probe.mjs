@@ -620,7 +620,7 @@ async function main() {
   // Bootstrap the SigningProvider resolver from env. The
   // resolver lazy-binds each party to its gateway-owned key on first
   // use; per-party caching keeps subsequent calls fast.
-  const signingFactory = createSigningFromEnv();
+  const signingFactory = await createSigningFromEnv();
   setSigningResolver(signingFactory.resolver);
   log("Signing", {
     gatewayUrl: env("CANTON_STREAMS_WALLET_GATEWAY_URL"),

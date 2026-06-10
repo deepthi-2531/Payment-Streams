@@ -71,6 +71,13 @@ data Milestone = Milestone with
   deriving (Eq, Show)
 
 -- | A V2-only milestone-stream admin/observability contract.
+--
+-- Trust boundary: the confirm/cancel choices are operator-controlled
+-- bookkeeping, so a faulty or malicious operator can desync this record
+-- from real settlement. The underlying V2 `Allocation` (see
+-- `allocationCid`) is the authoritative settlement state — consumers
+-- must reconcile against it and treat this contract as a non-binding
+-- index over it.
 template MilestoneAdmin
   with
     streamId : StreamId
