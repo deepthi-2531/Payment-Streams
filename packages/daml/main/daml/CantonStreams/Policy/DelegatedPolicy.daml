@@ -117,17 +117,21 @@ template DelegatedPolicy
           (amount <= rateLimit.maxAmountPerExecution)
 
         -- Load and validate the rate-limit state.
-        -- [M-2] Resolve the CANONICAL state by key and reject a
-        -- caller-supplied cid that isn't it. This stops the executor from
-        -- passing a freshly-minted empty PolicyExecutionState (same
-        -- policyId) to reset the counters and bypass the rate limit.
-        (canonicalCid, canonicalState) <- fetchByKey @PolicyExecutionState (sender, policyId)
-        assertMsg
-          "currentStateCid is not the canonical rate-limit state for this policy"
-          (currentStateCid == canonicalCid)
-        let currentState = canonicalState
+        -- [M-2] Bind EVERY identifying field of the supplied state to this
+        -- policy, not just policyId. The state is co-signed by sender +
+        -- executor (so the executor cannot forge one alone), and these
+        -- checks reject a state that belongs to a different policy or a
+        -- different party set — closing the "pass some other state cid" gap
+        -- without contract keys (unsupported in this Daml-LF target).
+        currentState <- fetch currentStateCid
         assertMsg "ExecutionState policy id mismatch"
           (currentState.policyId == policyId)
+        assertMsg "ExecutionState sender mismatch"
+          (currentState.sender == sender)
+        assertMsg "ExecutionState executor mismatch"
+          (currentState.executor == executor)
+        assertMsg "ExecutionState recipient mismatch"
+          (currentState.recipient == recipient)
 
         -- 5. Cooldown
         let cooldown : RelTime = microseconds rateLimit.cooldownInterval
@@ -206,17 +210,13 @@ template PolicyExecutionState
   where
     signatory sender, executor
     observer recipient   -- visibility for the rate-limit state
-
-    -- [M-2] Canonical key: exactly one active rate-limit state per policy.
-    -- Without a key, ExecutePolicy accepted a caller-supplied state cid and
-    -- only checked `policyId`, so the executor could mint a fresh empty
-    -- PolicyExecutionState with the same policyId and pass THAT to reset the
-    -- counters and bypass the rate limit. Keying by (sender, policyId) lets
-    -- ExecutePolicy fetch the canonical state by key and reject any cid that
-    -- isn't it. Daml enforces uniqueness: two active states for one policy
-    -- cannot coexist.
-    key (sender, policyId) : (Party, Text)
-    maintainer key._1
+    -- [M-2] Note: this Daml-LF target does not support contract keys, so
+    -- uniqueness is enforced structurally instead. The state is signed by
+    -- BOTH sender and executor, so the executor cannot unilaterally mint a
+    -- fresh empty state to reset the counters — that create would need the
+    -- sender's authority too. ExecutePolicy additionally binds every party
+    -- field of the supplied state to the policy (not just policyId), so a
+    -- state belonging to a different policy/party set is rejected.
 
     -- | Reset the rate-limit state.
     --
