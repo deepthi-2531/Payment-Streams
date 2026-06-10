@@ -26,6 +26,8 @@ export interface ExecutorConfig {
   logLevel: string;
   /** Path for offset persistence file */
   offsetStorePath: string;
+  /** Path for the execution idempotency-guard persistence file */
+  guardStorePath: string;
 }
 
 export function loadConfig(): ExecutorConfig {
@@ -43,6 +45,7 @@ export function loadConfig(): ExecutorConfig {
     maxConcurrentExecutions: parseInt(env('EXECUTOR_MAX_CONCURRENT', '5'), 10),
     logLevel: env('EXECUTOR_LOG_LEVEL', 'info'),
     offsetStorePath: env('EXECUTOR_OFFSET_PATH', '.executor-offset'),
+    guardStorePath: env('EXECUTOR_GUARD_PATH', '.executor-guard'),
   };
 }
 

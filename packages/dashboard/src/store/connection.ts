@@ -36,3 +36,22 @@ export const useConnectionStore = create<ConnectionStore>()(
     },
   ),
 );
+
+/**
+ * Validate a stored proxy URL before it's used as the fetch base for
+ * authenticated requests. Empty string means same-origin (the default).
+ * Anything else must be a well-formed absolute http(s) URL; a malformed
+ * or hostile stored value falls back to same-origin so it cannot redirect
+ * authenticated calls to an attacker-controlled host.
+ */
+export function safeProxyUrl(proxyUrl: string | undefined): string {
+  if (!proxyUrl) return '';
+  try {
+    const url = new URL(proxyUrl);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return '';
+    // Strip a trailing slash so callers can join `${base}/api/...` cleanly.
+    return proxyUrl.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}

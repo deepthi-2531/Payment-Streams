@@ -49,34 +49,6 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-const DEV_TOKEN_KEY = 'canton-streams-dev-token';
-const DEV_PARTY_KEY = 'canton-streams-dev-party';
-
-function readDevSession(): { token: string | null; party: string | null } {
-  try {
-    return {
-      token: sessionStorage.getItem(DEV_TOKEN_KEY),
-      party: sessionStorage.getItem(DEV_PARTY_KEY),
-    };
-  } catch {
-    return { token: null, party: null };
-  }
-}
-
-function writeDevSession(token: string | null, party: string | null) {
-  try {
-    if (token && party) {
-      sessionStorage.setItem(DEV_TOKEN_KEY, token);
-      sessionStorage.setItem(DEV_PARTY_KEY, party);
-    } else {
-      sessionStorage.removeItem(DEV_TOKEN_KEY);
-      sessionStorage.removeItem(DEV_PARTY_KEY);
-    }
-  } catch {
-    // sessionStorage may be unavailable (incognito etc.)
-  }
-}
-
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<StreamsWalletStatus | null>(null);
   const [accounts, setAccounts] = useState<readonly StreamsWalletAccount[]>([]);
@@ -84,9 +56,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
 
   // Dev-mode fallback — populated only when no wallet is connected.
-  const devInitial = readDevSession();
-  const [devToken, setDevToken] = useState<string | null>(devInitial.token);
-  const [devParty, setDevParty] = useState<string | null>(devInitial.party);
+  // Held in React memory only; never written to web storage.
+  const [devToken, setDevToken] = useState<string | null>(null);
+  const [devParty, setDevParty] = useState<string | null>(null);
 
   // Let StrictMode remount this effect naturally. The cleanup detaches the
   // wallet listeners from the previous run.
@@ -183,7 +155,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Real wallet wins over dev-mode credentials.
       setDevToken(null);
       setDevParty(null);
-      writeDevSession(null, null);
     } catch (err) {
       setError(await walletClient.describeConnectError(err));
     } finally {
@@ -202,13 +173,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setDevToken(null);
     setDevParty(null);
-    writeDevSession(null, null);
   }, []);
 
   const setDevCredentials = useCallback((token: string, party: string) => {
     setDevToken(token);
     setDevParty(party);
-    writeDevSession(token, party);
   }, []);
 
   const primaryAccount = useMemo<StreamsWalletAccount | null>(() => {

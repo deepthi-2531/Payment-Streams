@@ -70,7 +70,7 @@ services:
         VITE_PARTYLAYER_NETWORK: ${VITE_PARTYLAYER_NETWORK:-devnet}
         VITE_PARTYLAYER_APP_NAME: ${VITE_PARTYLAYER_APP_NAME:-Canton Payment Streams}
     ports:
-      - '3000:80'
+      - '3000:8080'
     depends_on:
       proxy:
         condition: service_healthy

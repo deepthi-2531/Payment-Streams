@@ -166,6 +166,30 @@ export type MetadataFetcher = (
   asset: AssetConfig,
 ) => Promise<Partial<AssetCapabilities>>;
 
+/**
+ * Validate remote metadata before it shapes capabilities. The fetcher result
+ * is untrusted (it may originate from a registry/metadata endpoint), so only
+ * keep fields that arrive with the right primitive type and drop the rest.
+ * `paused` is passed through verbatim so the caller can apply its fail-safe
+ * rule; a malformed value becomes `undefined` and is treated as paused.
+ */
+function sanitizeRemoteCapabilities(
+  raw: Partial<AssetCapabilities>,
+): Partial<AssetCapabilities> {
+  if (!raw || typeof raw !== 'object') {
+    return {};
+  }
+  const clean: {
+    -readonly [K in keyof AssetCapabilities]?: AssetCapabilities[K];
+  } = {};
+  if (typeof raw.allocationsV2 === 'boolean') clean.allocationsV2 = raw.allocationsV2;
+  if (typeof raw.allocationsV1 === 'boolean') clean.allocationsV1 = raw.allocationsV1;
+  if (typeof raw.transferEventsV2 === 'boolean') clean.transferEventsV2 = raw.transferEventsV2;
+  if (typeof raw.paused === 'boolean') clean.paused = raw.paused;
+  if (typeof raw.pauseInfo === 'string') clean.pauseInfo = raw.pauseInfo;
+  return clean;
+}
+
 export class CapabilityCache {
   private readonly cache = new Map<string, AssetCapabilities>();
 
@@ -196,12 +220,15 @@ export class CapabilityCache {
       this.cache.set(asset.key, baseline);
       return baseline;
     }
-    const overrides = await this.fetcher(asset);
+    const overrides = sanitizeRemoteCapabilities(await this.fetcher(asset));
     const refreshed: AssetCapabilities = {
       ...baseline,
       ...overrides,
       key: asset.key,
       source: 'on-chain',
+      // Fail safe: the remote endpoint is untrusted, so the asset stays paused
+      // unless the metadata carries a strictly-typed `paused: false`.
+      paused: overrides.paused !== false,
     };
     this.cache.set(asset.key, refreshed);
     return refreshed;

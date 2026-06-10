@@ -27,7 +27,12 @@
  * This adapter remains only for backwards compatibility.
  */
 
-import { createPrivateKey, sign as cryptoSign } from 'node:crypto';
+import {
+  createPrivateKey,
+  createPublicKey,
+  sign as cryptoSign,
+  type KeyObject,
+} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 
 /** @deprecated See module-level deprecation notice. */
@@ -55,45 +60,92 @@ export function trimToUndefined(value: string | undefined | null): string | unde
   return trimmed ? trimmed : undefined;
 }
 
+// Optional override for the public key the loaded signing key must match.
+// When unset, the per-party `publicKey` in the credential map is used.
+const EXPECTED_PUBLIC_KEY_ENV = 'CANTON_STREAMS_WALLET_GATEWAY_EXPECTED_PUBLIC_KEY';
+
+let unverifiedKeyWarned = false;
+
+/** Raw 32-byte Ed25519 public key from a private key, base64-encoded. */
+function derivePublicKeyBase64(privateKey: KeyObject): string {
+  const der = createPublicKey(privateKey).export({ format: 'der', type: 'spki' });
+  // SPKI Ed25519 is a fixed 44-byte structure; the raw key is the trailing 32.
+  return Buffer.from(der.subarray(der.length - 32)).toString('base64');
+}
+
+/**
+ * Build the signing key and fail closed if it does not match the party.
+ * Derives the public key from the loaded private key and compares it to the
+ * expected one (from {@link EXPECTED_PUBLIC_KEY_ENV} or the credential map). On
+ * mismatch the key is rejected; with nothing to compare against we warn once
+ * rather than sign silently with an unverified key.
+ */
+function loadVerifiedSigningKey(
+  privateKey: KeyObject,
+  expectedPublicKey: string | undefined,
+): KeyObject {
+  const derived = derivePublicKeyBase64(privateKey);
+  const expected =
+    trimToUndefined(process.env[EXPECTED_PUBLIC_KEY_ENV]) ?? trimToUndefined(expectedPublicKey);
+
+  if (expected) {
+    if (derived !== expected) {
+      throw new Error(
+        'wallet-gateway signing key does not match the expected party public key',
+      );
+    }
+  } else if (!unverifiedKeyWarned) {
+    unverifiedKeyWarned = true;
+    console.warn(
+      'wallet-gateway signing key is unverified against the on-ledger party; ' +
+        `set ${EXPECTED_PUBLIC_KEY_ENV} or a per-party publicKey to enforce a match.`,
+    );
+  }
+  return privateKey;
+}
+
 export function signPreparedHash(
   preparedTransactionHash: string,
-  credentials: Pick<HostedWalletPartyCredentials, 'privateKey' | 'privateKeyFile'>,
+  credentials: Pick<HostedWalletPartyCredentials, 'privateKey' | 'privateKeyFile' | 'publicKey'>,
 ): string {
   const hashBytes = Buffer.from(preparedTransactionHash, 'base64');
 
+  let signingKey: KeyObject;
   if (credentials.privateKeyFile) {
     const pem = readFileSync(credentials.privateKeyFile, 'utf8');
-    return cryptoSign(null, hashBytes, createPrivateKey(pem)).toString('base64');
+    signingKey = createPrivateKey(pem);
+  } else {
+    const privateKey = trimToUndefined(credentials.privateKey);
+    if (!privateKey) {
+      throw new Error('wallet-gateway credentials are missing a private key');
+    }
+
+    // Prefix match, not substring; PEM is always anchored at `-----BEGIN`.
+    if (privateKey.startsWith('-----BEGIN')) {
+      signingKey = createPrivateKey(privateKey);
+    } else {
+      const naclSecret = Buffer.from(privateKey, 'base64');
+      if (naclSecret.length !== 64) {
+        throw new Error(
+          `wallet-gateway privateKey must decode to 64 bytes (NaCl seed+pub), got ${naclSecret.length}`,
+        );
+      }
+
+      const seed = naclSecret.subarray(0, 32);
+      const pkcs8Header = Buffer.from([
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+      ]);
+      const pkcs8Der = Buffer.concat([pkcs8Header, seed]);
+      signingKey = createPrivateKey({
+        key: pkcs8Der,
+        format: 'der',
+        type: 'pkcs8',
+      });
+    }
   }
 
-  const privateKey = trimToUndefined(credentials.privateKey);
-  if (!privateKey) {
-    throw new Error('wallet-gateway credentials are missing a private key');
-  }
-
-  // Prefix match, not substring; PEM is always anchored at `-----BEGIN`.
-  if (privateKey.startsWith('-----BEGIN')) {
-    return cryptoSign(null, hashBytes, createPrivateKey(privateKey)).toString('base64');
-  }
-
-  const naclSecret = Buffer.from(privateKey, 'base64');
-  if (naclSecret.length !== 64) {
-    throw new Error(
-      `wallet-gateway privateKey must decode to 64 bytes (NaCl seed+pub), got ${naclSecret.length}`,
-    );
-  }
-
-  const seed = naclSecret.subarray(0, 32);
-  const pkcs8Header = Buffer.from([
-    0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-  ]);
-  const pkcs8Der = Buffer.concat([pkcs8Header, seed]);
-  const signingKey = createPrivateKey({
-    key: pkcs8Der,
-    format: 'der',
-    type: 'pkcs8',
-  });
-  return cryptoSign(null, hashBytes, signingKey).toString('base64');
+  const verified = loadVerifiedSigningKey(signingKey, credentials.publicKey);
+  return cryptoSign(null, hashBytes, verified).toString('base64');
 }
 
 export function extractSettlementReferenceFromWalletGatewayResult(

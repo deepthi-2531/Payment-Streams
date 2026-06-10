@@ -19,8 +19,18 @@ ENV DPM_HOME=/opt/dpm
 ENV DPM_SDK_VERSION=3.4.10
 ENV PATH="${DPM_HOME}/bin:${PATH}"
 
-RUN curl -sSL https://get.digitalasset.com/install/install.sh | sh \
-  && dpm install 3.4.10
+# Pin the installer to a known-good revision instead of piping the live
+# URL straight into a shell. We fetch the script, check its sha256 against
+# the expected digest, then run it with the explicit version arg so it does
+# not resolve the moving "latest" channel. Bump both when intentionally
+# upgrading the installer.
+ENV DPM_INSTALLER_SHA256=a58fe45abfe5a54669e8b6d784097b60e27bc098d1284643f6d9771675005d3b
+
+RUN curl -sSL https://get.digitalasset.com/install/install.sh -o /tmp/dpm-install.sh \
+  && echo "${DPM_INSTALLER_SHA256}  /tmp/dpm-install.sh" | sha256sum -c - \
+  && sh /tmp/dpm-install.sh "${DPM_SDK_VERSION}" \
+  && rm -f /tmp/dpm-install.sh \
+  && dpm install "${DPM_SDK_VERSION}"
 
 WORKDIR /build
 
@@ -40,6 +50,16 @@ RUN mkdir -p /canton/dars \
 
 COPY docker/canton-entrypoint.sh /canton/bin/canton-entrypoint.sh
 RUN chmod +x /canton/bin/canton-entrypoint.sh
+
+# Drop root. The sandbox only needs to read its DARs and write the data
+# directory, so run it under an unprivileged account. Pre-create
+# /canton/data (the compose volume mount point) and hand the paths the
+# process writes to the streams user.
+RUN groupadd --system --gid 10001 streams \
+  && useradd --system --uid 10001 --gid streams --home-dir /canton streams \
+  && mkdir -p /canton/data \
+  && chown -R streams:streams /canton /build "${DPM_HOME}"
+USER streams
 
 EXPOSE 6865 10011
 

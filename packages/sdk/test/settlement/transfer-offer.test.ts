@@ -1,7 +1,13 @@
-import { generateKeyPairSync } from 'node:crypto';
+import { createPublicKey, generateKeyPairSync, type KeyObject } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import Decimal from 'decimal.js';
 import { TransferOfferAdapter } from '../../src/settlement/adapters/transfer-offer.js';
+
+/** Raw 32-byte Ed25519 public key, base64-encoded, matching the signer. */
+function rawEd25519PublicKeyBase64(privateKey: KeyObject): string {
+  const spki = createPublicKey(privateKey).export({ type: 'spki', format: 'der' });
+  return Buffer.from(spki.subarray(spki.length - 32)).toString('base64');
+}
 
 const logger = {
   fatal: () => undefined,
@@ -36,6 +42,7 @@ describe('TransferOfferAdapter', () => {
   it('creates a hosted transfer, accepts the pending offer, and returns the receiver acceptance reference', async () => {
     const { privateKey } = generateKeyPairSync('ed25519');
     const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const receiverPublicKey = rawEd25519PublicKeyBase64(privateKey);
     const preparedTransactionHash = Buffer.from('receiver-accept-hash').toString('base64');
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
@@ -79,7 +86,7 @@ describe('TransferOfferAdapter', () => {
       if (pathname === '/api/wallet-gateway/prepare-action') {
         return new Response(JSON.stringify({
           sessionId: 'accept-session-1',
-          expectedPublicKey: 'receiver-public-key',
+          expectedPublicKey: receiverPublicKey,
           prepared: {
             preparedTransactionHash,
           },
@@ -107,7 +114,7 @@ describe('TransferOfferAdapter', () => {
         },
         'Escrow::1220bbb': {
           appToken: 'receiver-app-token',
-          publicKey: 'receiver-public-key',
+          publicKey: receiverPublicKey,
           privateKey: privateKeyPem,
         },
       },
@@ -227,6 +234,8 @@ describe('TransferOfferAdapter', () => {
     const { privateKey: receiverKey } = generateKeyPairSync('ed25519');
     const senderPrivateKeyPem = senderKey.export({ type: 'pkcs8', format: 'pem' }).toString();
     const receiverPrivateKeyPem = receiverKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const senderPublicKey = rawEd25519PublicKeyBase64(senderKey);
+    const receiverPublicKey = rawEd25519PublicKeyBase64(receiverKey);
     const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
       const pathname = new URL(String(input)).pathname;
 
@@ -268,12 +277,12 @@ describe('TransferOfferAdapter', () => {
       credentials: {
         'Sender::1220aaa': {
           appToken: 'sender-app-token',
-          publicKey: 'sender-public-key',
+          publicKey: senderPublicKey,
           privateKey: senderPrivateKeyPem,
         },
         'Receiver::1220bbb': {
           appToken: 'receiver-app-token',
-          publicKey: 'receiver-public-key',
+          publicKey: receiverPublicKey,
           privateKey: receiverPrivateKeyPem,
         },
       },
@@ -317,6 +326,8 @@ describe('TransferOfferAdapter', () => {
     const { privateKey: receiverKey } = generateKeyPairSync('ed25519');
     const senderPrivateKeyPem = senderKey.export({ type: 'pkcs8', format: 'pem' }).toString();
     const receiverPrivateKeyPem = receiverKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const senderPublicKey = rawEd25519PublicKeyBase64(senderKey);
+    const receiverPublicKey = rawEd25519PublicKeyBase64(receiverKey);
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       const pathname = url.pathname;
@@ -410,7 +421,7 @@ describe('TransferOfferAdapter', () => {
       if (pathname === '/api/wallet-gateway/prepare-action') {
         return new Response(JSON.stringify({
           sessionId: 'accept-session-2',
-          expectedPublicKey: 'receiver-public-key',
+          expectedPublicKey: receiverPublicKey,
           prepared: {
             preparedTransactionHash: Buffer.from('receiver-accept-hash').toString('base64'),
           },
@@ -440,12 +451,12 @@ describe('TransferOfferAdapter', () => {
       credentials: {
         'Sender::1220aaa': {
           appToken: 'sender-app-token',
-          publicKey: 'sender-public-key',
+          publicKey: senderPublicKey,
           privateKey: senderPrivateKeyPem,
         },
         'Escrow::1220bbb': {
           appToken: 'receiver-app-token',
-          publicKey: 'receiver-public-key',
+          publicKey: receiverPublicKey,
           privateKey: receiverPrivateKeyPem,
         },
       },
@@ -522,6 +533,8 @@ describe('TransferOfferAdapter', () => {
     const { privateKey: receiverKey } = generateKeyPairSync('ed25519');
     const senderPrivateKeyPem = senderKey.export({ type: 'pkcs8', format: 'pem' }).toString();
     const receiverPrivateKeyPem = receiverKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const senderPublicKey = rawEd25519PublicKeyBase64(senderKey);
+    const receiverPublicKey = rawEd25519PublicKeyBase64(receiverKey);
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input));
       const pathname = url.pathname;
@@ -615,7 +628,7 @@ describe('TransferOfferAdapter', () => {
       if (pathname === '/api/wallet-gateway/prepare-action') {
         return new Response(JSON.stringify({
           sessionId: 'accept-session-source-1',
-          expectedPublicKey: 'receiver-public-key',
+          expectedPublicKey: receiverPublicKey,
           prepared: {
             preparedTransactionHash: Buffer.from('receiver-accept-source-hash').toString('base64'),
           },
@@ -645,12 +658,12 @@ describe('TransferOfferAdapter', () => {
       credentials: {
         'Sender::1220aaa': {
           appToken: 'sender-app-token',
-          publicKey: 'sender-public-key',
+          publicKey: senderPublicKey,
           privateKey: senderPrivateKeyPem,
         },
         'Escrow::1220bbb': {
           appToken: 'receiver-app-token',
-          publicKey: 'receiver-public-key',
+          publicKey: receiverPublicKey,
           privateKey: receiverPrivateKeyPem,
         },
       },
@@ -697,6 +710,8 @@ describe('TransferOfferAdapter', () => {
     const { privateKey: receiverKey } = generateKeyPairSync('ed25519');
     const senderPrivateKeyPem = senderKey.export({ type: 'pkcs8', format: 'pem' }).toString();
     const receiverPrivateKeyPem = receiverKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const senderPublicKey = rawEd25519PublicKeyBase64(senderKey);
+    const receiverPublicKey = rawEd25519PublicKeyBase64(receiverKey);
     let registryCallCount = 0;
 
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -799,7 +814,7 @@ describe('TransferOfferAdapter', () => {
       if (pathname === '/api/wallet-gateway/prepare-action') {
         return new Response(JSON.stringify({
           sessionId: 'accept-session-fallback-1',
-          expectedPublicKey: 'receiver-public-key',
+          expectedPublicKey: receiverPublicKey,
           prepared: {
             preparedTransactionHash: Buffer.from('receiver-accept-fallback-hash').toString('base64'),
           },
@@ -829,12 +844,12 @@ describe('TransferOfferAdapter', () => {
       credentials: {
         'Sender::1220aaa': {
           appToken: 'sender-app-token',
-          publicKey: 'sender-public-key',
+          publicKey: senderPublicKey,
           privateKey: senderPrivateKeyPem,
         },
         'Escrow::1220bbb': {
           appToken: 'receiver-app-token',
-          publicKey: 'receiver-public-key',
+          publicKey: receiverPublicKey,
           privateKey: receiverPrivateKeyPem,
         },
       },

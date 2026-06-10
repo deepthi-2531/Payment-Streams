@@ -14,7 +14,7 @@ ENV VITE_WALLET_NAME=${VITE_WALLET_NAME}
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/dashboard/package.json packages/dashboard/
-RUN pnpm install --frozen-lockfile || pnpm install
+RUN pnpm install --frozen-lockfile
 
 COPY packages/sdk/ packages/sdk/
 COPY packages/dashboard/ packages/dashboard/
@@ -27,5 +27,16 @@ RUN pnpm --filter @canton-streams/dashboard build
 FROM nginx:alpine
 COPY --from=builder /app/packages/dashboard/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
-EXPOSE 80
+
+# Run as the image's built-in unprivileged `nginx` user. nginx listens on
+# 8080 (an unprivileged port the non-root user can bind) and writes its pid
+# under /tmp; redirect the cache/temp dirs the worker needs to writable
+# locations and hand them to the nginx user.
+RUN sed -i 's,listen\s*80;,listen 8080;,' /etc/nginx/conf.d/default.conf \
+  && sed -i 's,^pid\s*/var/run/nginx.pid;,pid /tmp/nginx.pid;,' /etc/nginx/nginx.conf \
+  && sed -i '/^http {/a\    client_body_temp_path /tmp/client_temp;\n    proxy_temp_path /tmp/proxy_temp;\n    fastcgi_temp_path /tmp/fastcgi_temp;\n    uwsgi_temp_path /tmp/uwsgi_temp;\n    scgi_temp_path /tmp/scgi_temp;' /etc/nginx/nginx.conf \
+  && chown -R nginx:nginx /usr/share/nginx/html /etc/nginx/conf.d
+
+USER nginx
+EXPOSE 8080
 CMD ["nginx", "-g", "daemon off;"]

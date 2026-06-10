@@ -85,11 +85,78 @@ check_port() {
   if [ "$FIX_MODE" = "true" ]; then
     local pid
     pid=$(echo "$listener" | awk '{print $2}')
-    color yellow "  → --fix: killing PID $pid"
-    kill -9 "$pid" 2>/dev/null
-    sleep 1
+    safe_kill_shadow "$pid" "$port"
   fi
   return 2
+}
+
+# Kill only a process we can positively identify as a local Canton sandbox
+# (java/dpm) holding the expected port — never an arbitrary port owner.
+# We refuse to touch ssh (that's the tunnel we want) and refuse to kill when
+# the match is ambiguous. SIGTERM first, escalate to SIGKILL only if it
+# survives.
+safe_kill_shadow() {
+  local pid="$1"
+  local port="$2"
+
+  if ! [ "$pid" -gt 0 ] 2>/dev/null; then
+    color yellow "  → --fix: no valid pid resolved for port $port; skipping"
+    return 1
+  fi
+
+  # Full command line of the holder. The shadow we expect is a JVM-based
+  # Canton sandbox launched via dpm/canton/sandbox — not ssh, not anything
+  # else.
+  local cmd
+  cmd=$(ps -p "$pid" -o command= 2>/dev/null)
+  if [ -z "$cmd" ]; then
+    color yellow "  → --fix: pid $pid no longer present; nothing to kill"
+    return 0
+  fi
+
+  case "$cmd" in
+    *ssh*)
+      color yellow "  → --fix: pid $pid looks like an ssh tunnel — refusing to kill"
+      return 1
+      ;;
+  esac
+
+  if ! printf '%s' "$cmd" | grep -Eq '(^|/)(java|dpm|canton)([[:space:]]|$|.*[[:space:]](sandbox|canton)([[:space:]]|$))'; then
+    color yellow "  → --fix: pid $pid does not match the expected local Canton sandbox"
+    echo "         command: $cmd"
+    echo "         refusing to kill an unrecognized process."
+    return 1
+  fi
+
+  # Guard against a port being held by more than one process — only act when
+  # exactly one pid owns it, so --fix can't fan out a kill across unrelated
+  # processes.
+  local holders
+  holders=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null | sort -u)
+  local count
+  count=$(printf '%s\n' "$holders" | grep -c '[0-9]')
+  if [ "$count" -ne 1 ]; then
+    color yellow "  → --fix: ambiguous — $count processes hold port $port; refusing to kill"
+    return 1
+  fi
+
+  color yellow "  → --fix: sending SIGTERM to local sandbox pid $pid"
+  kill -TERM "$pid" 2>/dev/null
+
+  # Give it a moment to exit cleanly before escalating.
+  local i
+  for i in 1 2 3 4 5; do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      color green "  → pid $pid exited after SIGTERM"
+      return 0
+    fi
+    sleep 1
+  done
+
+  color yellow "  → pid $pid survived SIGTERM; sending SIGKILL"
+  kill -KILL "$pid" 2>/dev/null
+  sleep 1
+  return 0
 }
 
 main() {
