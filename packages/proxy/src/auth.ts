@@ -133,7 +133,7 @@ let jwksInitPromise: Promise<void> | null = null;
 
 /** Parse auth config from environment variables. */
 export function parseAuthConfig(): AuthConfig {
-  // [CR-3] Fail closed. The proxy moves funds, so identity must never be
+  // Fail closed. The proxy moves funds, so identity must never be
   // derived from an unverified token or a client header by default. The
   // auth mode now defaults to 'jwt' (full JWKS verification). Dev mode —
   // which trusts X-Canton-Party and mints Canton JWTs for arbitrary
@@ -406,7 +406,7 @@ function authorizeServiceRequest(req: Request, config: AuthConfig): AuthResult {
     );
   }
 
-  // [M-6] Validate the request token against the service token with a
+  // Validate the request token against the service token with a
   // constant-time comparison. A plain `!==` short-circuits on the first
   // differing byte, leaking the shared secret's prefix length through
   // response timing. `timingSafeEqual` requires equal-length buffers, so
@@ -613,7 +613,7 @@ function generateCantonJwt(party: string, actAs: string[]): string {
   const header = b64url({ alg: 'HS256', typ: 'JWT' });
   const now = Math.floor(Date.now() / 1000);
   const payload = b64url({
-    // [H4 fix] Use the full party identifier for `sub` so participants that
+    // Use the full party identifier for `sub` so participants that
     // enforce `sub == actAs prefix` accept the token. Stripping the namespace
     // also conflated parties with the same name across namespaces.
     sub: party,
@@ -639,7 +639,7 @@ function extractToken(req: Request): string | undefined {
   const authHeader = req.headers['authorization'];
   const fromHeader = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
   if (fromHeader) return fromHeader;
-  // [H5 fix] Dev-only fallback: `PROXY_DEFAULT_TOKEN` substituted for missing
+  // Dev-only fallback: `PROXY_DEFAULT_TOKEN` substituted for missing
   // Authorization made the default a master credential when paired with
   // attacker-controlled X-Canton-Party. Restrict to PROXY_AUTH_MODE=dev only.
   const mode = process.env['PROXY_AUTH_MODE'] ?? 'dev';
@@ -660,7 +660,7 @@ function truncateParty(party: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * [CR-3] Refuse to start in an unsafe auth posture. Call this once at
+ * Refuse to start in an unsafe auth posture. Call this once at
  * boot, before binding the listener.
  *
  * Two fail-closed checks:
@@ -712,7 +712,7 @@ export function logAuthConfig(config: AuthConfig): void {
     if (config.jwtAudience) {
       console.log(`  JWT audience: ${config.jwtAudience}`);
     } else {
-      // [M-5] An unset audience accepts any token the IdP minted, including
+      // An unset audience accepts any token the IdP minted, including
       // ones issued for a different relying party on the same IdP. Warn loudly.
       console.warn(
         '  ⚠ PROXY_JWT_AUDIENCE not set — tokens are accepted regardless of ' +

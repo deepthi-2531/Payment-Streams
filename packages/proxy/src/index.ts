@@ -97,7 +97,7 @@ const autoWithdrawConfig = parseAutoWithdrawConfig(process.env);
 
 /** Auth configuration parsed from environment. */
 const authConfig: AuthConfig = parseAuthConfig();
-// [CR-3] Fail closed at boot: refuse to start with a spoofable dev-auth
+// Fail closed at boot: refuse to start with a spoofable dev-auth
 // posture unless it is explicitly acknowledged AND loopback-bound.
 assertAuthConfigSafe(authConfig);
 let startupReadiness: ReadinessReport | null = null;
@@ -143,11 +143,11 @@ app.use(
   }),
 );
 
-// [H-3] Cap request bodies. Stream-create / batch payloads are small JSON;
+// Cap request bodies. Stream-create / batch payloads are small JSON;
 // 64kb is generous and stops memory-exhaustion via oversized POSTs.
 app.use(express.json({ limit: process.env['PROXY_BODY_LIMIT'] ?? '64kb' }));
 
-// [H-3] Lightweight in-process rate limiter (no external dependency). A
+// Lightweight in-process rate limiter (no external dependency). A
 // fixed-window per-IP counter — enough to blunt brute-force / credential-
 // exhaustion against this fund-moving surface. Operators fronting the proxy
 // with a real gateway (nginx, API gateway) can disable it via
@@ -243,7 +243,7 @@ async function createAuthorizedClientWithParty(
 }
 
 /**
- * [H-2] Parties allowed to read across other parties' streams (operators,
+ * Parties allowed to read across other parties' streams (operators,
  * dashboards run by the dApp). Defaults to the service-party allow-list,
  * extensible via PROXY_OPERATOR_READERS. When empty, NO party may read
  * streams it does not participate in.
@@ -259,7 +259,7 @@ const OPERATOR_READERS: Set<string> = new Set(
 );
 
 /**
- * [H-2] Enforce that a read request is scoped to the caller's own party.
+ * Enforce that a read request is scoped to the caller's own party.
  *
  * The ledger's own visibility is NOT a sufficient authorization boundary
  * for a multi-tenant proxy: if the proxy's actAs identity can see other
@@ -618,7 +618,7 @@ app.get('/api/stream-requests', async (req, res) => {
   try {
     const authed = await createAuthorizedClientWithParty(req, 'query');
     client = authed.client;
-    // [H-2] Scope the sender/recipient filter to the caller's own party.
+    // Scope the sender/recipient filter to the caller's own party.
     const scoped = scopeReadFilter(authed.party, {
       sender: req.query['sender'] as string | undefined,
       recipient: req.query['recipient'] as string | undefined,
@@ -650,7 +650,7 @@ app.get('/api/streams', async (req, res) => {
   try {
     const authed = await createAuthorizedClientWithParty(req, 'query');
     client = authed.client;
-    // [H-2] Scope the sender/recipient filter to the caller's own party.
+    // Scope the sender/recipient filter to the caller's own party.
     const scoped = scopeReadFilter(authed.party, {
       sender: req.query['sender'] as string | undefined,
       recipient: req.query['recipient'] as string | undefined,
@@ -688,7 +688,7 @@ app.get('/api/streams/:sender/:streamId', async (req, res) => {
     const authed = await createAuthorizedClientWithParty(req, 'query');
     client = authed.client;
     const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
-    // [H-2] A specific stream is only readable by its participants (or a
+    // A specific stream is only readable by its participants (or a
     // configured operator-reader). The ledger may surface it more broadly
     // through the proxy's actAs identity, so enforce participation here.
     const isParticipant =
@@ -1291,7 +1291,7 @@ function handleError(res: express.Response, err: unknown, operation: string): vo
     return;
   }
   const status = (err as any)?.statusCode ?? 500;
-  // [M-7] Always log the full error server-side with a correlation id.
+  // Always log the full error server-side with a correlation id.
   const correlationId = `${operation}-${Date.now().toString(36)}`;
   console.error(`[${correlationId}] ${operation} error:`, err);
   // For 5xx, do NOT echo the raw upstream/ledger error message to the

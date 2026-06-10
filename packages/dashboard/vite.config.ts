@@ -39,7 +39,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    // [L-3] Do not ship original TypeScript to production by default —
+    // Do not ship original TypeScript to production by default —
     // sourcemaps disclose the full app source + internal structure.
     // Opt in for a debugging build with VITE_SOURCEMAP=true.
     sourcemap: process.env['VITE_SOURCEMAP'] === 'true',

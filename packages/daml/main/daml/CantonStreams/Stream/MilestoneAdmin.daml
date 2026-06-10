@@ -103,7 +103,7 @@ template MilestoneAdmin
       -- Milestones list must be non-empty + sum equals totalDeposited
       && length milestones > 0
       && sum (map (.amount) milestones) == totalDeposited
-      -- [L-12] Each leg amount strictly positive (sum alone allowed +X/-X pairs).
+      -- Each leg amount strictly positive (sum alone allowed +X/-X pairs).
       && all (\m -> m.amount > 0.0) milestones
 
     -- | Bind the multi-leg V2 `Allocation` cid after the sender

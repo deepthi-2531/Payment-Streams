@@ -45,7 +45,7 @@ function parseArgs(argv) {
         result.apiUrl = argv[++i] || "";
         break;
       case "--admin-token":
-        // [H-5] A JWT on the command line leaks via `ps` and shell
+        // A JWT on the command line leaks via `ps` and shell
         // history. Refuse the flag; require the CANTON_ADMIN_TOKEN env var.
         fail(
           "--admin-token is no longer accepted: a JWT passed as a CLI " +

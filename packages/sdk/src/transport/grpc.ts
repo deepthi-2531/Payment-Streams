@@ -221,7 +221,7 @@ function commandId(): string {
  */
 
 /**
- * [M-1] Convert a ledger offset string (an int64) to the JS number the
+ * Convert a ledger offset string (an int64) to the JS number the
  * proto field expects, WITHOUT silently losing precision. `parseInt`
  * truncates above 2^53, which would resolve a money-bearing ACS/update
  * read to the WRONG offset. We assert the value is within
@@ -283,7 +283,7 @@ export class GrpcTransport implements Transport {
         callCreds,
       );
     } else if (config.token) {
-      // [H-4] Attaching a bearer JWT to a plaintext channel makes a
+      // Attaching a bearer JWT to a plaintext channel makes a
       // long-lived ledger token sniffable and replayable by any on-path
       // observer. Permit it only for loopback targets (local dev) or when
       // the caller explicitly opts in via `allowInsecureToken`.

@@ -146,7 +146,7 @@ async function postJson(
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  // [M-9] Never follow redirects on an authenticated call (the default
+  // Never follow redirects on an authenticated call (the default
   // re-sends the Authorization header to the 3xx target — token exfil to
   // an attacker host), and bound the request with a timeout.
   const ac = new AbortController();

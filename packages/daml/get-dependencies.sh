@@ -29,7 +29,7 @@ REQUIRED_DARS=(
   "daml-finance-holding"
 )
 
-# [H-6] Expected SHA-256 of each downloaded DAR. A downloaded artifact is
+# Expected SHA-256 of each downloaded DAR. A downloaded artifact is
 # verified against this map; a mismatch (upstream tamper, release re-cut,
 # MITM) aborts the build. Populate by running once, recording the printed
 # `sha256` for each DAR, and committing the values here. Until populated,

@@ -197,7 +197,7 @@ export function findEligibleTokenStandardStreams(
         withdrawableDecimal: balances.withdrawable,
       };
     })
-    // [H9 fix] Previously this was `stream.withdrawable !== '0.0000000000'`,
+    // Previously this was `stream.withdrawable !== '0.0000000000'`,
     // which admitted any sub-cent value (e.g. '0.0000000001') and triggered
     // meaningless on-ledger withdraws that either fail at the Daml `ensure`
     // ("amount must be positive" is true but accrual not yet meaningful) or
@@ -891,7 +891,7 @@ function resolveWithdrawTimeForRecoveredAmount(
 }
 
 /**
- * [H8 fix] Find the exact ms timestamp at which the stream's withdrawable
+ * Find the exact ms timestamp at which the stream's withdrawable
  * equals `settledAmount`.
  *
  * Previously this was a 1ms-step linear scan from `fromMs` to `toMs`. On

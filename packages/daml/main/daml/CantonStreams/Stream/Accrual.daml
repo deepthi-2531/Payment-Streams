@@ -68,7 +68,7 @@ steppedAccrual totalDeposited startTime stepInterval amountPerStep now
   | otherwise =
       let elapsed   = convertRelTimeToMicroseconds (subTime now startTime)
           interval  = convertRelTimeToMicroseconds stepInterval
-      -- [M-4] Defensive guard: a zero/negative interval would divide-by-
+      -- Defensive guard: a zero/negative interval would divide-by-
       -- zero and abort every lifecycle choice, locking the funds. Creation
       -- is already gated by `validVestingMode`, but guard here too so a
       -- legacy/migrated contract degrades to "nothing accrued" rather than

@@ -49,7 +49,7 @@ template LocalAssetEscrow
     escrowOperator : Party
     recipientAccount : AccountKey   -- ^ Recipient's Daml Finance account
     senderAccount : AccountKey
-      -- ^ [H-1] Sender's own Daml Finance account. Refunds on cancel MUST
+      -- ^ Sender's own Daml Finance account. Refunds on cancel MUST
       -- land here, not in `escrow.account` — the live escrow holding's
       -- account is stamped with the recipient account during finalize, so
       -- using it for the sender refund mis-routed funds to the recipient.
@@ -63,7 +63,7 @@ template LocalAssetEscrow
       && state.totalWithdrawn >= 0.0
       && state.totalWithdrawn <= config.totalDeposited
       && escrow.amount >= 0.0
-      && validVestingMode config.vestingMode  -- [M-4]
+      && validVestingMode config.vestingMode
 
     -- | Withdraw accrued tokens to the recipient's account.
     nonconsuming choice Withdraw_LocalAsset : WithdrawResult
@@ -73,7 +73,7 @@ template LocalAssetEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- [CR-1] Bound the caller-supplied accrual time to ledger time.
+        -- Bound the caller-supplied accrual time to ledger time.
         now <- getTime
         assertMsg "withdrawTime must be at or before ledger time" (withdrawTime <= now)
 
@@ -117,7 +117,7 @@ template LocalAssetEscrow
         assertMsg "Stream not cancellable" config.cancellable
         assertMsg "Stream not active" (state.status == Active)
 
-        -- [CR-2] Bound cancelTime to ledger time.
+        -- Bound cancelTime to ledger time.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
@@ -132,11 +132,11 @@ template LocalAssetEscrow
         if recipientAmount > 0.0 then do
           (recipientEscrow, remainderEscrow) <- splitHolding escrow recipientAmount
           _ <- settleTransfer recipientEscrow recipientAccount config.recipient
-          -- [H-1] Return remainder to the sender's OWN account.
+          -- Return remainder to the sender's OWN account.
           _ <- settleTransfer remainderEscrow senderAccount config.sender
           pure ()
         else do
-          -- [H-1] Return entire escrow to the sender's OWN account.
+          -- Return entire escrow to the sender's OWN account.
           _ <- settleTransfer escrow senderAccount config.sender
           pure ()
 
@@ -159,7 +159,7 @@ template LocalAssetEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- [CR-2] Bound cancelTime to ledger time.
+        -- Bound cancelTime to ledger time.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 

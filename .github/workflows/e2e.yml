@@ -32,7 +32,7 @@ on:
         type: boolean
         default: false
 
-# [L-16] Least-privilege default token scope.
+# Least-privilege default token scope.
 permissions:
   contents: read
 
@@ -50,7 +50,7 @@ jobs:
 
       - name: Resolve effective Splice pinned commit
         id: splicepin
-        # [L-17] User-controlled input via env, never interpolated into the
+        # User-controlled input via env, never interpolated into the
         # script body. Also validate it's a hex git sha before use.
         env:
           INPUT_PINNED_COMMIT: ${{ inputs.splice_pinned_commit }}
@@ -67,7 +67,7 @@ jobs:
           fi
 
       - name: Print resolved configuration
-        # [L-17] Inputs via env, not interpolated into the echo (a crafted
+        # Inputs via env, not interpolated into the echo (a crafted
         # wallet_gateway_url with backticks/$() would otherwise run in shell).
         env:
           RESOLVED_COMMIT: ${{ steps.splicepin.outputs.commit }}

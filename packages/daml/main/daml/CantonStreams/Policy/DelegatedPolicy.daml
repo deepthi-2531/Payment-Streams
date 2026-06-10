@@ -79,7 +79,7 @@ template DelegatedPolicy
     --
     -- The companion `PolicyExecutionState` is consumed and recreated with
     -- updated counters; an `ExecutionLog` is emitted on SUCCESS. Note
-    -- (L-11): a failed execution aborts the whole transaction — Daml has
+    -- that a failed execution aborts the whole transaction — Daml has
     -- no partial commit — so failures are NOT written to the on-ledger
     -- log; `ExecutionLog.success` is therefore always True. Auditors
     -- detect a failure by the ABSENCE of an expected log entry, not by a
@@ -108,7 +108,7 @@ template DelegatedPolicy
           (null streamFilters || targetStreamId `elem` streamFilters)
 
         -- 4. Per-execution amount cap
-        -- [M-3] Also require a strictly-positive amount. A zero/negative
+        -- Also require a strictly-positive amount. A zero/negative
         -- amount trivially passes `amount <= cap` and would let the executor
         -- log unbounded "executions" (or a negative-amount clawback) without
         -- tripping the per-execution cap.
@@ -117,7 +117,7 @@ template DelegatedPolicy
           (amount <= rateLimit.maxAmountPerExecution)
 
         -- Load and validate the rate-limit state.
-        -- [M-2] Bind EVERY identifying field of the supplied state to this
+        -- Bind EVERY identifying field of the supplied state to this
         -- policy, not just policyId. The state is co-signed by sender +
         -- executor (so the executor cannot forge one alone), and these
         -- checks reject a state that belongs to a different policy or a
@@ -210,7 +210,7 @@ template PolicyExecutionState
   where
     signatory sender, executor
     observer recipient   -- visibility for the rate-limit state
-    -- [M-2] Note: this Daml-LF target does not support contract keys, so
+    -- Note: this Daml-LF target does not support contract keys, so
     -- uniqueness is enforced structurally instead. The state is signed by
     -- BOTH sender and executor, so the executor cannot unilaterally mint a
     -- fresh empty state to reset the counters — that create would need the
@@ -220,7 +220,7 @@ template PolicyExecutionState
 
     -- | Reset the rate-limit state.
     --
-    -- [C5 fix] Previously controller-by-sender only. A compromised sender (or
+    -- Previously controller-by-sender only. A compromised sender (or
     -- sender colluding with executor) could reset the counter before each
     -- malicious execution, bypassing `maxExecutionsPerPeriod` and
     -- `cooldownInterval`. This defeated the policy's primary security promise.

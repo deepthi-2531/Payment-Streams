@@ -360,7 +360,7 @@ export class SettlementOrchestrator {
     // Legacy TokenStandardEscrow workflow templates are not shipped.
     assertTokenStandardEscrowAvailable();
 
-    // [H1 fix] Single `now` for the entire cancel flow. Previously
+    // Single `now` for the entire cancel flow. Previously
     // `getBalances(stream)` defaulted to `new Date()` (T1) and
     // `cancelTimeMicros` was constructed from a second `new Date()` (T2);
     // the Daml `MutualCancel_Stream` choice's re-accrual at T2 would fail
