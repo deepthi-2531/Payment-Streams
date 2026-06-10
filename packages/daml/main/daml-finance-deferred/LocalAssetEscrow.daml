@@ -167,6 +167,9 @@ template LocalAssetEscrow
             recipientAmount = max 0.0 (accrued - state.totalWithdrawn)
             senderRefundAmount = max 0.0 (config.totalDeposited - accrued)
 
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
         if recipientAmount > 0.0 then do
           (recipientEscrow, remainderEscrow) <- splitHolding escrow recipientAmount
           _ <- settleTransfer recipientEscrow recipientAccount config.recipient

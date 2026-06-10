@@ -194,6 +194,9 @@ template StreamHoldingEscrow
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
 
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
         if recipientAmount > 0.0 then do
           (recipientEscrow, senderEscrow) <- splitHolding escrow recipientAmount
           _transferredEscrow <- settleTransfer recipientEscrow recipientAccount config.recipient

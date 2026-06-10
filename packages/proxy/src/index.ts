@@ -724,7 +724,22 @@ app.get('/api/streams/:sender/:streamId', async (req, res) => {
 app.get('/api/streams/:sender/:streamId/history', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // History exposes the same stream data as the getter, so apply the
+    // same participation check: only the sender, recipient, or a
+    // configured operator-reader may read it.
+    const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
+    const isParticipant =
+      stream.config.sender === authed.party ||
+      stream.config.recipient === authed.party;
+    if (!isParticipant && !OPERATOR_READERS.has(authed.party)) {
+      throw new AuthError(
+        403,
+        'read_scope_violation',
+        'You may only read a stream where you are the sender or recipient.',
+      );
+    }
     const events = await client.getStreamHistory(req.params['sender']!, req.params['streamId']!);
     res.json(serializeForJson(events));
   } catch (err) {

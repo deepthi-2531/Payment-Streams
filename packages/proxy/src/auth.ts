@@ -106,6 +106,11 @@ export interface AuthConfig {
   requestedMode: AuthMode;
   /** True iff PROXY_ALLOW_DEV_AUTH=true. Dev mode requires this. */
   devAuthAcknowledged: boolean;
+  /** True iff PROXY_ALLOW_ANY_AUDIENCE=true. jwt mode without an expected
+   * audience requires this acknowledgement; otherwise the proxy refuses
+   * to start (a token minted for another relying party on the same IdP
+   * would otherwise be accepted). */
+  audienceUnenforcedAcknowledged: boolean;
   /** Parties allowed user-level actions. null = open access. */
   userParties: Set<string> | null;
   /** Parties allowed service-level actions. null = open access. */
@@ -150,6 +155,7 @@ export function parseAuthConfig(): AuthConfig {
     mode,
     requestedMode,
     devAuthAcknowledged,
+    audienceUnenforcedAcknowledged: process.env['PROXY_ALLOW_ANY_AUDIENCE'] === 'true',
     userParties: parsePartySet(process.env['PROXY_USER_PARTIES']),
     serviceParties: parsePartySet(process.env['PROXY_SERVICE_PARTIES']),
     serviceToken: process.env['PROXY_SERVICE_TOKEN'] ?? null,
@@ -697,6 +703,15 @@ export function assertAuthConfigSafe(config: AuthConfig): void {
       );
     }
   }
+  if (config.mode === 'jwt' && !config.jwtAudience && !config.audienceUnenforcedAcknowledged) {
+    throw new Error(
+      'Refusing to start: jwt mode without PROXY_JWT_AUDIENCE accepts any ' +
+        'token the IdP minted, including one issued for a different relying ' +
+        'party on the same IdP. Set PROXY_JWT_AUDIENCE to this proxy’s ' +
+        'expected audience. For a local run where that is genuinely not ' +
+        'applicable, set PROXY_ALLOW_ANY_AUDIENCE=true to acknowledge the risk.',
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -712,13 +727,13 @@ export function logAuthConfig(config: AuthConfig): void {
     if (config.jwtAudience) {
       console.log(`  JWT audience: ${config.jwtAudience}`);
     } else {
-      // An unset audience accepts any token the IdP minted, including
-      // ones issued for a different relying party on the same IdP. Warn loudly.
+      // Only reachable when PROXY_ALLOW_ANY_AUDIENCE=true explicitly waived
+      // enforcement (assertAuthConfigSafe refuses to start otherwise).
       console.warn(
-        '  ⚠ PROXY_JWT_AUDIENCE not set — tokens are accepted regardless of ' +
-          'their `aud` claim. Any token minted by this IdP for ANY relying ' +
-          'party will be accepted. Set PROXY_JWT_AUDIENCE to this proxy’s ' +
-          'expected audience in production.',
+        '  ⚠ PROXY_JWT_AUDIENCE not set and PROXY_ALLOW_ANY_AUDIENCE=true — ' +
+          'tokens are accepted regardless of their `aud` claim. Any token ' +
+          'minted by this IdP for ANY relying party will be accepted. Do not ' +
+          'use this outside local development.',
       );
     }
     if (config.jwtPartyClaim) {

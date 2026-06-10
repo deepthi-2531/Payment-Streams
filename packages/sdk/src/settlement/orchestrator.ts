@@ -1100,14 +1100,27 @@ async function requestInteractiveLedgerJson<T>(
     readonly body?: Record<string, unknown>;
   },
 ): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: options.method,
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${token}`,
-    },
-    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-  });
+  // Never follow a 3xx on an authenticated call: the default redirect
+  // behavior replays the Authorization header to the redirect target, so a
+  // compromised endpoint could exfiltrate the bearer token. Bound the call
+  // with a timeout so a hung upstream cannot wedge the caller.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: options.method,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      redirect: 'error',
+      signal: ac.signal,
+      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   let payload: unknown = null;

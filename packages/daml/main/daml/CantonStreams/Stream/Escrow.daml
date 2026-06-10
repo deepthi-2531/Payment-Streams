@@ -185,6 +185,9 @@ template StreamEscrow
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
 
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
+
         archive self
         create this with
           state = state with

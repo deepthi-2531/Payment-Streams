@@ -595,10 +595,22 @@ async function requestJson<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
+  // Never follow a 3xx on an authenticated call (the default redirect
+  // replays the Authorization header to the target), and bound the call so
+  // a hung upstream cannot wedge the probe.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers,
+      redirect: 'error',
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   const payload = parseJsonSafely(text);
