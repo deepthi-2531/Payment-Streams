@@ -21,7 +21,7 @@ on:
         required: false
         default: 'main'
 
-# [L-16] Least-privilege default token scope.
+# Least-privilege default token scope.
 permissions:
   contents: read
 
@@ -48,7 +48,7 @@ jobs:
           ls -la "$HOME/.daml/bin"
 
       - name: Fetch Splice V2 DARs (source build)
-        # [L-17] Pass the user-controlled input via the environment, not by
+        # Pass the user-controlled input via the environment, not by
         # interpolating `${{ inputs.* }}` directly into the run block (which
         # would let a crafted ref inject shell). `$SPLICE_REF` is quoted.
         env:

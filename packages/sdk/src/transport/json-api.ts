@@ -28,7 +28,7 @@ export interface JsonApiConfig {
   /** JWT bearer token for authentication. */
   readonly token?: string;
 
-  /** [M-9] Per-request timeout in ms (default 30000). Guards against a
+  /** Per-request timeout in ms (default 30000). Guards against a
    * hung upstream wedging the caller. */
   readonly requestTimeoutMs?: number;
 
@@ -40,7 +40,7 @@ export interface JsonApiConfig {
 }
 
 /**
- * [L-9] Build a comma-joined party header value, rejecting any party id
+ * Build a comma-joined party header value, rejecting any party id
  * that contains a comma, CR, or LF. Without this a crafted party string
  * like `Victim,Other` would widen the acting set, and a CR/LF would
  * inject additional HTTP headers. Party ids are
@@ -287,7 +287,7 @@ export class JsonApiTransport implements Transport {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    // [M-9] Two guards on the authenticated outbound call:
+    // Two guards on the authenticated outbound call:
     //  - `redirect: 'error'`: never follow a 3xx. The default `follow`
     //    re-sends the Authorization header to the redirect target, so a
     //    malicious/compromised endpoint returning a 302 to an

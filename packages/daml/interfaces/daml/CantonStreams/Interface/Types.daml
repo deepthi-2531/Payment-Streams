@@ -31,7 +31,7 @@ data VestingMode
     -- Accrual follows linear within each term.
   deriving (Eq, Show)
 
--- | [M-4] A vesting mode is well-formed only if it cannot wedge a stream.
+-- | A vesting mode is well-formed only if it cannot wedge a stream.
 -- A `Stepped` mode with `stepInterval <= 0` passes naive creation but then
 -- aborts EVERY lifecycle choice with a division-by-zero in `steppedAccrual`
 -- (steps = elapsed / interval), permanently locking the escrowed funds.

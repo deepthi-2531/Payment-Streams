@@ -95,7 +95,7 @@ template StreamEscrow
       && config.startTime < config.endTime
       && state.totalWithdrawn >= 0.0
       && state.totalWithdrawn <= config.totalDeposited
-      && validVestingMode config.vestingMode  -- [M-4]
+      && validVestingMode config.vestingMode
       && escrow.amount >= 0.0
 
     -- | Withdraw accrued tokens. Only the recipient can call this.
@@ -106,7 +106,7 @@ template StreamEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- [CR-1] Bound the caller-supplied accrual time to ledger time.
+        -- Bound the caller-supplied accrual time to ledger time.
         now <- getTime
         assertMsg "withdrawTime must be at or before ledger time" (withdrawTime <= now)
 
@@ -147,7 +147,7 @@ template StreamEscrow
         assertMsg "Stream not cancellable" config.cancellable
         assertMsg "Stream not active" (state.status == Active)
 
-        -- [CR-2] Bound cancelTime to ledger time.
+        -- Bound cancelTime to ledger time.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
@@ -177,7 +177,7 @@ template StreamEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- [CR-2] Bound cancelTime to ledger time.
+        -- Bound cancelTime to ledger time.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
@@ -214,7 +214,7 @@ template StreamEscrow
         assertMsg "New end time must be after current end" (newEndTime > config.endTime)
         assertMsg "Renew time must be at/before new end" (renewTime <= newEndTime)
 
-        -- [CR-1 family] Bound renewTime to ledger time: it anchors the new
+        -- Bound renewTime to ledger time: it anchors the new
         -- term's accrual curve, so a future value would mis-price vesting.
         now <- getTime
         assertMsg "renewTime must be at or before ledger time" (renewTime <= now)
@@ -223,7 +223,7 @@ template StreamEscrow
               amount = escrow.amount + additionalDeposit
               owner = config.sender
 
-        -- [H2 fix] When renewing a Completed stream, reset the accrual
+        -- When renewing a Completed stream, reset the accrual
         -- anchor so the new term's curve doesn't price below the already-
         -- withdrawn amount. Previously the renewed stream kept the
         -- original `startTime`, so for a completed stream the curve at
@@ -253,7 +253,7 @@ template StreamEscrow
         completeTime : Time
       controller config.recipient
       do
-        -- [CR-1 family] Bound completeTime to ledger time.
+        -- Bound completeTime to ledger time.
         now <- getTime
         assertMsg "completeTime must be at or before ledger time" (completeTime <= now)
         let accrued = computeAccrued config completeTime

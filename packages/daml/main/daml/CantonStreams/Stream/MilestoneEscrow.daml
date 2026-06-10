@@ -128,13 +128,13 @@ template MilestoneEscrow
         && length milestones > 0
         && releasedTotal milestones == totalReleased
         && (releasedTotal milestones + pendingTotal milestones) == totalDeposited
-        -- [H3 fix] Milestone names must be unique. Without this, two
+        -- Milestone names must be unique. Without this, two
         -- milestones named "phase-1" would both be released by a single
         -- `ConfirmMilestone "phase-1"` exercise — the off-chain settlement
         -- would move funds for both, while `totalReleased` only ticks once.
         && length (List.dedup [m.name | m <- milestones]) == length milestones
         && all (\m -> m.name /= "") milestones
-        -- [L-12] Each milestone amount must be strictly positive. Only the
+        -- Each milestone amount must be strictly positive. Only the
         -- SUM was checked, so a +X / -X pair would pass the totals while
         -- skewing per-milestone accounting and letting a negative tranche
         -- be "released" as a clawback.

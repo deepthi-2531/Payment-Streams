@@ -256,7 +256,7 @@ template StreamFlow
           (status /= FlowStopped)
         Bridge.requireSettlementReference settlementReference
 
-        -- [L-13] Bound withdrawTime to ledger time for consistency with the
+        -- Bound withdrawTime to ledger time for consistency with the
         -- escrow templates. The funded-balance cap already limits the blast
         -- radius here, but a future withdrawTime would still over-state
         -- accrual up to that cap.
@@ -290,7 +290,7 @@ template StreamFlow
       controller sender
       do
         assertMsg "Stream must be active to pause" (status == FlowActive)
-        -- [CR-1 family] Bound pauseTime; it feeds cumulativePausedDuration
+        -- Bound pauseTime; it feeds cumulativePausedDuration
         -- and thus the accrual clock.
         now <- getTime
         assertMsg "pauseTime must be at or before ledger time" (pauseTime <= now)
@@ -309,7 +309,7 @@ template StreamFlow
       controller sender
       do
         assertMsg "Stream must be paused to resume" (status == FlowPaused)
-        -- [CR-1 family] Bound resumeTime; it feeds cumulativePausedDuration.
+        -- Bound resumeTime; it feeds cumulativePausedDuration.
         now <- getTime
         assertMsg "resumeTime must be at or before ledger time" (resumeTime <= now)
         pauseStart <- case pausedAt of

@@ -32,7 +32,7 @@ export function loadConfig(): ExecutorConfig {
   return {
     ledgerHost: env('EXECUTOR_LEDGER_HOST', 'localhost'),
     ledgerPort: parseInt(env('EXECUTOR_LEDGER_PORT', '6865'), 10),
-    // [H-4] The executor is a long-lived daemon carrying delegated-payout
+    // The executor is a long-lived daemon carrying delegated-payout
     // authority; its token must not travel in plaintext. TLS defaults ON.
     // Set EXECUTOR_LEDGER_TLS=false only for a loopback/dev participant
     // (the SDK additionally refuses tokens on insecure non-loopback links).

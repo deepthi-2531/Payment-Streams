@@ -306,7 +306,7 @@ const EXPECTED_WRITTEN_DAR_COUNT = DAR_SOURCES.filter((dar) => dar.role !== 'bui
 
 function parseArgs(argv) {
   const args = {
-    // [H-6] Default to the pinned, vetted commit — NOT the moving `main`
+    // Default to the pinned, vetted commit — NOT the moving `main`
     // branch. A build that silently tracks upstream main can compile a
     // compromised upstream into the production holding adapter.
     ref: SPLICE_PINNED_COMMIT,
@@ -314,14 +314,14 @@ function parseArgs(argv) {
     dryRun: false,
     spliceCheckout: null,
     keepClone: false,
-    // [H-6] When set, regenerate the committed pin file instead of
+    // When set, regenerate the committed pin file instead of
     // verifying against it. Required to intentionally accept new hashes.
     updateHashes: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--ref') args.ref = argv[++i];
-    // [H-6] Accept `--splice-ref` as an alias so the CI workflow (daml.yml)
+    // Accept `--splice-ref` as an alias so the CI workflow (daml.yml)
     // and operators who use the documented flag name don't have their
     // ref SILENTLY ignored and fall back to a default.
     else if (a === '--splice-ref') args.ref = argv[++i];
@@ -334,7 +334,7 @@ function parseArgs(argv) {
       printUsage();
       process.exit(0);
     } else {
-      // [H-6] Reject unknown flags instead of silently ignoring them — a
+      // Reject unknown flags instead of silently ignoring them — a
       // typo'd or unrecognized flag must not change the build's posture
       // without the operator noticing.
       console.error(`Unknown argument: ${a}`);
@@ -645,7 +645,7 @@ function writeDars(results, args) {
     );
     log(`✓ wrote ${hashFile}`);
 
-    // [H-6] Verify the freshly-fetched hashes against the COMMITTED pin
+    // Verify the freshly-fetched hashes against the COMMITTED pin
     // file, which lives outside the gitignored .lib/ so it can't be
     // overwritten by the same fetch run. The V2_DAR_HASHES.json written
     // above is a record of THIS run; the pin file is the source of truth.
@@ -654,7 +654,7 @@ function writeDars(results, args) {
   return fetchedCount;
 }
 
-// [H-6] Committed pin manifest — tracked in git, NOT under .lib/.
+// Committed pin manifest — tracked in git, NOT under .lib/.
 const PIN_FILE = resolve(__dirname, 'v2-dar-pins.json');
 
 /**
@@ -702,7 +702,7 @@ function verifyAgainstPins(fetched, args) {
   }
   if (mismatches.length > 0) {
     throw new Error(
-      `[H-6] DAR hash verification FAILED — fetched DARs do not match the ` +
+      `DAR hash verification FAILED — fetched DARs do not match the ` +
         `committed pins in ${PIN_FILE}:\n  - ${mismatches.join('\n  - ')}\n\n` +
         `If this change is intentional (you bumped SPLICE_PINNED_COMMIT), ` +
         `re-run with --update-hashes and commit the reviewed v2-dar-pins.json.`,

@@ -39,7 +39,7 @@ template CreateLocalAssetStreamRequest
     recipientAccount : AccountKey
       -- ^ Recipient's Daml Finance account for withdrawals.
     senderAccount : AccountKey
-      -- ^ [H-1] Sender's Daml Finance account — where cancel refunds land.
+      -- ^ Sender's Daml Finance account — where cancel refunds land.
     observers : [Party]
   where
     signatory config.sender
@@ -105,7 +105,7 @@ template AcceptedLocalAssetRequest
       controller escrowOperator
       do
         -- Split the funding holding: take depositAmount for escrow.
-        -- [H-1] The funding holding belongs to the sender, so its account
+        -- The funding holding belongs to the sender, so its account
         -- is the sender's account — label it correctly here. Refund routing
         -- on the LocalAssetEscrow uses the explicit `senderAccount` field
         -- regardless, so a mislabel here can no longer mis-route funds.

@@ -114,7 +114,7 @@ export interface SubscriberConfig {
    * The file holds a `{ [assetKey]: { offset, ts } }` map. Updated
    * atomically (tmp + rename) after each batch.
    *
-   * [C4 fix] Previously the subscriber hardcoded `beginExclusive: { offset: '0' }`
+   * Previously the subscriber hardcoded `beginExclusive: { offset: '0' }`
    * on every reconnect, replaying every settlement event from genesis on
    * every restart. With this, the subscriber resumes from last checkpoint.
    */
@@ -699,7 +699,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       headers['authorization'] = `Bearer ${this.config.ledgerApiToken}`;
     }
 
-    // [C4 fix] Resume from checkpoint instead of replaying from 0.
+    // Resume from checkpoint instead of replaying from 0.
     const resumeOffset = this.offsetStore.getAssetOffset(asset.key);
     this.config.logger.info(
       { assetKey: asset.key, resumeOffset },
