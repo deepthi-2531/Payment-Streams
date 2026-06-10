@@ -67,6 +67,7 @@ import {
   type AuthResult,
   AuthError,
   parseAuthConfig,
+  assertAuthConfigSafe,
   authorizeRequest,
   getRequiredRole,
   enforceRole,
@@ -96,6 +97,9 @@ const autoWithdrawConfig = parseAutoWithdrawConfig(process.env);
 
 /** Auth configuration parsed from environment. */
 const authConfig: AuthConfig = parseAuthConfig();
+// [CR-3] Fail closed at boot: refuse to start with a spoofable dev-auth
+// posture unless it is explicitly acknowledged AND loopback-bound.
+assertAuthConfigSafe(authConfig);
 let startupReadiness: ReadinessReport | null = null;
 let stopAutoWithdrawWorker: (() => void) | null = null;
 
@@ -119,10 +123,15 @@ app.use(
       // because those flows authenticate via Tier-2 service token, not session.
       if (!origin) return cb(null, true);
       if (PROXY_ALLOWED_ORIGINS.length === 0) {
-        // Dev safety: when no allow-list is configured AND we're in dev mode,
-        // permit localhost only. Production must set ALLOWED_ORIGINS.
-        const mode = process.env['PROXY_AUTH_MODE'] ?? 'dev';
-        if (mode === 'dev' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        // Dev safety: when no allow-list is configured AND we're in the
+        // effective dev-auth posture, permit localhost only. Production
+        // (jwt mode) must set ALLOWED_ORIGINS. Use the resolved
+        // `authConfig.mode`, not the raw env, so a downgraded dev request
+        // doesn't accidentally widen CORS.
+        if (
+          authConfig.mode === 'dev' &&
+          /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+        ) {
           return cb(null, true);
         }
         return cb(new Error(`CORS: no ALLOWED_ORIGINS configured; origin ${origin} rejected`));
@@ -134,7 +143,48 @@ app.use(
   }),
 );
 
-app.use(express.json());
+// [H-3] Cap request bodies. Stream-create / batch payloads are small JSON;
+// 64kb is generous and stops memory-exhaustion via oversized POSTs.
+app.use(express.json({ limit: process.env['PROXY_BODY_LIMIT'] ?? '64kb' }));
+
+// [H-3] Lightweight in-process rate limiter (no external dependency). A
+// fixed-window per-IP counter — enough to blunt brute-force / credential-
+// exhaustion against this fund-moving surface. Operators fronting the proxy
+// with a real gateway (nginx, API gateway) can disable it via
+// PROXY_RATE_LIMIT_DISABLE=true. Tune with PROXY_RATE_LIMIT_MAX (requests)
+// and PROXY_RATE_LIMIT_WINDOW_MS (window).
+const RATE_LIMIT_DISABLED = process.env['PROXY_RATE_LIMIT_DISABLE'] === 'true';
+const RATE_LIMIT_MAX = parseInt(process.env['PROXY_RATE_LIMIT_MAX'] ?? '120', 10);
+const RATE_LIMIT_WINDOW_MS = parseInt(
+  process.env['PROXY_RATE_LIMIT_WINDOW_MS'] ?? '60000',
+  10,
+);
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+if (!RATE_LIMIT_DISABLED) {
+  app.use((req, res, next) => {
+    // Health/readiness probes are exempt so monitors don't get throttled.
+    if (req.path === '/api/health' || req.path === '/api/readyz') return next();
+    const key = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const now = Date.now();
+    const bucket = rateBuckets.get(key);
+    if (!bucket || now >= bucket.resetAt) {
+      rateBuckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > RATE_LIMIT_MAX) {
+      res.setHeader('Retry-After', Math.ceil((bucket.resetAt - now) / 1000));
+      return res.status(429).json({ error: 'rate_limit_exceeded' });
+    }
+    next();
+  });
+  // Evict stale buckets every window so the map can't grow without bound.
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [k, b] of rateBuckets) if (now >= b.resetAt) rateBuckets.delete(k);
+  }, RATE_LIMIT_WINDOW_MS);
+  sweep.unref?.();
+}
 
 /**
  * Authorize the request for the given action and create a CantonStreamsClient.
@@ -190,6 +240,61 @@ async function createAuthorizedClientWithParty(
   };
 
   return { client: new CantonStreamsClient(config), party: auth.actAs[0] ?? '' };
+}
+
+/**
+ * [H-2] Parties allowed to read across other parties' streams (operators,
+ * dashboards run by the dApp). Defaults to the service-party allow-list,
+ * extensible via PROXY_OPERATOR_READERS. When empty, NO party may read
+ * streams it does not participate in.
+ */
+const OPERATOR_READERS: Set<string> = new Set(
+  [
+    ...(process.env['PROXY_SERVICE_PARTIES']?.split(',') ?? []),
+    ...(process.env['PROXY_OPERATOR_READERS']?.split(',') ?? []),
+    process.env['PROXY_ESCROW_OPERATOR'] ?? '',
+  ]
+    .map((p) => p.trim())
+    .filter(Boolean),
+);
+
+/**
+ * [H-2] Enforce that a read request is scoped to the caller's own party.
+ *
+ * The ledger's own visibility is NOT a sufficient authorization boundary
+ * for a multi-tenant proxy: if the proxy's actAs identity can see other
+ * parties' contracts (operator/escrow readAs, sub-party grants), a caller
+ * could pass `?sender=Victim` and read streams they don't participate in.
+ *
+ * Rule: any provided `sender`/`recipient` filter MUST equal the caller's
+ * party, UNLESS the caller is a configured operator-reader. When no filter
+ * is provided, we pin BOTH to the caller party so list results are scoped
+ * to streams the caller participates in.
+ *
+ * Returns the (possibly defaulted) filter to use.
+ */
+function scopeReadFilter(
+  caller: string,
+  provided: { sender?: string; recipient?: string },
+): { sender?: string; recipient?: string } {
+  if (OPERATOR_READERS.has(caller)) return provided; // operator: unrestricted
+  const offendsSender = provided.sender && provided.sender !== caller;
+  const offendsRecipient = provided.recipient && provided.recipient !== caller;
+  if (offendsSender || offendsRecipient) {
+    throw new AuthError(
+      403,
+      'read_scope_violation',
+      'You may only query streams where you are the sender or recipient.',
+    );
+  }
+  // No explicit filter → scope to the caller. We can't express "sender OR
+  // recipient = caller" in a single filter, so callers that want both
+  // directions should issue two queries; default to recipient-scoped
+  // (the inbox view) and let an explicit `?sender=<self>` cover outgoing.
+  if (!provided.sender && !provided.recipient) {
+    return { recipient: caller };
+  }
+  return provided;
 }
 
 /**
@@ -511,14 +616,20 @@ function parseRenewParams(body: Record<string, unknown>): RenewParams {
 app.get('/api/stream-requests', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // [H-2] Scope the sender/recipient filter to the caller's own party.
+    const scoped = scopeReadFilter(authed.party, {
+      sender: req.query['sender'] as string | undefined,
+      recipient: req.query['recipient'] as string | undefined,
+    });
     const filter: {
       sender?: string;
       recipient?: string;
       assetType?: PendingStreamRequestFilter['assetType'];
     } = {};
-    if (req.query['sender']) filter.sender = req.query['sender'] as string;
-    if (req.query['recipient']) filter.recipient = req.query['recipient'] as string;
+    if (scoped.sender) filter.sender = scoped.sender;
+    if (scoped.recipient) filter.recipient = scoped.recipient;
     if (req.query['assetType'])
       filter.assetType = req.query['assetType'] as PendingStreamRequestFilter['assetType'];
 
@@ -537,7 +648,13 @@ app.get('/api/stream-requests', async (req, res) => {
 app.get('/api/streams', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // [H-2] Scope the sender/recipient filter to the caller's own party.
+    const scoped = scopeReadFilter(authed.party, {
+      sender: req.query['sender'] as string | undefined,
+      recipient: req.query['recipient'] as string | undefined,
+    });
     const filter: {
       sender?: string;
       recipient?: string;
@@ -545,8 +662,8 @@ app.get('/api/streams', async (req, res) => {
       vestingMode?: StreamFilter['vestingMode'];
       settlementMode?: StreamFilter['settlementMode'];
     } = {};
-    if (req.query['sender']) filter.sender = req.query['sender'] as string;
-    if (req.query['recipient']) filter.recipient = req.query['recipient'] as string;
+    if (scoped.sender) filter.sender = scoped.sender;
+    if (scoped.recipient) filter.recipient = scoped.recipient;
     if (req.query['status']) filter.status = req.query['status'] as StreamFilter['status'];
     if (req.query['vestingMode'])
       filter.vestingMode = req.query['vestingMode'] as StreamFilter['vestingMode'];
@@ -568,8 +685,22 @@ app.get('/api/streams', async (req, res) => {
 app.get('/api/streams/:sender/:streamId', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
     const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
+    // [H-2] A specific stream is only readable by its participants (or a
+    // configured operator-reader). The ledger may surface it more broadly
+    // through the proxy's actAs identity, so enforce participation here.
+    const isParticipant =
+      stream.config.sender === authed.party ||
+      stream.config.recipient === authed.party;
+    if (!isParticipant && !OPERATOR_READERS.has(authed.party)) {
+      throw new AuthError(
+        403,
+        'read_scope_violation',
+        'You may only read a stream where you are the sender or recipient.',
+      );
+    }
     res.json(serializeForJson(stream));
   } catch (err) {
     handleError(res, err, 'getStream');

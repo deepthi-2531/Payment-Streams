@@ -32,7 +32,18 @@
 
 import type { Request } from 'express';
 import * as jose from 'jose';
-import { createHmac } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+
+/**
+ * Constant-time string equality. Returns false for length mismatches
+ * without timing leakage on the compared bytes.
+ */
+function constantTimeEquals(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
+}
 
 // ---------------------------------------------------------------------------
 // Action definitions
@@ -85,8 +96,16 @@ const ACTION_SPECS: Record<Action, ActionSpec> = {
 export type AuthMode = 'jwt' | 'dev';
 
 export interface AuthConfig {
-  /** Auth mode: "jwt" (production) or "dev" (local, trusts X-Canton-Party). */
+  /** Effective auth mode after the fail-closed downgrade: "jwt"
+   * (production) or "dev" (local, trusts X-Canton-Party). Dev only
+   * survives when `devAuthAcknowledged` is true. */
   mode: AuthMode;
+  /** What PROXY_AUTH_MODE actually requested, before the safety
+   * downgrade. Used by `assertAuthConfigSafe` to detect a dev request
+   * that lacks the explicit acknowledgement. */
+  requestedMode: AuthMode;
+  /** True iff PROXY_ALLOW_DEV_AUTH=true. Dev mode requires this. */
+  devAuthAcknowledged: boolean;
   /** Parties allowed user-level actions. null = open access. */
   userParties: Set<string> | null;
   /** Parties allowed service-level actions. null = open access. */
@@ -114,10 +133,23 @@ let jwksInitPromise: Promise<void> | null = null;
 
 /** Parse auth config from environment variables. */
 export function parseAuthConfig(): AuthConfig {
-  const mode = (process.env['PROXY_AUTH_MODE'] ?? 'dev') as AuthMode;
+  // [CR-3] Fail closed. The proxy moves funds, so identity must never be
+  // derived from an unverified token or a client header by default. The
+  // auth mode now defaults to 'jwt' (full JWKS verification). Dev mode —
+  // which trusts X-Canton-Party and mints Canton JWTs for arbitrary
+  // parties — is only honoured when the operator EXPLICITLY acknowledges
+  // it with PROXY_ALLOW_DEV_AUTH=true. Setting PROXY_AUTH_MODE=dev without
+  // that flag is treated as a misconfiguration and rejected at startup
+  // (see assertAuthConfigSafe).
+  const requestedMode = (process.env['PROXY_AUTH_MODE'] ?? 'jwt') as AuthMode;
+  const devAuthAcknowledged = process.env['PROXY_ALLOW_DEV_AUTH'] === 'true';
+  const mode: AuthMode =
+    requestedMode === 'dev' && devAuthAcknowledged ? 'dev' : 'jwt';
   const oidcIssuer = process.env['PROXY_OIDC_ISSUER'] ?? null;
   return {
     mode,
+    requestedMode,
+    devAuthAcknowledged,
     userParties: parsePartySet(process.env['PROXY_USER_PARTIES']),
     serviceParties: parsePartySet(process.env['PROXY_SERVICE_PARTIES']),
     serviceToken: process.env['PROXY_SERVICE_TOKEN'] ?? null,
@@ -374,8 +406,13 @@ function authorizeServiceRequest(req: Request, config: AuthConfig): AuthResult {
     );
   }
 
-  // Validate the request token matches the service token
-  if (token !== config.serviceToken) {
+  // [M-6] Validate the request token against the service token with a
+  // constant-time comparison. A plain `!==` short-circuits on the first
+  // differing byte, leaking the shared secret's prefix length through
+  // response timing. `timingSafeEqual` requires equal-length buffers, so
+  // guard the length first (a length mismatch is already a non-match and
+  // safe to reveal).
+  if (!constantTimeEquals(token ?? '', config.serviceToken)) {
     throw new AuthError(
       403,
       'service_token_invalid',
@@ -619,6 +656,50 @@ function truncateParty(party: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Startup safety gate
+// ---------------------------------------------------------------------------
+
+/**
+ * [CR-3] Refuse to start in an unsafe auth posture. Call this once at
+ * boot, before binding the listener.
+ *
+ * Two fail-closed checks:
+ *  1. A `PROXY_AUTH_MODE=dev` request that did NOT also set
+ *     `PROXY_ALLOW_DEV_AUTH=true` is a misconfiguration — the operator
+ *     almost certainly did not intend to run a spoofable identity layer
+ *     on a fund-moving service. Throw.
+ *  2. Even when dev mode is explicitly acknowledged, refuse it unless
+ *     the bind host is loopback (PROXY_BIND_HOST in {127.0.0.1, ::1,
+ *     localhost} or unset, which Express binds to all interfaces — so we
+ *     require it to be EXPLICITLY loopback). This stops an acknowledged
+ *     dev posture from being exposed to a network.
+ */
+export function assertAuthConfigSafe(config: AuthConfig): void {
+  if (config.requestedMode === 'dev' && !config.devAuthAcknowledged) {
+    throw new Error(
+      'Refusing to start: PROXY_AUTH_MODE=dev trusts the X-Canton-Party ' +
+        'header and mints ledger JWTs for arbitrary parties. If this is ' +
+        'genuinely a local-dev run, set PROXY_ALLOW_DEV_AUTH=true to ' +
+        'acknowledge the risk. For any networked or production deployment, ' +
+        'use PROXY_AUTH_MODE=jwt with PROXY_OIDC_ISSUER configured.',
+    );
+  }
+  if (config.mode === 'dev') {
+    const bindHost = process.env['PROXY_BIND_HOST'] ?? '';
+    const loopback =
+      bindHost === '127.0.0.1' || bindHost === '::1' || bindHost === 'localhost';
+    if (!loopback) {
+      throw new Error(
+        'Refusing to start in dev auth mode without an explicit loopback ' +
+          'bind. Set PROXY_BIND_HOST=127.0.0.1 to confine the spoofable ' +
+          'dev identity layer to localhost, or switch to ' +
+          'PROXY_AUTH_MODE=jwt.',
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Startup logging
 // ---------------------------------------------------------------------------
 
@@ -628,7 +709,18 @@ export function logAuthConfig(config: AuthConfig): void {
   if (config.mode === 'jwt') {
     console.log(`  OIDC issuer: ${config.oidcIssuer ?? '(none — using direct JWKS URL)'}`);
     console.log(`  JWT issuer: ${config.jwtIssuer ?? '(any)'}`);
-    console.log(`  JWT audience: ${config.jwtAudience ?? '(any)'}`);
+    if (config.jwtAudience) {
+      console.log(`  JWT audience: ${config.jwtAudience}`);
+    } else {
+      // [M-5] An unset audience accepts any token the IdP minted, including
+      // ones issued for a different relying party on the same IdP. Warn loudly.
+      console.warn(
+        '  ⚠ PROXY_JWT_AUDIENCE not set — tokens are accepted regardless of ' +
+          'their `aud` claim. Any token minted by this IdP for ANY relying ' +
+          'party will be accepted. Set PROXY_JWT_AUDIENCE to this proxy’s ' +
+          'expected audience in production.',
+      );
+    }
     if (config.jwtPartyClaim) {
       console.log(`  JWT party claim: ${config.jwtPartyClaim}`);
     }
