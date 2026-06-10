@@ -1,0 +1,12 @@
+{
+  "note": "Integrator registry for per-app usage attribution in scripts/scan-usage-report.mjs. Keys are app ids (the value integrators set as CANTON_STREAMS_APP_ID / cantonstreams.dev/app) or sender-party namespace prefixes. 'parties' lets the report attribute settlements from integrators that predate app-id stamping. Copy to config/integrators.json and maintain per reporting window. This is an EXAMPLE file — use placeholder party ids here; never commit real party fingerprints or secrets. Secrets belong in env vars / a vault, not in this JSON.",
+  "apps": {
+    "example-app": {
+      "name": "Example Integrator",
+      "parties": [
+        "example-app-1::REPLACE_ME_WITH_REAL_PARTY_FINGERPRINT"
+      ],
+      "contact": "ops@example.invalid"
+    }
+  }
+}

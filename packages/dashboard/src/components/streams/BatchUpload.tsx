@@ -16,6 +16,7 @@ import {
 import { useCreateStream } from '../../hooks/useStreams.js';
 import { useAuth } from '../../store/auth.js';
 import { batchRowSchema, type BatchRow } from '../../lib/schemas/index.js';
+import { formatAmount } from '../common/AmountDisplay.js';
 
 interface ParsedRow {
   readonly index: number;
@@ -56,7 +57,10 @@ export function BatchUpload() {
 
   const stats = useMemo(() => {
     const valid = rows.filter((r) => r.value !== null);
-    const totalAmount = valid.reduce((sum, r) => sum + Number(r.value?.amount ?? 0), 0);
+    const totalAmount = valid.reduce(
+      (sum, r) => sum.plus(r.value?.amount ?? 0),
+      new Decimal(0),
+    );
     const assets = new Set(valid.map((r) => r.value!.asset));
     const recipients = new Set(valid.map((r) => r.value!.recipient));
     return {
@@ -403,7 +407,7 @@ interface PreviewStats {
   total: number;
   valid: number;
   invalid: number;
-  totalAmount: number;
+  totalAmount: Decimal;
   assets: number;
   recipients: number;
 }
@@ -470,7 +474,7 @@ function PreviewStep({
             </span>{' '}
             · total{' '}
             <span className="mono" style={{ color: 'var(--fg-2)' }}>
-              {stats.totalAmount.toLocaleString()}
+              {formatAmount(stats.totalAmount)}
             </span>{' '}
             across {stats.assets} asset(s) · {stats.recipients} recipient(s)
           </p>
