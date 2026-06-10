@@ -146,11 +146,23 @@ async function postJson(
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body ?? {}),
-  });
+  // [M-9] Never follow redirects on an authenticated call (the default
+  // re-sends the Authorization header to the 3xx target — token exfil to
+  // an attacker host), and bound the request with a timeout.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body ?? {}),
+      redirect: 'error',
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!response.ok) {
     let detail: string;
     try {

@@ -1291,10 +1291,23 @@ function handleError(res: express.Response, err: unknown, operation: string): vo
     return;
   }
   const status = (err as any)?.statusCode ?? 500;
-  console.error(`${operation} error:`, err);
+  // [M-7] Always log the full error server-side with a correlation id.
+  const correlationId = `${operation}-${Date.now().toString(36)}`;
+  console.error(`[${correlationId}] ${operation} error:`, err);
+  // For 5xx, do NOT echo the raw upstream/ledger error message to the
+  // client — it can carry internal hostnames, gRPC endpoints, request
+  // payloads, or token-adjacent fields useful for reconnaissance. Return a
+  // generic message plus the correlation id so an operator can find the
+  // detail in the logs. Client errors (4xx) keep their actionable message.
+  const isServerError = status >= 500;
   res.status(status).json({
-    error: err instanceof Error ? err.message : 'Internal error',
-    reason: status === 403 ? 'forbidden' : 'internal_error',
+    error: isServerError
+      ? `Internal error (ref ${correlationId})`
+      : err instanceof Error
+        ? err.message
+        : 'Request error',
+    reason: status === 403 ? 'forbidden' : isServerError ? 'internal_error' : 'request_error',
+    correlationId,
   });
 }
 
