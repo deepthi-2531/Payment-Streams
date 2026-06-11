@@ -1,6 +1,6 @@
 # Contributing to Canton Streams
 
-Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before participating. If you are reporting a security issue, do not open a public issue or PR; follow [SECURITY.md](SECURITY.md) instead.
+Please read [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before participating. If you are reporting a security issue, do not open a public issue or PR; report it privately to the maintainers instead.
 
 ## Development setup
 

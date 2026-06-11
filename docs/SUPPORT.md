@@ -2,8 +2,8 @@
 
 This document describes which versions of Canton Payment Streams are
 maintained, what the maintenance window covers, how security and bug fixes are
-prioritized, and how to get help. It complements [SECURITY.md](../SECURITY.md),
-which is the authoritative source for reporting vulnerabilities.
+prioritized, and how to get help. To report a vulnerability, contact the
+maintainers privately — do not open a public issue or PR.
 
 ## Supported Versions
 
@@ -18,8 +18,7 @@ and executor packages) and the `canton-streams` DAR. See
 | `1.0.0` line | Planned | A `1.0.0` release candidate is planned; once `1.0.0` ships it becomes the supported line. |
 | `< 0.2.0` | Not supported | Pre-release lines receive no fixes. |
 
-The supported-versions matrix in [SECURITY.md](../SECURITY.md) is kept in sync
-with this table.
+This table is the authoritative supported-versions matrix.
 
 ### Minor-line support policy
 
@@ -53,10 +52,10 @@ The maintenance window **does not cover**:
 
 ## Security-Patch SLA
 
-Vulnerability reporting and the acknowledgement commitment live in
-[SECURITY.md](../SECURITY.md). As stated there, reports are **acknowledged
-within 5 business days**, fixes are coordinated privately, and a changelog
-entry is published once a remediation is available.
+Report vulnerabilities privately to the maintainers — not in a public issue
+or PR. Reports are **acknowledged within 5 business days**, fixes are
+coordinated privately, and a changelog entry is published once a remediation
+is available.
 
 The cadence below describes **targets** for triage and remediation by severity.
 These are planning targets, not contractual guarantees; actual timelines depend
@@ -71,7 +70,7 @@ on reproducibility, upstream dependencies, and coordinated-disclosure needs.
 
 Every entry in the "Triage target" and "Fix target" columns is a **target**,
 not a firm commitment. The only firm commitment is the 5-business-day
-acknowledgement stated in [SECURITY.md](../SECURITY.md).
+acknowledgement of privately reported vulnerabilities.
 
 ## Maintainer Ownership Model
 
@@ -80,9 +79,8 @@ to named individuals in this document; routing is by role and channel.
 
 - **Maintainers** review issues and pull requests, decide what lands on the
   active line, and cut releases following [RELEASING.md](../RELEASING.md).
-- **Security contact** is the private channel described in
-  [SECURITY.md](../SECURITY.md). Security reports are handled there, not in
-  public issues or pull requests.
+- **Security contact** is a private channel to the maintainers. Security
+  reports are handled privately, not in public issues or pull requests.
 - **Release decisions** — what ships, when, and on which line — are made by the
   maintainers, who also confirm version alignment across manifests, the
   changelog, and the DAR before tagging.
@@ -93,7 +91,7 @@ Routing summary:
 | --- | --- | --- |
 | Bug report or feature request | GitHub issue | Maintainers triage and label |
 | Code change | Pull request (see [CONTRIBUTING.md](../CONTRIBUTING.md)) | Maintainers review and squash-merge |
-| Security vulnerability | Private channel in [SECURITY.md](../SECURITY.md) | Security contact / maintainers, privately |
+| Security vulnerability | Private channel to the maintainers | Security contact / maintainers, privately |
 | Code-of-conduct concern | Channels in [CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) | Maintainers |
 
 ## How to Get Support
@@ -105,8 +103,8 @@ Routing summary:
 - **Bugs and feature requests:** open a GitHub issue. Include the affected
   package and version, deployment or settlement mode if relevant, and
   reproduction steps.
-- **Security vulnerabilities:** do **not** open a public issue. Use the private
-  channel in [SECURITY.md](../SECURITY.md).
+- **Security vulnerabilities:** do **not** open a public issue. Report them
+  privately to the maintainers.
 - **Contributing a fix:** see [CONTRIBUTING.md](../CONTRIBUTING.md) for setup,
   testing, and the pull-request process.
 

@@ -71,8 +71,7 @@ location differs.
 ## Minimum integration shape (≈30 lines)
 
 ```ts
-import { CantonStreamsClient } from '@canton-streams/sdk';
-import { loadAssetRegistry } from '@canton-streams/sdk/assets/registry';
+import { CantonStreamsClient, loadAssetRegistry } from '@canton-streams/sdk';
 import { buildVestingStream } from '@canton-streams/sdk/helpers';
 import assetRegistryFile from './asset-registry.json' assert { type: 'json' };
 
@@ -126,4 +125,5 @@ not advertise the required V2 allocation support.
 - **GitHub Discussions**: architecture + design questions
 - **GitHub Issues**: bugs + feature requests
 - **Canton community channels**: real-time community
-- **`security@…`** (see SECURITY.md): private security disclosure
+- **Security**: report suspected vulnerabilities privately to the
+  maintainers rather than opening a public issue

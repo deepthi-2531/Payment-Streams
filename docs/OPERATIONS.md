@@ -356,8 +356,9 @@ authoritative; when in doubt, query the ledger before acting.
   signing material (`CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON` or the
   `PROXY_ESCROW_OPERATOR_*` env). Restart the affected services. Prefer holding
   keys in the wallet gateway's signing provider rather than the proxy process.
-  Follow the coordinated process in [../SECURITY.md](../SECURITY.md) for a
-  confirmed vulnerability. Keep secrets in env vars, never in committed config.
+  For a confirmed vulnerability, coordinate privately with the maintainers —
+  do not open a public issue or PR. Keep secrets in env vars, never in
+  committed config.
 
 ## 6. Upgrade and rollback
 
@@ -426,13 +427,15 @@ Role-based ownership (roles, not individuals). Map these to your own rota.
 3. If the symptom is **wallet connection, signing, or gateway credentials**,
    escalate to **wallet / integration on-call**.
 4. For a suspected **security incident** (credential exposure, auth bypass,
-   unexpected on-ledger activity), follow [../SECURITY.md](../SECURITY.md) — do
-   not open a public issue; use the private reporting channel.
+   unexpected on-ledger activity), report it privately to the maintainers — do
+   not open a public issue; use a private reporting channel.
 
 ## See also
 
 - [DEPLOYMENT.md](DEPLOYMENT.md) — how to deploy each component
 - [E2E-HARNESS.md](E2E-HARNESS.md) — wallet-backed end-to-end harness
 - [THREAT-MODEL.md](THREAT-MODEL.md) — security analysis and trust boundaries
-- [../SECURITY.md](../SECURITY.md) — vulnerability reporting
 - [../CHANGELOG.md](../CHANGELOG.md) — release/breaking-change notes
+
+Report suspected vulnerabilities privately to the maintainers, not in a
+public issue or PR.

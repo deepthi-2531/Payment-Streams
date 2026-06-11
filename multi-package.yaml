@@ -1,5 +1,12 @@
+# The core workspace: the shipped interfaces + main DAR and the acceptance
+# test suite. These build reproducibly green from a clean clone.
+#
+# `packages/daml/scripts` (local MintV2 / V2-lifecycle helpers) is deliberately
+# NOT listed here: it depends on `splice-test-token-v2`, a test-only DAR that is
+# currently an older token-standard generation than `main`, so including it in
+# the default `--all` build produces a package-id conflict. Refresh the test
+# DARs with `pnpm daml:deps` and build it on demand with `pnpm daml:build:scripts`.
 packages:
   - packages/daml/interfaces
   - packages/daml/main
   - packages/daml/test
-  - packages/daml/scripts

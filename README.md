@@ -343,12 +343,14 @@ participant.
 Contributions are welcome. Start with:
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
-- [SECURITY.md](SECURITY.md)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
 For a first PR, prefer a small change with a clear test. Good starter areas
 are documentation clarity, SDK validation tests, dashboard copy, and local
 runbook improvements.
+
+Found a security issue? Please report it privately to the maintainers
+rather than opening a public issue or PR.
 
 ## License
 
