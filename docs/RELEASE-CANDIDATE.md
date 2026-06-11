@@ -107,7 +107,9 @@ A tag push to `sdk-v*` or `cli-v*` triggers
    release target is the CLI.
 5. **[automated]** Publishes the selected package to npm with
    `--access public --provenance` (npm provenance via the
-   `id-token: write` permission).
+   `id-token: write` permission). Pre-release versions such as
+   `1.0.0-rc.1` publish under the npm `next` dist-tag; stable versions
+   publish under `latest`.
 6. **[automated]** Creates a GitHub Release for the tag with
    auto-generated notes.
 
@@ -186,12 +188,12 @@ Also confirm:
 
 ## 4. Artifacts To Publish — and Who Publishes Them
 
-| Artifact | How | Owner / credential |
-|---|---|---|
-| GitHub Release for `sdk-v1.0.0-rc.1` / `cli-v1.0.0-rc.1` with notes | **[automated by workflow]** on tag push (`softprops/action-gh-release`), gated by the `release` environment | Triggered by the maintainer who pushes the tag; approved by a `release` environment reviewer |
-| npm RC publish of `@canton-streams/sdk` and `@canton-streams/cli` | **[automated by workflow]** with `--provenance` | Requires `NPM_TOKEN` secret / OIDC and the `release` environment approval — **owner action** to configure the secret and approve |
-| Docker images (Canton, proxy, dashboard) | **[manual owner action]** — the images are built from [`docker/Dockerfile.canton`](../docker/Dockerfile.canton), [`docker/Dockerfile.proxy`](../docker/Dockerfile.proxy), [`docker/Dockerfile.dashboard`](../docker/Dockerfile.dashboard); CI builds the dashboard image but does not publish any image | Requires container-registry credentials — **owner action** |
-| Making the repository public | **[manual owner action]** | Repository-owner privilege only |
+| Artifact                                                            | How                                                                                                                                                                                                                                                                                                     | Owner / credential                                                                                                                                                                                               |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub Release for `sdk-v1.0.0-rc.1` / `cli-v1.0.0-rc.1` with notes | **[automated by workflow]** on tag push (`softprops/action-gh-release`), gated by the `release` environment                                                                                                                                                                                             | Triggered by the maintainer who pushes the tag; approved by a `release` environment reviewer                                                                                                                     |
+| npm RC publish of `@canton-streams/sdk` and `@canton-streams/cli`   | **[automated by workflow]** with `--provenance` and npm dist-tag `next`                                                                                                                                                                                                                                 | Requires the `@canton-streams` npm scope to exist, an `NPM_TOKEN` secret with publish rights for that scope, and the `release` environment approval — **owner action** to configure the scope/secret and approve |
+| Docker images (Canton, proxy, dashboard)                            | **[manual owner action]** — the images are built from [`docker/Dockerfile.canton`](../docker/Dockerfile.canton), [`docker/Dockerfile.proxy`](../docker/Dockerfile.proxy), [`docker/Dockerfile.dashboard`](../docker/Dockerfile.dashboard); CI builds the dashboard image but does not publish any image | Requires container-registry credentials — **owner action**                                                                                                                                                       |
+| Making the repository public                                        | **[manual owner action]**                                                                                                                                                                                                                                                                               | Repository-owner privilege only                                                                                                                                                                                  |
 
 > The CI pipeline ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
 > builds the dashboard Docker image on pushes to `main` but does **not**
@@ -200,8 +202,9 @@ Also confirm:
 
 ### Credential / secret prerequisites **[manual owner action]**
 
-- `NPM_TOKEN` GitHub Actions secret (or OIDC trust) — required for the
-  npm publish step.
+- `@canton-streams` npm scope — must exist before first publish.
+- `NPM_TOKEN` GitHub Actions secret — must be an npm automation token with
+  publish rights for the `@canton-streams` scope.
 - The `release` protected environment configured with required reviewers
   (see §2).
 - Container-registry credentials — required only for the manual Docker
