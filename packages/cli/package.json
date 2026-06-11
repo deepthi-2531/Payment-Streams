@@ -1,6 +1,6 @@
 {
   "name": "@canton-streams/cli",
-  "version": "0.2.7",
+  "version": "1.0.0-rc.1",
   "description": "CLI tool for Canton Payment Streams",
   "license": "Apache-2.0",
   "type": "module",

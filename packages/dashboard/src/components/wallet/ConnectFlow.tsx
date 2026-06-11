@@ -116,7 +116,7 @@ export function ConnectFlow() {
               borderRadius: 4,
             }}
           >
-            v0.2.7
+            v1.0.0-rc.1
           </span>
         </div>
 

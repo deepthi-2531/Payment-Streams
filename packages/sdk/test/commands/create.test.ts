@@ -85,7 +85,7 @@ describe('createStream', () => {
         ['alice'],
         logger,
       ),
-    ).rejects.toThrow('V2-only');
+    ).rejects.toThrow('TokenStandardCustody');
   });
 
   it('rejects duplicate V2 StreamAdmin ids visible to the sender', async () => {

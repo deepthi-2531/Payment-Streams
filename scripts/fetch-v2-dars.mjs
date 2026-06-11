@@ -86,7 +86,8 @@ export const SPLICE_PINNED_AS_OF = '2026-06-02';
 /**
  * V1 interface packages required as build-only data-dependencies by the
  * V2 utils and test infrastructure packages (which dual-implement V1+V2
- * per CIP-0112 §5 even though we, the streams library, are V2-only).
+ * per CIP-0112 §5). The Streams repo also carries an isolated transitional
+ * V1 allocation lane for live assets that have not yet published V2.
  *
  * `role: 'build-only'` means: build in the temp clone so subsequent
  * dependent builds find the `-current.dar` alias, but do NOT copy to our
@@ -282,8 +283,8 @@ const V2_TEST_INFRASTRUCTURE_DARS = [
 //
 //   1. metadata-v1 — depended on by everything else
 //   2. V1 build-only packages — depended on by utils + test infrastructure
-//      (which dual-implement V1+V2 per CIP-0112 §5 even though we
-//      ourselves are V2-only)
+//      (which dual-implement V1+V2 per CIP-0112 §5) and by the isolated
+//      transitional V1 allocation lane.
 //   3. V2 interface packages — depend on metadata-v1
 //   4. utils + test infrastructure packages — depend on V1 + V2
 //

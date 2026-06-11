@@ -42,7 +42,7 @@ straight to the source.
 | `MilestoneEscrow` / `MilestoneAdmin` | [`packages/daml/main/daml/CantonStreams/Stream/MilestoneEscrow.daml`](../packages/daml/main/daml/CantonStreams/Stream/MilestoneEscrow.daml), [`MilestoneAdmin.daml`](../packages/daml/main/daml/CantonStreams/Stream/MilestoneAdmin.daml) | Multi-leg release flow; V2 multi-leg `AllocationSpecification` / `SettlementFactory_SettleBatch`. |
 | Accrual math | [`packages/daml/main/daml/CantonStreams/Stream/Accrual.daml`](../packages/daml/main/daml/CantonStreams/Stream/Accrual.daml) | `computeAccrued`, `withdrawable`, `refundable`, `checkInvariant`, per-vesting-mode accrual curves. |
 | Numeric settlement adapter | [`packages/daml/main/daml/CantonStreams/Settlement/Adapter.daml`](../packages/daml/main/daml/CantonStreams/Settlement/Adapter.daml) | `EscrowBalance`, `splitEscrow` arithmetic used by the native lifecycle path. |
-| V1-compatibility deferred path (`HoldingEscrow` / `LocalAssetEscrow`) | [`packages/daml/main/daml-finance-deferred/HoldingEscrow.daml`](../packages/daml/main/daml-finance-deferred/HoldingEscrow.daml), [`LocalAssetEscrow.daml`](../packages/daml/main/daml-finance-deferred/LocalAssetEscrow.daml), [`HoldingAdapter.daml`](../packages/daml/main/daml-finance-deferred/HoldingAdapter.daml), [`CreateLocalAssetStream.daml`](../packages/daml/main/daml-finance-deferred/CreateLocalAssetStream.daml) | **Deferred** physical-custody escrow modules, not built into the shipped `canton-streams` DAR. In scope for review of the `getTime` guards and authority model only; flagged as not active in the V2-only release. |
+| V1-compatibility deferred path (`HoldingEscrow` / `LocalAssetEscrow`) | [`packages/daml/main/daml-finance-deferred/HoldingEscrow.daml`](../packages/daml/main/daml-finance-deferred/HoldingEscrow.daml), [`LocalAssetEscrow.daml`](../packages/daml/main/daml-finance-deferred/LocalAssetEscrow.daml), [`HoldingAdapter.daml`](../packages/daml/main/daml-finance-deferred/HoldingAdapter.daml), [`CreateLocalAssetStream.daml`](../packages/daml/main/daml-finance-deferred/CreateLocalAssetStream.daml) | **Deferred** physical-custody escrow modules, not built into the shipped `canton-streams` DAR. In scope for review of the `getTime` guards and authority model only; not part of the active token-standard V1/V2 release path. |
 
 ### StreamFlow (rolling top-up)
 
@@ -156,18 +156,21 @@ passing `cancelTime = startTime` to claw back vested funds).
 
 ### V1/V2 capability negotiation
 
-- The library is **V2-only**: `getAssetCapabilities` /
-  `selectAdapter` (`packages/sdk/src/assets/capabilities.ts`) assert the
-  required V2 allocation capabilities and refuse to route against
-  V1-only assets. There is no V1 dispatch path to downgrade to.
+- The library supports **V2 preferred + V1 transitional** settlement:
+  `getAssetCapabilities` / `resolveSettlementVersion`
+  (`packages/sdk/src/assets/capabilities.ts`) routes V2 when
+  `allocationsV2 = true` and routes V1 only when `allocationsV1 = true`
+  for a registered asset.
+- Iterated allocations, batch settlement, and TransferEventsV2 automation are
+  V2-only and must fail loudly on the V1 lane.
 - Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces
   alongside V1; once an asset advertises V2 in `supportedApis`, the
   library integrates with it.
 - The deferred `HoldingEscrow` / `LocalAssetEscrow` modules are the
   physical-custody V1-compatibility path; verify they are not bound into
   the shipped DAR and that the V2 lock-in-place model is the active one.
-- Confirm `scripts/check-v2-conformance.sh` blocks forbidden V1 choice
-  names (e.g. `Allocation_ExecuteTransfer`) repo-wide.
+- Confirm `scripts/check-v2-conformance.sh` blocks accidental V1 choice-name
+  usage outside the explicitly allowlisted V1 lane and V1 documentation.
 
 The seven AllocationRequest trust boundaries and the additional trust
 boundaries (asset-registry integrity, CIP-103 dApp provider, proxy
@@ -208,14 +211,18 @@ pnpm daml:deps        # fetch/build the CIP-56 V2 Token Standard DARs
 pnpm daml:build       # or: dpm build --all
 ```
 
-`daml:build` builds the workspace Daml packages (interfaces, main,
-test, scripts). The `canton-streams` DAR depends on the pinned
+`daml:build` builds the workspace Daml packages that make up the published
+RC surface (interfaces, main, and acceptance tests). The optional
+`packages/daml/scripts` helper package is source reference for local token
+minting/lifecycle experiments and is intentionally excluded from the default
+build because its test-token DAR dependencies can conflict with the main
+token-standard pins. The `canton-streams` DAR depends on the pinned
 `splice-api-token-*` V2 packages fetched by `pnpm daml:deps`.
 
 ### Run tests
 
 ```bash
-pnpm daml:test        # runs dpm test in packages/daml/test and packages/daml/scripts
+pnpm daml:test        # runs dpm test in packages/daml/test
 ```
 
 ### Test suites that exist

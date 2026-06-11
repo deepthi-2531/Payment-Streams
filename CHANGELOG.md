@@ -4,6 +4,8 @@ All notable changes to Canton Payment Streams are documented here. The format is
 
 ## [Unreleased]
 
+## [1.0.0-rc.1] - 2026-06-11
+
 ### Added
 
 - **Transitional CIP-56 V1 settlement lane** (`splice-api-token-allocation-v1`) so MainNet-live assets (CC/Amulet, USDCx) settle streams before CIP-0112 ratifies: self-contained SDK builders (`commands/allocation-v1.ts`), `dispatchSettlementV1` + lane-aware capability gating (`resolveSettlementVersion`; iterated/batch stay V2-only), registry `allocationsV1` flag, disclosed-contract support in both transports, registry choice-context fetcher (`settlement/choice-context.ts`), separate `canton-streams-v1-shim` DAR, and `scripts/devnet-v1-cc-stream-probe.mjs`. **Field-validated with real CC on TestNet and MainNet (2026-06-10)** — see `docs/reports/`. **Retirement plan ("V1 lane retirement")**: when CC/USDCx advertise V2, flip registry flags, delete the `*-v1` SDK/test files + `choice-context.ts` + the dispatcher's V1 section + the v1-shim package + the probe, and drop the V1 entries from `check-v2-conformance.sh` ALLOWED_FILES.

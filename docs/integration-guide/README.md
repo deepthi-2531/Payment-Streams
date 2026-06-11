@@ -78,6 +78,12 @@ import assetRegistryFile from './asset-registry.json' assert { type: 'json' };
 // 1. Load the asset registry (per-asset routing)
 const registry = loadAssetRegistry(assetRegistryFile);
 const usdcx = registry.requireAsset('usdcx');
+const usdcxInstrumentRef = {
+  depository: usdcx.instrumentIdV2.admin,
+  issuer: usdcx.instrumentIdV2.admin,
+  instrumentId: usdcx.instrumentIdV2.id,
+  instrumentVersion: usdcx.allocationsV2 ? 'v2' : 'v1',
+};
 
 // 2. Construct the stream params via a use-case helper
 const params = buildVestingStream({
@@ -88,7 +94,7 @@ const params = buildVestingStream({
   startTime: new Date('2026-07-01'),
   durationDays: 365 * 4,        // 4-year vest
   cliffDays: 365,                // 1-year cliff
-  instrumentRef: usdcx.instrumentRef!,
+  instrumentRef: usdcxInstrumentRef,
   escrowOperator: ourOperatorParty,
   fundingReference: walletFundingRef, // from the wallet's V2 allocation funding step
 });
@@ -107,7 +113,7 @@ into `provider.prepareExecute({...})`. See `cip-103-walkthrough.md`.
 
 ## What you do NOT need to do
 
-- **Branch by asset name**: the library gates on V2 capability flags.
+- **Branch by asset name**: the library gates on V1/V2 capability flags.
 You pick a registered V2 asset; the library rejects assets that do
 not advertise the required V2 allocation support.
 - **Manage your own signing**: use Path A (wallet) or Path B (vault).

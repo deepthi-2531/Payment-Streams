@@ -1,7 +1,7 @@
 sdk-version: 3.4.10
 name: canton-streams-v1-shim
 source: daml
-version: 0.1.0
+version: 1.0.0
 dependencies:
   - daml-prim
   - daml-stdlib
@@ -23,11 +23,11 @@ data-dependencies:
   # Populate `.lib/` from the Splice release that the target validator
   # runs, e.g. from the validator-app image:
   #
-  #   IMG=ghcr.io/digital-asset/decentralized-canton-sync/docker/validator-app:<version>
-  #   CID=$(docker create $IMG)
-  #   docker cp $CID:/app/splice-node/dars/splice-api-token-metadata-v1-1.0.0.dar .lib/
+  #   IMAGE=ghcr.io/digital-asset/decentralized-canton-sync/docker/validator-app:<version>
+  #   CONTAINER_ID=<container created from IMAGE>
+  #   docker cp <container-id>:/app/splice-node/dars/splice-api-token-metadata-v1-1.0.0.dar .lib/
   #   …(holding-v1, allocation-v1, allocation-request-v1)…
-  #   docker rm $CID
+  #   docker rm <container-id>
   # -------------------------------------------------------------------
   - .lib/splice-api-token-metadata-v1-1.0.0.dar
   - .lib/splice-api-token-holding-v1-1.0.0.dar

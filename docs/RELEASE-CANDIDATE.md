@@ -17,22 +17,24 @@ Each step below is marked as one of:
 - **[manual]** — a maintainer/owner action that must be done by hand,
   often requiring credentials or repository-owner privileges.
 
-The current versions in this checkout are `0.2.7` across the workspace
-npm packages and `0.2.8` for the `canton-streams` DAR
+The current versions in this checkout are `1.0.0-rc.1` across the workspace
+npm packages and `1.0.0` for the `canton-streams` DAR
 ([`packages/daml/main/daml.yaml`](../packages/daml/main/daml.yaml)). The
-RC bumps all of these to a single coherent `1.0.0-rc.1` line.
+numeric DAR version is the on-ledger artifact paired with npm
+`1.0.0-rc.1`.
 
 ---
 
 ## 1. Versioning **[manual]**
 
-Bump to `1.0.0-rc.1` across the workspace and the DAR, then tag.
+Prepare npm package version `1.0.0-rc.1` and Daml package version `1.0.0`,
+then tag.
 
 ### 1.1 Bump package versions
 
-Set `version` to `1.0.0-rc.1` in:
+Confirm `version` is `1.0.0-rc.1` in:
 
-- `package.json` (root, currently `0.2.7`)
+- `package.json` (root)
 - `packages/sdk/package.json`
 - `packages/cli/package.json`
 - `packages/proxy/package.json`
@@ -45,13 +47,13 @@ it covers your manifests; otherwise edit each manifest.
 
 ### 1.2 Bump the DAR version
 
-Update the Daml package version in
+Confirm the Daml package version in
 [`packages/daml/main/daml.yaml`](../packages/daml/main/daml.yaml)
-(currently `0.2.8`) and align the DAR filenames referenced by the
-test/script packages
-([`packages/daml/test/daml.yaml`](../packages/daml/test/daml.yaml),
-[`packages/daml/scripts/daml.yaml`](../packages/daml/scripts/daml.yaml)),
-which pin `canton-streams-0.2.8.dar` as a data-dependency.
+(currently `1.0.0`) and align the DAR filenames referenced by the
+test package ([`packages/daml/test/daml.yaml`](../packages/daml/test/daml.yaml)),
+which pins `canton-streams-1.0.0.dar` as a data-dependency. The optional
+`packages/daml/scripts` helper package is source reference and not part of the
+published RC gate.
 
 > Daml SemVer does not accept a `-rc.1` pre-release suffix in
 > `daml.yaml`. Keep the DAR on a numeric version (the next numeric
@@ -216,7 +218,8 @@ Also confirm:
 # Canton Payment Streams 1.0.0-rc.1
 
 First public release candidate. Payment streams for Canton, built on the
-CIP-56 Token Standard V2 allocation path.
+CIP-56 Token Standard with V2 preferred and a transitional V1 lane for
+registered assets that have not yet published V2.
 
 ## Feature set
 
@@ -224,9 +227,11 @@ CIP-56 Token Standard V2 allocation path.
   `StreamFlow` (rolling top-up / pause / resume / renew), and
   `MilestoneAdmin` (multi-leg milestone release).
 - **Vesting modes:** Linear, CliffLinear, Stepped, RenewableTerm.
-- **V2-only settlement:** CIP-56 Token Standard V2 via the CIP-0112
-  `AllocationRequest` pattern; per-asset capability gating via
-  `config/asset-registry.json` with no per-asset branching in code.
+- **Token-standard settlement:** CIP-56 Token Standard V2 via the CIP-0112
+  `AllocationRequest` pattern where available, plus the transitional V1
+  allocation lane for registered assets that have not yet published V2;
+  per-asset capability gating via `config/asset-registry.json` with no
+  per-asset branching in dApp code.
 - **Bounded delegated execution:** `DelegatedPolicy` enforces executor
   authority on-ledger (rate limit, cooldown, expiry, scope, action
   allow-list) with an append-only `ExecutionLog`.

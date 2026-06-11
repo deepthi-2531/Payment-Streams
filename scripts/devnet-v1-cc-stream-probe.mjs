@@ -174,10 +174,12 @@ function settlementRefId() {
  */
 function attributionMeta() {
   const appId = env('APP_ID', env('CANTON_STREAMS_APP_ID'));
+  const agreementId = env('AGREEMENT_ID', env('CANTON_STREAMS_AGREEMENT_ID'));
   return { values: {
     'cantonstreams.dev/ref': settlementRefId(),
     'cantonstreams.dev/v': '1',
     ...(appId ? { 'cantonstreams.dev/app': appId } : {}),
+    ...(agreementId ? { 'cantonstreams.dev/agreement': agreementId } : {}),
   } };
 }
 

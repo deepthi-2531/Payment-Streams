@@ -15,7 +15,7 @@
  *     "packages": [
  *       {
  *         "name": "canton-streams",
- *         "version": "0.2.7",
+ *         "version": "1.0.0",
  *         "packageHash": "<sha256>",
  *         "darPath": "<path to .dar>",
  *         "templates": [
@@ -30,8 +30,8 @@
  *
  *   node scripts/build-template-manifest.mjs \
  *     [--out dist/template-manifest.json] \
- *     [--dar packages/daml/main/.daml/dist/canton-streams-0.2.7.dar] \
- *     [--dar packages/daml/interfaces/.daml/dist/canton-streams-interfaces-0.2.2.dar]
+ *     [--dar packages/daml/main/.daml/dist/canton-streams-1.0.0.dar] \
+ *     [--dar packages/daml/interfaces/.daml/dist/canton-streams-interfaces-1.0.0.dar]
  *
  * Requires `damlc inspect-dar --json` on PATH (Daml SDK 2.x or 3.x).
  *
@@ -49,8 +49,8 @@ const REPO_ROOT = resolve(__dirname, '..');
 
 // Default DARs that ship with this library.
 const DEFAULT_DARS = [
-  'packages/daml/main/.daml/dist/canton-streams-0.2.7.dar',
-  'packages/daml/interfaces/.daml/dist/canton-streams-interfaces-0.2.2.dar',
+  'packages/daml/main/.daml/dist/canton-streams-1.0.0.dar',
+  'packages/daml/interfaces/.daml/dist/canton-streams-interfaces-1.0.0.dar',
 ];
 
 function parseArgs(argv) {

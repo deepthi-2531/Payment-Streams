@@ -1,6 +1,6 @@
 {
   "name": "canton-streams",
-  "version": "0.2.7",
+  "version": "1.0.0-rc.1",
   "private": true,
   "description": "Continuous payment streaming for Canton — Daml templates, TypeScript SDK, CLI, and dashboard",
   "license": "Apache-2.0",
@@ -22,7 +22,6 @@
     "lint": "turbo run lint",
     "dev": "turbo run dev",
     "daml:build": "dpm build --all",
-    "daml:build:scripts": "cd packages/daml/scripts && dpm build",
     "daml:test": "./scripts/test-all-daml.sh",
     "daml:deps": "node scripts/fetch-v2-dars.mjs",
     "fixtures": "./generate-fixtures.sh",
