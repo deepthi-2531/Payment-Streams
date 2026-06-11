@@ -9,7 +9,9 @@
 > and [V1-LANE-TESTING.md](../V1-LANE-TESTING.md)).
 >
 > **Evidence honesty:** no live USDCx cycle has been executed yet — it is
-> blocked on a party funded with USDCx and the issuer's registry endpoint.
+> blocked only on a party funded with USDCx. The registry routing (issuer
+> admin party, instrument id, registry API base) is now committed in
+> `config/asset-registry.json` from Circle xReserve / Digital Asset docs.
 > Everything below is split explicitly into *validated today* vs *pending
 > live run*. There is no USDCx run data in this document.
 
@@ -53,34 +55,31 @@ Expected per-asset behavioral differences to watch for on the live run
 | Registry lookup for `usdcx` | `loadAssetRegistry(config/asset-registry.json)` resolves `usdcx`; `resolveSettlementVersion` routes `v1`; `getAssetByV2Id({ admin, id })` round-trips |
 | Capability gating | `allocation-iterated` / `allocation-batch` on `usdcx` throw (V2-only actions); recurring streams run one cycle per withdrawal |
 | Probe flag parsing + registry override | `node scripts/testnet-usdcx-stream-probe.mjs --dry-run --target testnet --asset-key usdcx` resolves `instrumentId=USDCx` + admin/depository from the registry (verified 2026-06-11) |
-| Placeholder guard | Pre-flight (`scripts/lib/preflight.mjs`) flags the `TBD::`/`TBD-` values in the `usdcx` entry: warning on DevNet/TestNet, **hard error on `--target mainnet`** (verified 2026-06-11) |
+| Placeholder guard | Pre-flight (`scripts/lib/preflight.mjs`) flags the remaining `TBD-` value (`walletGatewayUrl`, which is operator-specific) in the `usdcx` entry: warning on DevNet/TestNet, **hard error on `--target mainnet`** (verified 2026-06-11) |
 
-## 3. Per-network resolution: admin party + registry endpoint
+## 3. Per-network routing (committed real values)
 
-The `usdcx` registry entry ships with explicit `TBD::`/`TBD-` placeholders
-(they intentionally trip the pre-flight guard). Resolve them per network
-before a live run:
+The `usdcx` entry carries the real Circle xReserve / Digital Asset
+published routing. The fields hold the **TestNet** values; `meta.mainnet`
+holds the MainNet overrides.
 
-1. **Issuer admin party** (`instrumentIdV2.admin` + `adminParty`):
-   deployment-specific. Resolve from the issuer's published token-standard
-   metadata, or locate the issuer via the public SV network status listing
-   (<https://canton.foundation/sv-network-status-2/>). Do not guess — the
-   party id includes a network-specific fingerprint.
-2. **Registry endpoint** (`tokenStandardApiUrl`): USDCx runs a dedicated
-   registry app (unlike Amulet, whose registry API is served by Scan).
-   Resolve the base URL from the issuer's published metadata. The
-   choice-context endpoints live under `/registry/allocations/v1/...` and
-   `/registry/allocation-instruction/v1/...` on that base.
-3. **SV Scan** (`scanEndpointUrl`): network-wide transaction history.
-   TestNet reference is encoded in the entry
-   (`https://scan.sv-1.test.global.canton.network.sync.global`); MainNet
-   equivalent is `https://scan.sv-1.global.canton.network.sync.global`.
-4. **Wallet gateway** (`walletGatewayUrl`): deployment-specific — each
-   operator runs their own; point it at yours.
+| Field | TestNet (entry) | MainNet (`meta.mainnet`) |
+|---|---|---|
+| `instrumentIdV2.id` | `USDCx` | `USDCx` |
+| `instrumentIdV2.admin` / `adminParty` | `decentralized-usdc-interchain-rep::122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61` | `decentralized-usdc-interchain-rep::12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef` |
+| `tokenStandardApiUrl` | `https://api.utilities.digitalasset-staging.com` | `https://api.utilities.digitalasset.com` |
+| `scanEndpointUrl` | `https://scan.sv-1.test.global.canton.network.sync.global` | `https://scan.sv-1.global.canton.network.sync.global` |
 
-Cross-check after filling: `instrumentIdV2.id` stays `USDCx`; the admin
-party in the registry must equal the `admin` on the issuer's live holding
-contracts (query one sender holding and compare).
+USDCx runs a dedicated registry app (unlike Amulet, whose registry API is
+served by Scan); the burn/mint factory lives at
+`/api/utilities/v0/registry/burn-mint-instruction/v0/burn-mint-factory`
+and choice-context endpoints under `/registry/allocations/v1/...` on
+`tokenStandardApiUrl`. Source: Circle xReserve / Digital Asset docs
+(`docs.digitalasset.com/usdc/xreserve`, `.../integrate/devnet/usdcx-support`).
+
+Only `walletGatewayUrl` stays operator-specific (each operator runs their
+own gateway). Cross-check before a live run: query one sender USDCx holding
+and confirm its `admin` equals the registry `adminParty` for that network.
 
 ## 4. Live checklist (pending a funded USDCx party)
 
