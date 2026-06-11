@@ -3,11 +3,16 @@ set -euo pipefail
 
 # Runs dpm test in each Daml package directory.
 # dpm test is per-package, not root-level.
+#
+# Only the `test` acceptance suite runs by default. The `scripts` helper
+# package is decoupled (see multi-package.yaml): it depends on an older
+# test-token DAR generation than `main`. Refresh with `pnpm daml:deps` and
+# run it on demand with `pnpm daml:build:scripts`.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAML_DIR="$SCRIPT_DIR/../packages/daml"
 
-PACKAGES=("test" "scripts")
+PACKAGES=("test")
 FAILED=0
 
 for pkg in "${PACKAGES[@]}"; do

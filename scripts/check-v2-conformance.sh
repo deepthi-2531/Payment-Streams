@@ -37,6 +37,21 @@ ALLOWED_FILES=(
   # Daml templates may carry "don't invent this; V2 uses X" warning comments
   # that explicitly steer contributors away from forbidden V1 names.
   'packages/daml/main/daml/CantonStreams/Stream/MilestoneAdmin.daml'
+  # Transitional V1 settlement lane — intentionally speaks the V1 token
+  # standard vocabulary. Delete these entries when the lane is retired.
+  'packages/sdk/src/commands/allocation-v1.ts'
+  'packages/sdk/test/commands/allocation-v1.test.ts'
+  'packages/sdk/test/settlement/allocation-dispatch-v1.test.ts'
+  'packages/sdk/src/settlement/choice-context.ts'
+  'packages/daml/v1-shim/daml/CantonStreams/V1Shim/AllocationRequestShim.daml'
+  'packages/daml/v1-shim/test/daml/Test/V1Shim/AllocationRequestShimTest.daml'
+  'scripts/devnet-v1-cc-stream-probe.mjs'
+  'docs/V1-LANE-TESTING.md'
+  'docs/reports/first-dapp-integration-testnet.md'
+  'docs/reports/mainnet-external-stream-2026-06-10.md'
+  # Docs that legitimately discuss the V1 lane / audit scope by name.
+  'docs/AUDIT-SCOPE.md'
+  'docs/validation/usdcx-field-validation.md'
 )
 
 # ---------------------------------------------------------------------------

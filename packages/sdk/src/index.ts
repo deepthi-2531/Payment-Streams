@@ -233,8 +233,21 @@ export {
   META_KEY_STREAMS_REF,
   META_KEY_STREAMS_VERSION,
   META_KEY_STREAMS_APP,
+  META_KEY_STREAMS_AGREEMENT,
   META_STREAMS_VERSION,
 } from './commands/allocation-v1.js';
+
+// Recipient deliverability pre-flight (external recipients).
+export { checkRecipientDeliverability } from './settlement/recipient-preflight.js';
+export type {
+  RecipientPreflightParams,
+  RecipientPreflightResult,
+  TransferKind,
+} from './settlement/recipient-preflight.js';
+
+// Per-asset registry — load routing for CC / USDCx / any registered asset.
+export { AssetRegistry, loadAssetRegistry } from './assets/registry.js';
+export type { AssetConfig, AssetRegistryFile } from './assets/registry.js';
 
 // Registry choice-context fetcher for the V1 lane (Amulet: served by
 // Scan). Deleted together with the lane.

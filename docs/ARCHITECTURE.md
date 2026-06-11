@@ -61,7 +61,8 @@ Browser-safe via `@canton-streams/sdk/browser` (excludes Node-only deps like gRP
 | Surface | Purpose |
 |---|---|
 | `CantonStreamsClient` | High-level API: create / accept / withdraw / cancel / renew / query (server-side) |
-| `buildAllocationRequest` | Construct a V2 `AllocationRequest` for dispatch via `dappSDK.prepareExecute` (browser-side) |
+| `createStream` / `createFlow` | High-level create entry points (prefunded `StreamAdmin` and rolling `StreamFlow`) on `CantonStreamsClient` |
+| `buildAllocationRequest` | Low-level builder for a V2 `AllocationRequest` (used internally by settlement; not the stream-create path) |
 | `GrpcTransport` / `JsonApiTransport` | Interchangeable transports |
 | `BalanceTicker` | Client-side accrual display |
 | Accrual functions | `linearAccrual`, `cliffLinearAccrual`, `steppedAccrual`, `renewableTermAccrual` |
@@ -132,14 +133,14 @@ The same SDK call shape works for CC, USDCx, and any future CIP-56 asset. Adopte
 ## Data flow: create → accept → settle (StreamAdmin)
 
 ```
-1. Sender constructs an AllocationRequest
-   Dashboard -> @canton-streams/sdk: buildAllocationRequest({ ... })
-     -> returns { commands: [...], summary: {...} }
+1. Sender creates the stream request
+   Dashboard/host app -> CantonStreamsClient.createStream({ ... })
+     -> proxy submits; the underlying V2 allocation is built internally
+     <- CreateStreamRequest contract on-ledger, observable by recipient
 
-2. Sender's wallet signs + submits
-   Dashboard -> dappSDK.prepareExecute({ commands, actAs: [sender] })
-     -> wallet gateway prepares + signs + submits
-     <- AllocationRequest contract on-ledger, observable by recipient
+2. Sender's wallet signs + submits the allocation
+   Wallet provider prepares + signs + submits the V2 allocation
+     <- allocation on-ledger, funding committed
 
 3. Recipient sees the request in their wallet's inbox
    Dashboard -> dappSDK.listAccounts() -> filter for pending requests

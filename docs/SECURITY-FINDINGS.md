@@ -123,5 +123,6 @@ pnpm --filter @canton-streams/dashboard test
 (cd packages/daml/test && daml test)   # Daml-script suites incl. invariants
 ```
 
-Report a new vulnerability privately per [SECURITY.md](../SECURITY.md). Support
-and maintenance policy is in [docs/SUPPORT.md](SUPPORT.md).
+Report a new vulnerability privately to the maintainers — do not open a
+public issue or PR. Support and maintenance policy is in
+[docs/SUPPORT.md](SUPPORT.md).

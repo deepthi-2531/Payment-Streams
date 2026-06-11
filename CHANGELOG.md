@@ -2,6 +2,15 @@
 
 All notable changes to Canton Payment Streams are documented here. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Transitional CIP-56 V1 settlement lane** (`splice-api-token-allocation-v1`) so MainNet-live assets (CC/Amulet, USDCx) settle streams before CIP-0112 ratifies: self-contained SDK builders (`commands/allocation-v1.ts`), `dispatchSettlementV1` + lane-aware capability gating (`resolveSettlementVersion`; iterated/batch stay V2-only), registry `allocationsV1` flag, disclosed-contract support in both transports, registry choice-context fetcher (`settlement/choice-context.ts`), separate `canton-streams-v1-shim` DAR, and `scripts/devnet-v1-cc-stream-probe.mjs`. **Field-validated with real CC on TestNet and MainNet (2026-06-10)** — see `docs/reports/`. **Retirement plan ("V1 lane retirement")**: when CC/USDCx advertise V2, flip registry flags, delete the `*-v1` SDK/test files + `choice-context.ts` + the dispatcher's V1 section + the v1-shim package + the probe, and drop the V1 entries from `check-v2-conformance.sh` ALLOWED_FILES.
+- **Attribution metadata stamping** on every settlement's public asset leg: `cantonstreams.dev/{ref,v,app,agreement}` (app via `CANTON_STREAMS_APP_ID`, agreement via `CANTON_STREAMS_AGREEMENT_ID` or params). Committee-grade collector `scripts/scan-usage-report.mjs`: incremental cursor (`STATE_FILE`), synchronizer-**migration-aware** paging, per-app + per-agreement rollups, integrator registry + affiliate exclusion, imputed traffic/burn columns (per-tx cost measured on MainNet: 19,122 bytes/settlement). Integrator guide: `docs/integration-guide/streams-integration.md`.
+- **Recipient pre-flight** (`checkRecipientDeliverability`): registry probe telling operators whether a recipient delivers hands-free (`direct`, has TransferPreapproval) or needs onboarding (`offer`) — no on-ledger submission.
+- **Interest-stream scheduler** (`scripts/interest-stream-scheduler.mjs`): reference daemon for fixed-rate recurring payouts (e.g. CIP-0105 token-lock interest) — hourly/daily cadence, Stepped accrual with per-agreement arrears policy (`catch-up` settles accumulated windows after an outage; `skip-missed` caps at one period), MainNet-validated transfer-instruction settlement with full attribution stamping, optional `Sync_Iteration` recording, durable state, `DRY_RUN`/`ONCE` modes.
+
 ## [0.2.8] - 2026-05-23
 
 ### Changed

@@ -85,6 +85,12 @@ export const META_KEY_STREAMS_VERSION = 'cantonstreams.dev/v';
  * sender party's namespace prefix.
  */
 export const META_KEY_STREAMS_APP = 'cantonstreams.dev/app';
+/**
+ * Commercial-agreement identity (e.g. a lock/interest agreement id) for
+ * per-agreement reporting rollups. Set per call (`agreementId` param) or
+ * via the `CANTON_STREAMS_AGREEMENT_ID` env var.
+ */
+export const META_KEY_STREAMS_AGREEMENT = 'cantonstreams.dev/agreement';
 /** Stamp value for {@link META_KEY_STREAMS_VERSION}. */
 export const META_STREAMS_VERSION = '1';
 
@@ -93,12 +99,15 @@ function stampAttribution(
   meta: AllocationMetadataV1 | undefined,
   settlementRefId: string,
   appId?: string,
+  agreementId?: string,
 ): AllocationMetadataV1 {
   const resolvedAppId = appId ?? process.env['CANTON_STREAMS_APP_ID'];
+  const resolvedAgreement = agreementId ?? process.env['CANTON_STREAMS_AGREEMENT_ID'];
   return {
     [META_KEY_STREAMS_REF]: settlementRefId,
     [META_KEY_STREAMS_VERSION]: META_STREAMS_VERSION,
     ...(resolvedAppId ? { [META_KEY_STREAMS_APP]: resolvedAppId } : {}),
+    ...(resolvedAgreement ? { [META_KEY_STREAMS_AGREEMENT]: resolvedAgreement } : {}),
     ...(meta ?? {}),
   };
 }
@@ -175,6 +184,12 @@ export interface BuildAllocationRequestV1Params {
    * usage attribution. Falls back to env `CANTON_STREAMS_APP_ID`.
    */
   readonly appId?: string | undefined;
+  /**
+   * Commercial agreement id stamped as `cantonstreams.dev/agreement`
+   * for per-agreement reporting. Falls back to env
+   * `CANTON_STREAMS_AGREEMENT_ID`.
+   */
+  readonly agreementId?: string | undefined;
 }
 
 /**
@@ -300,7 +315,7 @@ export function buildAllocationRequestV1(
       settleBefore: damlTimestamp(settleBefore),
       // Attribution keys ride the settlement meta so the asset-side
       // allocation is discoverable on public Scan (see META_KEY_*).
-      meta: metaToWire(stampAttribution(params.settlement.meta, params.settlement.settlementRefId, params.appId)),
+      meta: metaToWire(stampAttribution(params.settlement.meta, params.settlement.settlementRefId, params.appId, params.agreementId)),
     },
     transferLegs,
     meta: metaToWire(params.meta),

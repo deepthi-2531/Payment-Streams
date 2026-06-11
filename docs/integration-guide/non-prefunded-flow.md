@@ -305,6 +305,21 @@ lifecycle on a dedicated page.
 
 Pause / resume are not surfaced in the dashboard; use the SDK for those.
 
+> **Maturity note — operator/co-hosted reference, not yet hosted-wallet.**
+> The current `StreamFlow` path is a solid **operator / co-hosted
+> reference**: the proxy creates and drives flows by submitting with
+> `sender` + `recipient` + `escrowOperator` together in `actAs`
+> (`packages/proxy/src/index.ts`, `POST /api/flows` — see the
+> `createClientForAuthWithParties(auth, [recipient, escrowOperator])`
+> call), and the SDK/probe path co-hosts all three parties on one
+> participant. A **fully hosted-wallet `StreamFlow` UX is future work**:
+> the dashboard's hosted-wallet client does not yet wire StreamFlow —
+> `createFlow` / `topUpFlow` / `withdrawFlow` / `stopFlow` throw
+> `HostedWalletWriteUnsupportedError`, and `listFlows` returns an empty
+> result because there is no browser-side StreamFlow decoder yet
+> (`packages/dashboard/src/api/client.ts`). Use the SDK/proxy path for
+> StreamFlow today; treat hosted-wallet StreamFlow as not yet wired.
+
 ---
 
 ## 6. Settlement semantics (V2 iterated allocation)

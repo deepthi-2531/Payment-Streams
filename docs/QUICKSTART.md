@@ -134,33 +134,42 @@ curl -X POST "$PROXY/api/streams/SenderParty::1220.../first-stream/withdraw" \
 
 ### From the SDK (browser, CIP-103 wallet)
 
+Connect a wallet to resolve the acting party, then create the stream
+through the REST proxy (`POST /api/streams`, shown via `curl` above) using
+the same parameter shape as the server-side `createStream` example below.
+
 ```typescript
 import { dappSDK } from '@canton-network/dapp-sdk';
-import { buildAllocationRequest, VestingMode, SettlementMode } from '@canton-streams/sdk';
-import Decimal from 'decimal.js';
+import { VestingMode, SettlementMode } from '@canton-streams/sdk';
 
 await dappSDK.init();
 await dappSDK.connect();
 const accounts = await dappSDK.listAccounts();
 const sender = accounts.find((a) => a.primary)!.partyId;
 
-const request = buildAllocationRequest({
-  sender,
-  recipient: 'Bob::1220...',
-  asset: { instrumentId: 'MyAsset', admin: 'MyAssetAdmin::1220...' },
-  totalAmount: new Decimal('100'),
-  vestingMode: { mode: VestingMode.Linear },
-  startTime: new Date(),
-  endTime: new Date(Date.now() + 3_600_000),
-  settlementMode: SettlementMode.TokenStandardCustody,
+const res = await fetch(`${PROXY}/api/streams`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+  body: JSON.stringify({
+    streamId: 'first-stream',
+    sender,
+    recipient: 'Bob::1220...',
+    totalDeposited: '100',
+    vestingMode: { mode: VestingMode.Linear },
+    startTime: new Date().toISOString(),
+    endTime: new Date(Date.now() + 3_600_000).toISOString(),
+    cancellable: true,
+    settlementMode: SettlementMode.TokenStandardCustody,
+    instrumentRef: {
+      depository: 'MyAssetAdmin::1220...',
+      issuer: 'MyAssetAdmin::1220...',
+      instrumentId: 'MyAsset',
+      instrumentVersion: 'v2',
+    },
+  }),
 });
-
-const { txId } = await dappSDK.prepareExecuteAndWait({
-  commands: request.commands,
-  actAs: [sender],
-});
-
-console.log(`Stream created: ${txId}`);
+const { streamId } = await res.json();
+console.log(`Stream created: ${streamId}`);
 ```
 
 ### From the SDK (server-side, JWT)
