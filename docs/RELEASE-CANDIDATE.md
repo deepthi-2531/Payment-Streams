@@ -203,8 +203,12 @@ Also confirm:
 ### Credential / secret prerequisites **[manual owner action]**
 
 - `@canton-streams` npm scope — must exist before first publish.
-- `NPM_TOKEN` GitHub Actions secret — must be an npm automation token with
-  publish rights for the `@canton-streams` scope.
+- `NPM_TOKEN` GitHub Actions secret — an npm automation token with publish
+  rights for the `@canton-streams` scope (or npm trusted publishing
+  configured for the scope). **Without it the release workflow still runs**
+  — it builds, tests, and cuts the GitHub release, and skips only the npm
+  publish (with a warning in the run summary). Add the secret and re-run
+  the tag's workflow to publish to npm.
 - The `release` protected environment configured with required reviewers
   (see §2).
 - Container-registry credentials — required only for the manual Docker

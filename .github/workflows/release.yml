@@ -90,20 +90,32 @@ jobs:
         if: steps.target.outputs.package == 'cli'
         run: pnpm --filter @canton-streams/cli build
 
-      - name: Verify npm authentication
+      - name: Check npm credentials
+        id: npmauth
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::error::NPM_TOKEN is not configured. Add an npm automation token with publish rights for the @canton-streams scope."
-            exit 1
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "can_publish=true" >> "$GITHUB_OUTPUT"
+            npm whoami --registry=https://registry.npmjs.org
+          else
+            echo "can_publish=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::NPM_TOKEN is not configured — skipping the npm publish. The build, tests, and GitHub release still run. To publish to npm, add an NPM_TOKEN automation secret (or enable npm trusted publishing) with publish rights for the @canton-streams scope, then re-run this workflow."
           fi
-          npm whoami --registry=https://registry.npmjs.org
 
       - name: Publish package
+        if: steps.npmauth.outputs.can_publish == 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: pnpm --filter "${{ steps.target.outputs.package_name }}" publish --access public --tag "${{ steps.target.outputs.npm_tag }}" --no-git-checks --provenance
+
+      - name: Note skipped publish
+        if: steps.npmauth.outputs.can_publish != 'true'
+        run: |
+          echo "### npm publish skipped" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "No npm credential is configured, so ${{ steps.target.outputs.package_name }} v${{ steps.target.outputs.version }} was **not** published to npm." >> "$GITHUB_STEP_SUMMARY"
+          echo "Add an \`NPM_TOKEN\` secret (or enable npm trusted publishing) and re-run to publish." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
