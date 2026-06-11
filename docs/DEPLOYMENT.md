@@ -1,6 +1,8 @@
 # Deployment Guide
 
-End-to-end deployment of Canton Payment Streams: Daml packages → REST proxy → React dashboard. V2-only (CIP-56 V2 + CIP-0112 AllocationRequest, CIP-103 wallet auth).
+End-to-end deployment of Canton Payment Streams: Daml packages → REST proxy →
+React dashboard. V2 is the preferred CIP-56 token-standard lane; registered
+V1 assets can use the transitional allocation lane until they advertise V2.
 
 ## Local sandbox (Docker)
 
@@ -39,21 +41,21 @@ pnpm daml:deps       # download Splice V2 dependency DARs into packages/daml/mai
 pnpm daml:build      # compile all Daml packages
 ```
 
-Output: `packages/daml/main/.daml/dist/canton-streams-0.2.8.dar`.
+Output: `packages/daml/main/.daml/dist/canton-streams-1.0.0.dar`.
 
 **Upload to a participant:**
 
 ```bash
 # Via Canton Admin API (gRPC)
 grpcurl -plaintext \
-  -d "{\"dar_file\": \"$(base64 -i packages/daml/main/.daml/dist/canton-streams-0.2.8.dar)\"}" \
+  -d "{\"dar_file\": \"$(base64 -i packages/daml/main/.daml/dist/canton-streams-1.0.0.dar)\"}" \
   localhost:5002 \
   com.digitalasset.canton.admin.participant.v30.PackageService/UploadDar
 
 # Or via the daml CLI
 daml ledger upload-dar \
   --host localhost --port 5001 \
-  packages/daml/main/.daml/dist/canton-streams-0.2.8.dar
+  packages/daml/main/.daml/dist/canton-streams-1.0.0.dar
 ```
 
 **Vet the package on the synchronizer:**
@@ -103,9 +105,9 @@ node packages/proxy/dist/index.js
 | `CANTON_JSON_API_URL`       | (required for readiness)        | Canton JSON API base URL                                       |
 | `CANTON_SYNCHRONIZER_ID`    | (required)                      | Synchronizer/domain id streams are created on                  |
 | `CANTON_STREAMS_PACKAGE_ID` | (required)                      | Vetted package id of the canton-streams DAR                    |
-| `PROXY_AUTH_MODE`           | `dev`                           | `jwt` (production) or `dev`                                    |
+| `PROXY_AUTH_MODE`           | `jwt`                           | `jwt` (production) or `dev`; dev requires `PROXY_ALLOW_DEV_AUTH=true` |
 | `PROXY_OIDC_ISSUER`         | (none)                          | OIDC issuer URL — required when `PROXY_AUTH_MODE=jwt`          |
-| `PROXY_JWT_AUDIENCE`        | `https://canton.network.global` | Expected JWT audience                                          |
+| `PROXY_JWT_AUDIENCE`        | (none)                          | Expected JWT audience; required in jwt mode unless explicitly acknowledged with `PROXY_ALLOW_ANY_AUDIENCE=true` |
 | `PROXY_SERVICE_TOKEN`       | (none)                          | Service JWT for finalize / auto-withdraw routes                |
 | `PROXY_ESCROW_OPERATOR`     | (none)                          | Escrow-operator party id                                       |
 | `ALLOWED_ORIGINS`           | (none)                          | CORS allowlist, comma-separated (e.g. `http://localhost:3000`) |
@@ -153,22 +155,31 @@ Recommended production posture:
 
 ### 4. Per-asset configuration
 
-All asset routing lives in `config/asset-registry.json`. Each asset entry advertises its admin party, Scan endpoint, wallet-gateway URL, and V2 capability flags. The SDK reads this at runtime via `getAssetCapabilities(instrumentRef)` and rejects assets that do not advertise required V2 allocation support.
+All asset routing lives in `config/asset-registry.json`. Each asset entry
+advertises its admin party, Scan endpoint, wallet-gateway URL, token-standard
+API URL, and V1/V2 capability flags. The SDK reads this at runtime via
+`getAssetCapabilities(...)`, routes V2 when available, and routes the
+transitional V1 lane only for assets that explicitly set `allocationsV1`.
 
 ```jsonc
 {
-  "assets": [
-    {
-      "id": "CC",
-      "admin": "CCAdmin::1220...",
-      "scanEndpoint": "https://scan.canton.network",
-      "walletGatewayUrl": "https://wallet.example.com/api/v0/dapp",
-      "capabilities": {
-        "allocationsV2": true,
-        "transferEventsV2": true,
+  "assets": {
+    "cc": {
+      "key": "cc",
+      "displayName": "Canton Coin (Amulet)",
+      "instrumentIdV2": {
+        "admin": "DSO::1220...",
+        "id": "Amulet"
       },
-    },
-  ],
+      "adminParty": "DSO::1220...",
+      "scanEndpointUrl": "https://scan.canton.network",
+      "walletGatewayUrl": "https://wallet.example.com/api/v0/dapp",
+      "tokenStandardApiUrl": "https://scan.canton.network",
+      "allocationsV2": true,
+      "allocationsV1": false,
+      "transferEventsV2": true
+    }
+  }
 }
 ```
 

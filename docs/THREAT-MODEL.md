@@ -255,12 +255,13 @@ This prevents invalid contracts from ever existing on the ledger.
 
 ## Settlement Mode Security
 
-As of 0.2.8, the only supported settlement mode is `TokenStandardCustody`
-(CIP-56 V2 Token Standard via CIP-0112 `AllocationRequest`). The legacy
-`NumericLegacy`, `UtilityHoldingCustody`, `LocalAssetCustody`, and
-`Delegated` modes from earlier releases have been removed; their threat
-analyses are kept in version-control history under the `0.2.7` tag for
-reference.
+As of 1.0.0-rc.1, the only supported settlement mode for new streams is
+`TokenStandardCustody`. Within that mode, the SDK supports the CIP-56 V2 lane
+via CIP-0112 `AllocationRequest` and a transitional V1 allocation lane for
+registered assets that have not yet published V2. The legacy non-token
+`NumericLegacy`, `UtilityHoldingCustody`, `LocalAssetCustody`, and `Delegated`
+modes from earlier releases have been removed; their threat analyses are kept
+in version-control history under the `0.2.7` tag for reference.
 
 ### TokenStandardCustody (the only mode)
 
@@ -374,7 +375,7 @@ The service token should:
 
 1. **Enable TLS** on all connections (proxy-to-Canton, client-to-proxy).
 2. **Use `TokenStandardCustody`** for all real-asset settlement — it is
-   the only supported settlement mode as of 0.2.8.
+   the only supported settlement mode as of 1.0.0-rc.1.
 3. **Configure JWKS** with a production identity provider. Disable dev mode.
 4. **Deploy the proxy behind a load balancer** with TLS termination and
    rate limiting.
@@ -394,16 +395,17 @@ The service token should:
 
 ## Additional Trust Boundaries
 
-This section covers the trust boundaries introduced by the V2-only CIP-56
-allocation path, V2 runtime capability gating per CIP-0112, on-ledger
+This section covers the trust boundaries introduced by the CIP-56 allocation
+paths, V2 runtime capability gating per CIP-0112, on-ledger
 DelegatedPolicy enforcement, multi-Scan adoption verification, and the
 CIP-103 dApp Provider.
 
-### V2-Only CIP-56 Settlement Path
+### CIP-56 V1/V2 Settlement Paths
 
-The library ships **one** V2 allocation path for assets that advertise
-the required V2 allocation capabilities. Per-asset differences (admin
-party, Scan endpoint, wallet-gateway URL, capability flags) live in
+The library routes V2 for assets that advertise the required V2 allocation
+capabilities and routes the transitional V1 lane only for registered assets
+that explicitly set `allocationsV1`. Per-asset differences (admin party, Scan
+endpoint, wallet-gateway URL, capability flags) live in
 `config/asset-registry.json`; the SDK never branches by asset name.
 
 **Threats**
@@ -411,7 +413,7 @@ party, Scan endpoint, wallet-gateway URL, capability flags) live in
 | Threat | Surface | Mitigation |
 |---|---|---|
 | Asset registry tampering | `config/asset-registry.json` is committed in-repo; a malicious edit could route to an attacker-controlled Scan or wallet-gateway | Registry file is reviewed in code review and pinned per release. Adoption-metrics tooling consumes the manifest from a known repo + commit, not from mutable runtime config |
-| Asset advertises V2 but doesn't honor V2 semantics | All routing goes through V2 — no fallback | `getAssetCapabilities` can be refreshed against on-chain metadata. If V2 errors surface, library fails-fast with the asset key + error context; operator decides whether to retry. **V1 fallback path does not exist**. |
+| Asset advertises V2 but doesn't honor V2 semantics | V2-capable assets route through V2; V1 is not used as an implicit fallback | `getAssetCapabilities` can be refreshed against on-chain metadata. If V2 errors surface, the library fails fast with the asset key + error context; an operator must intentionally change the registry flags to route V1. |
 | InstrumentRef spoofing | A malicious actor could craft an `InstrumentRef` for a different asset | V2 capability resolution binds the asset to its registry admin and instrument id; stream creation must use a registered V2 asset entry |
 | Settlement reference forgery | A malicious actor could spoof stream metadata | V2 `SettlementInfo` and `AllocationSpecification` are signed ledger arguments; the adoption-metrics aggregator verifies by querying public Scan, not by trusting in-repo data |
 
@@ -426,9 +428,11 @@ the V2 committed + iterated allocation primitive that V1 lacks.
 
 **Threats**
 
-- **~~Downgrade attack~~** *(no longer applicable — V1 path removed)*: the
-  downgrade-to-V1 attack vector is closed because the V1 dispatch path
-  does not exist in the library. There is nothing to downgrade to.
+- **Downgrade attack**: an attacker influences capability resolution so a V2
+  asset routes through the less capable V1 lane.
+  **Mitigation**: lane selection comes from reviewed registry capability flags,
+  never from asset names or untrusted request payloads. V1 is accepted only when
+  `allocationsV1` is explicitly set for that asset.
 - **Upgrade attack**: an attacker influences resolution to pick V2 when
   the asset doesn't actually support V2.
   **Mitigation**: V2-only operations (multi-leg allocations, batch
@@ -566,11 +570,11 @@ introduced by the AllocationRequest pattern.
 
 ### ~~Trust boundary 1: dual-interface implementation~~
 
-V2-only architecture — templates implement only `AllocationRequestV2`.
-The dual-interface consistency-attack surface is closed because the V1
-interface is not implemented. `AllocationBridge.v1V2ViewsConsistent` and
-`liftV1ToV2View` have been deleted from the codebase; `V1V2Mixed.daml`
-test deleted.
+V2-native templates implement `AllocationRequestV2` for the full feature set.
+The transitional V1 lane is isolated in the SDK/Daml shim and does not add a
+second interface to the main stream templates. `AllocationBridge.v1V2ViewsConsistent`
+and `liftV1ToV2View` have been deleted from the main template path;
+V1 compatibility is covered by the dedicated V1 shim tests.
 
 V1-asset support follows the [CIP-0112 §5](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility)
 path: assets dual-implement V1+V2; once an asset advertises V2, our

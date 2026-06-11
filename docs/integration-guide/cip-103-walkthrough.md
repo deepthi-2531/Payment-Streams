@@ -81,6 +81,12 @@ import { loadAssetRegistry } from '@canton-streams/sdk';
 
 const registry = loadAssetRegistry(assetRegistryFile);
 const usdcx = registry.requireAsset('usdcx');
+const usdcxInstrumentRef = {
+  depository: usdcx.instrumentIdV2.admin,
+  issuer: usdcx.instrumentIdV2.admin,
+  instrumentId: usdcx.instrumentIdV2.id,
+  instrumentVersion: usdcx.allocationsV2 ? 'v2' : 'v1',
+};
 
 const params = buildVestingStream({
   streamId: `vest-${Date.now()}`,
@@ -90,7 +96,7 @@ const params = buildVestingStream({
   startTime: new Date(),
   durationDays: 365 * 2,
   cliffDays: 90,
-  instrumentRef: usdcx.instrumentRef!,
+  instrumentRef: usdcxInstrumentRef,
   escrowOperator: escrowOperatorParty,
   fundingReference: walletFundingRef, // from the wallet's V2 allocation funding step
 });

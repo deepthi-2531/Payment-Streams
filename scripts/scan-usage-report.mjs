@@ -47,6 +47,7 @@ const SINCE = env('SINCE');
 const UNTIL = env('UNTIL', new Date().toISOString());
 const META_KEY = env('META_KEY', 'cantonstreams.dev/ref');
 const APP_META_KEY = env('APP_META_KEY', 'cantonstreams.dev/app');
+const AGREEMENT_META_KEY = env('AGREEMENT_META_KEY', 'cantonstreams.dev/agreement');
 const REF_PATTERN = new RegExp(env('REF_PATTERN', ':cycle-\\d+$'));
 const MAX_PAGES = Number(env('MAX_PAGES', '2000'));
 const STATE_FILE = env('STATE_FILE');
@@ -139,7 +140,10 @@ function attributionOf(ev) {
     const ref = metaValues[META_KEY] ?? (REF_PATTERN.test(refId) ? refId : undefined);
     if (ref) {
       const leg = spec.transferLeg ?? {};
-      return { ref, appMeta: metaValues[APP_META_KEY], sender: leg.sender, receiver: leg.receiver, amount: Number(leg.amount ?? 0) };
+      return {
+        ref, appMeta: metaValues[APP_META_KEY], agreement: metaValues[AGREEMENT_META_KEY],
+        sender: leg.sender, receiver: leg.receiver, amount: Number(leg.amount ?? 0),
+      };
     }
   }
   const xfer = (ev.choice_argument ?? ev.exercise_argument ?? {}).transfer;
@@ -147,6 +151,7 @@ function attributionOf(ev) {
     return {
       ref: xfer.meta.values[META_KEY],
       appMeta: xfer.meta.values[APP_META_KEY],
+      agreement: xfer.meta.values[AGREEMENT_META_KEY],
       sender: xfer.sender, receiver: xfer.receiver, amount: Number(xfer.amount ?? 0),
     };
   }
@@ -225,6 +230,35 @@ const perApp = [...apps.values()]
   })
   .sort((x, y) => y.settlements - x.settlements);
 
+// Per-agreement rollup (interest agreements etc. — settlements stamped
+// with cantonstreams.dev/agreement).
+const agreements = new Map();
+for (const e of state.evidence) {
+  if (e.excluded || !e.agreement) continue;
+  const g = agreements.get(e.agreement) ?? {
+    agreement: e.agreement, settlements: 0, totalAmount: 0,
+    receivers: new Set(), apps: new Set(),
+    firstSeen: e.recordTime, lastSeen: e.recordTime,
+  };
+  g.settlements += 1;
+  g.totalAmount += e.amount;
+  if (e.receiver) g.receivers.add(e.receiver);
+  g.apps.add(e.app);
+  if (e.recordTime < g.firstSeen) g.firstSeen = e.recordTime;
+  if (e.recordTime > g.lastSeen) g.lastSeen = e.recordTime;
+  agreements.set(e.agreement, g);
+}
+const perAgreement = [...agreements.values()]
+  .map((g) => ({
+    agreement: g.agreement,
+    settlements: g.settlements,
+    totalAmountSettled: Number(g.totalAmount.toFixed(10)),
+    apps: [...g.apps],
+    distinctReceivers: g.receivers.size,
+    firstSeen: g.firstSeen, lastSeen: g.lastSeen,
+  }))
+  .sort((x, y) => y.settlements - x.settlements);
+
 const included = state.evidence.filter((e) => !e.excluded);
 const report = {
   generatedAt: new Date().toISOString(),
@@ -243,6 +277,7 @@ const report = {
     distinctStreams: new Set(included.map((e) => e.ref.replace(/:cycle-\d+$/, ''))).size,
   },
   perApp,
+  perAgreement,
   evidence: STATE_FILE ? `see ${STATE_FILE}` : state.evidence,
 };
 console.log(JSON.stringify(report, null, 2));

@@ -33,7 +33,9 @@ export enum StreamStatus {
 /**
  * Settlement mode — determines how the stream's escrow is backed.
  *
- * New streams are V2-only and must use `TokenStandardCustody`.
+   * New streams must use `TokenStandardCustody`; the asset registry selects
+   * the V2 lane when available or the transitional V1 lane for registered
+   * V1 assets.
  * The other enum values remain so old persisted contracts can be read
  * and migration tools can report them explicitly.
  */

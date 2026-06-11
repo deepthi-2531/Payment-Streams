@@ -1,13 +1,14 @@
-# AllocationRequest pattern (V2-only)
+# AllocationRequest pattern (V2 preferred)
 
-> **Status:** this library supports the CIP-56 Token Standard V2 only.
+> **Status:** this library supports the CIP-56 Token Standard V2 path and a
+> transitional V1 allocation lane.
 >
 > Per [CIP-0112 §5 Backwards Compatibility](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility),
 > V1 assets are expected to publish V2 interfaces alongside V1 (dual-
 > implementation). Once an asset advertises V2 in its `supportedApis`
-> metadata field, this library integrates with it automatically. V1-only
-> assets are not supported because the streaming primitive requires the
-> V2 committed + iterated allocation primitive, which V1 has no equivalent for.
+> metadata field, this library routes the V2 lane automatically. Assets that
+> are live on V1 today can use the transitional V1 allocation lane, with the
+> important limitation that iterated allocations and batch settlement require V2.
 
 ## The pattern in one diagram
 
@@ -150,7 +151,7 @@ The wallet-agnostic claim holds for the **majority of stream activity** (creates
 
 ## Related docs
 
-* [`per-asset-config.md`](./per-asset-config.md) — asset registry format (V2-only)
+* [`per-asset-config.md`](./per-asset-config.md) — asset registry format and V1/V2 lane selection
 * [`cip-56-v2-types-reference.md`](./cip-56-v2-types-reference.md) — verified V2 type listing
 * [`cip-103-walkthrough.md`](./cip-103-walkthrough.md) — browser-wallet flow the SDK signs through
 * [`THREAT-MODEL.md`](../THREAT-MODEL.md) — full threat model

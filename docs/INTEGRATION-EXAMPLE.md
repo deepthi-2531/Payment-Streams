@@ -1,6 +1,9 @@
 # Integration Example
 
-End-to-end host-app integration of Canton Payment Streams, V2-only via the CIP-103 wallet flow and CIP-56 V2 token standard. This walks through a complete vesting-stream rollout for a hypothetical host app.
+End-to-end host-app integration of Canton Payment Streams through the CIP-103
+wallet flow and the CIP-56 token standard. V2 is the preferred allocation lane;
+registered V1 assets can use the transitional V1 lane until they advertise V2.
+This walks through a complete vesting-stream rollout for a hypothetical host app.
 
 Canton Payment Streams ships **two funding models**:
 
@@ -13,7 +16,7 @@ Canton Payment Streams ships **two funding models**:
 
 - Sender: `AcmeCo` treasury party
 - Recipient: each employee party
-- Asset: `USDCx` (or any other CIP-56 V2 asset)
+- Asset: `USDCx` (or any registered CIP-56 asset; V2 preferred, V1 transitional)
 - Schedule: `Linear` vesting from the 1st of the month to the 1st of the next month
 
 ## Step 1 — Register the asset
@@ -22,26 +25,30 @@ Add an entry to `config/asset-registry.json`:
 
 ```json
 {
-  "assets": [
-    {
-      "id": "USDCx",
-      "admin": "USDCxAdmin::1220...",
-      "scanEndpoint": "https://scan.example.com",
+  "assets": {
+    "usdcx": {
+      "key": "usdcx",
+      "displayName": "USDCx",
+      "instrumentIdV2": {
+        "admin": "USDCxAdmin::1220...",
+        "id": "USDCx"
+      },
+      "adminParty": "USDCxAdmin::1220...",
+      "scanEndpointUrl": "https://scan.example.com",
       "walletGatewayUrl": "https://wallet.example.com/api/v0/dapp",
-      "capabilities": {
-        "transfersV1": true,
-        "transfersV2": true,
-        "allocationsV2": true,
-        "transferEventsV2": true
-      }
+      "tokenStandardApiUrl": "https://token-standard.example.com",
+      "allocationsV2": true,
+      "allocationsV1": false,
+      "transferEventsV2": true
     }
-  ]
+  }
 }
 ```
 
 The SDK reads this on startup. When AcmeCo's frontend builds a stream
-against a registered asset (e.g. `registry.requireAsset('USDCx')` for the
-instrument ref), the library uses the V2 adapter automatically.
+against a registered asset (e.g. `registry.requireAsset('usdcx')`), the
+library uses the V2 adapter when available and the transitional V1 adapter
+only when the asset entry explicitly advertises `allocationsV1`.
 
 ## Step 2 — Provision identities
 
@@ -62,7 +69,7 @@ This gives the proxy a least-privilege service principal: it can read any party'
 ```bash
 # Upload
 daml ledger upload-dar --host acme-validator --port 5001 \
-  packages/daml/main/.daml/dist/canton-streams-0.2.8.dar
+  packages/daml/main/.daml/dist/canton-streams-1.0.0.dar
 
 # Vet on the synchronizer (see docs/DEPLOYMENT.md for the console snippet)
 

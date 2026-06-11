@@ -84,7 +84,7 @@ Create a new payment stream. The caller becomes the stream's sender.
 | `startTime` | string | yes | ISO 8601 |
 | `endTime` | string | yes | ISO 8601 |
 | `cancellable` | boolean | yes | Whether sender can unilaterally cancel |
-| `settlementMode` | string | yes | Must be `TokenStandardCustody` (V2-only as of 0.2.8) |
+| `settlementMode` | string | yes | Must be `TokenStandardCustody`; the asset registry selects the V2 lane when available or the transitional V1 lane for registered V1 assets |
 | `asset` | object | yes | `{ instrumentId, admin }` — must match a registered asset in `config/asset-registry.json` |
 
 **Vesting modes:**

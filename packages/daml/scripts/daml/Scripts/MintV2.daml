@@ -17,7 +17,7 @@
 --   ~/.daml/sdk/3.4.11/daml-helper/daml-helper \
 --     ledger run-script \
 --     --ledger-host localhost --ledger-port 5001 \
---     --dar packages/daml/scripts/.daml/dist/canton-streams-scripts-0.2.7.dar \
+--     --dar packages/daml/scripts/.daml/dist/canton-streams-scripts-1.0.0.dar \
 --     --script-name Scripts.MintV2:mintForAdmin
 --
 module Scripts.MintV2 where

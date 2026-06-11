@@ -1,6 +1,8 @@
 # Canton Payment Streams
 
-Payment streams for Canton, built on CIP-56 Token Standard V2.
+Payment streams for Canton, built on the CIP-56 Token Standard with V2 as
+the preferred lane and a transitional V1 lane for assets that have not yet
+published V2 interfaces.
 
 Canton Payment Streams gives Canton dApps a reusable way to create, fund,
 observe, and settle time-based payments. It ships Daml templates, a
@@ -29,8 +31,10 @@ Apache-2.0 licensed.
 
 ## Should I Use This?
 
-Use Canton Payment Streams if you need a V2-token-standard payment flow where
-funds unlock over time or according to an explicit event.
+Use Canton Payment Streams if you need a token-standard payment flow where
+funds unlock over time or according to an explicit event. V2 allocation
+support gives the full feature set; V1 allocation support is available for
+live assets such as CC / Amulet and USDCx while they transition to V2.
 
 | If you need to... | Start with |
 | --- | --- |
@@ -43,7 +47,8 @@ funds unlock over time or according to an explicit event.
 This repo is a good fit when:
 
 - You are building on Canton.
-- Your asset supports CIP-56 Token Standard V2 allocation semantics.
+- Your asset supports CIP-56 Token Standard V2 allocation semantics, or it is
+  a registered V1 asset using the transitional allocation lane.
 - Your users can approve wallet actions through a CIP-103-compatible wallet.
 - You want reusable contracts and SDK helpers instead of inventing a custom
   stream protocol.
@@ -53,7 +58,8 @@ This repo is not a good fit when:
 - You need a wallet implementation. Bring a CIP-103 wallet; this repo is the
   dApp/protocol layer.
 - You only need off-ledger bookkeeping.
-- You need Token Standard V1 for new stream creation. New streams are V2-only.
+- You need V1-only features that V1 cannot express, such as iterated
+  allocations or batch settlement. Those require the V2 lane.
 - You want to depend on short-lived reward economics. Any featured-app reward
   support should be treated as optional and network-specific.
 
@@ -93,18 +99,20 @@ for your deployment.
 
 The core split is simple:
 
-- Token custody lives in standard V2 allocation contracts.
+- Token custody lives in standard allocation contracts: V2 when the asset
+  advertises it, otherwise the transitional V1 lane for registered assets.
 - Streams templates record schedule, metadata, and settlement progress.
-- Wallets sign standard V2 allocation actions.
-- The executor settles each period with V2 settlement commands.
+- Wallets sign standard allocation actions through the selected lane.
+- The executor settles each period with the matching V1 or V2 settlement
+  commands.
 - The SDK/proxy/dashboard make this usable from TypeScript and the browser.
 
 ```text
 dApp or dashboard
   -> CIP-103 wallet connection
-  -> wallet approves V2 allocation
+  -> wallet approves the token-standard allocation
   -> Streams Daml templates record schedule and state
-  -> executor calls V2 settlement over time
+  -> executor calls V1 or V2 settlement over time
   -> SDK/proxy/dashboard query stream status
 ```
 
@@ -116,6 +124,10 @@ The important V2 commands are:
 
 The project intentionally fails closed for unsupported legacy settlement paths
 when creating new streams.
+
+For V1-lane assets, settlement uses the token-standard V1 allocation choices
+for one allocation cycle per withdrawal. V1 does not support V2-only features
+such as iterated allocations or `SettlementFactory_SettleBatch`.
 
 ## Quick Start
 

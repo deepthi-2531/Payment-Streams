@@ -3,9 +3,9 @@
 # Fail-on-find lint for V2 Token Standard conformance.
 #
 # Blocks accidental introduction of identifiers that don't exist in the
-# upstream CIP-56 V2 surface, typically because they were V1 names from
-# a deleted code path or older implementation details that pre-dated the V2-only
-# implementation.
+# upstream CIP-56 V2 surface, typically because a V1 identifier leaked into
+# the V2 path. The intentional transitional V1 lane is allowlisted below and
+# should be deleted from the allowlist when that lane is retired.
 #
 # Run by CI on every push + PR.
 #

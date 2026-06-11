@@ -2,7 +2,10 @@
 
 Annotated step-by-step traces of the three stream variants Canton Payment Streams ships. Each shows the on-ledger contract transitions, the SDK calls that drove them, and the wallet interactions where applicable.
 
-All examples are V2-only (CIP-56 V2 Token Standard, CIP-0112 `AllocationRequest`, CIP-103 wallet auth).
+Examples use the token-standard allocation lane selected from the asset registry:
+V2 when available, and the transitional V1 lane for registered assets that have
+not yet published V2. V2-only features such as iterated allocations and batch
+settlement are called out where they appear.
 
 The SDK snippets below assume a configured `CantonStreamsClient` named
 `client` (`new CantonStreamsClient({ transportMode, ledgerApiUrl,

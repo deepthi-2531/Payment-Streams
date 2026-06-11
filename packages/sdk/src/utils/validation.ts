@@ -164,7 +164,7 @@ export const CreateStreamParamsSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['settlementMode'],
-        message: 'New streams are V2-only. Use TokenStandardCustody with a CIP-56 V2 asset.',
+        message: 'New streams use TokenStandardCustody with a registered CIP-56 asset.',
       });
     }
 

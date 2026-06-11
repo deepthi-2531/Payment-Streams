@@ -43,7 +43,7 @@
 | V1 builders + dispatcher (`dispatchSettlementV1`) | `packages/sdk/src/commands/allocation-v1.ts`, `packages/sdk/src/settlement/allocation-dispatch.ts` |
 | Registry choice-context fetcher | `packages/sdk/src/settlement/choice-context.ts` |
 | Disclosed-contract support (gRPC + JSON API) | `packages/sdk/src/transport/*` |
-| On-ledger V1 request shim (separate DAR) | `packages/daml/v1-shim` → `canton-streams-v1-shim-0.1.0.dar` |
+| On-ledger V1 request shim (separate DAR) | `packages/daml/v1-shim` → `canton-streams-v1-shim-1.0.0.dar` |
 | One-cycle probe | `scripts/devnet-v1-cc-stream-probe.mjs` |
 
 ## Prerequisites
@@ -59,7 +59,7 @@
 
    ```bash
    cd packages/daml/v1-shim && daml build
-   daml ledger upload-dar .daml/dist/canton-streams-v1-shim-0.1.0.dar --host <participant> --port <ledger-port>
+   daml ledger upload-dar .daml/dist/canton-streams-v1-shim-1.0.0.dar --host <participant> --port <ledger-port>
    ```
 
 3. **Verify interface package ids.** The shim implements the V1

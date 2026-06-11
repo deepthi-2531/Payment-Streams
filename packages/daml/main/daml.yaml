@@ -1,12 +1,12 @@
 sdk-version: 3.4.10
 name: canton-streams
 source: daml
-version: 0.2.8
+version: 1.0.0
 dependencies:
   - daml-prim
   - daml-stdlib
 data-dependencies:
-  - ../interfaces/.daml/dist/canton-streams-interfaces-0.2.3.dar
+  - ../interfaces/.daml/dist/canton-streams-interfaces-1.0.0.dar
   # ---------------------------------------------------------------------
   # CIP-56 Token Standard V2. Fetched via `node scripts/fetch-v2-dars.mjs`.
   #

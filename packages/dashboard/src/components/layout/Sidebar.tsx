@@ -81,7 +81,7 @@ export function Sidebar() {
               className="mono"
               style={{ fontSize: 9.5, color: 'var(--fg-4)', letterSpacing: '0.05em' }}
             >
-              v0.2.7
+              v1.0.0-rc.1
             </span>
           </div>
         </div>
