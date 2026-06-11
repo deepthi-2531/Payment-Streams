@@ -533,31 +533,25 @@ async function applyAssetRegistryOverride() {
     console.error(`Asset "${assetKey}" not in registry. Available: ${Object.keys(registry.assets ?? {}).join(", ")}`);
     process.exit(2);
   }
-  // V1 fields are gone from the asset registry.
-  // This V1 probe is superseded by the V2-only equivalent that lands once
-  // CC and USDCx publish V2 interfaces per CIP-0112 §5. Until then, this
-  // probe is non-functional.
-  console.error(
-    `testnet-usdcx-stream-probe.mjs is superseded by the V2-only architecture. ` +
-    `The original V1 + TokenStandardCustody flow is no longer supported by the library. ` +
-    `Per CIP-0112 section 5, USDCx is expected to publish V2 interfaces; once it does, use the V2 probe.`,
-  );
-  process.exit(2);
-  // Unreachable but kept for type-flow until the file is deleted in a later sweep.
-  if (!asset.v1Capable) {
+  // This probe drives the transitional V1 lane; V2-only assets route the
+  // V2 probe instead. instrumentIdV2 doubles as the V1 InstrumentId.
+  if (asset.allocationsV1 !== true) {
+    console.error(
+      `Asset "${assetKey}" does not route the V1 lane (allocationsV1 != true). ` +
+      `Use scripts/testnet-v2-stream-probe.mjs for V2 assets.`,
+    );
     process.exit(2);
   }
-  if (!process.env.INSTRUMENT_ID && asset.instrumentRef?.instrumentId) {
-    config.instrumentId = asset.instrumentRef.instrumentId;
+  // Env vars override registry values when both are set.
+  if (!process.env.INSTRUMENT_ID && asset.instrumentIdV2?.id) {
+    config.instrumentId = asset.instrumentIdV2.id;
   }
-  if (!process.env.INSTRUMENT_VERSION && asset.instrumentRef?.instrumentVersion) {
-    config.instrumentVersion = asset.instrumentRef.instrumentVersion;
+  if (!process.env.INSTRUMENT_ADMIN && asset.instrumentIdV2?.admin) {
+    config.instrumentAdmin = asset.instrumentIdV2.admin;
   }
-  if (!process.env.INSTRUMENT_ADMIN && asset.instrumentRef?.issuer) {
-    config.instrumentAdmin = asset.instrumentRef.issuer;
-  }
-  if (!process.env.INSTRUMENT_DEPOSITORY && asset.instrumentRef?.depository) {
-    config.instrumentDepository = asset.instrumentRef.depository;
+  // The V1 InstrumentId has no depository field; default to the admin party.
+  if (!process.env.INSTRUMENT_DEPOSITORY && asset.adminParty) {
+    config.instrumentDepository = asset.adminParty;
   }
   log("Asset registry override", {
     assetKey,

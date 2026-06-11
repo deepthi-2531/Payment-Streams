@@ -5,9 +5,12 @@
  * calls to the proxy server. All Decimal values are serialized as
  * strings over the wire and reconstructed on the client side.
  *
- * Hosted wallets can read through their own CIP-103 `ledgerApi` surface
- * instead of the REST proxy. Writes still require a wallet provider that can
- * submit and wait for Daml command execution.
+ * Hosted wallets read AND write through their own CIP-103 `ledgerApi`
+ * surface instead of the REST proxy: ACS queries via `/v2/state/acs`,
+ * command submission via `/v2/commands/submit-and-wait` (the wallet
+ * drives the user's signing UI). Single-party choices (create, accept,
+ * withdraw, cancel, renew, policy revoke) are wired; choices that need
+ * more than the connected party's signature (mutual cancel) are not.
  */
 
 import Decimal from 'decimal.js';
@@ -26,13 +29,12 @@ import type {
   VestingModeConfig,
   LedgerRecord,
 } from '@canton-streams/sdk/browser';
-import { VestingMode, StreamStatus, AssetType, SettlementMode } from '@canton-streams/sdk/browser';
+import { VestingMode, StreamStatus, AssetType, SettlementMode, getBalances } from '@canton-streams/sdk/browser';
 import { walletClient } from '../store/wallet/index.js';
 import {
   HOSTED_TID_CREATE_REQUEST,
   HOSTED_TID_POLICY,
   HOSTED_TID_STREAM_ESCROW,
-  HOSTED_TID_TOKEN_STANDARD_REQUEST,
   decodeCreateStreamRequest,
   decodeStreamEscrow,
   isHostedLedgerAvailable,
@@ -42,14 +44,16 @@ import {
 
 /**
  * Error thrown when a mutation is attempted from a hosted-wallet
- * session that has no path to drive the underlying transaction.
+ * session that has no path to drive the underlying transaction
+ * (e.g. choices needing signatures beyond the connected party).
  * Surfaced to the user via the mutation handler.
  */
 export class HostedWalletWriteUnsupportedError extends Error {
-  constructor(action: string) {
+  constructor(action: string, reason?: string) {
     super(
-      `${action} is not yet wired for hosted wallets (5N Loop, Cantor8, Send). ` +
-        `This flow needs a wallet provider that can submit the Daml command and wait for completion.`,
+      `${action} is not available from a hosted-wallet session. ` +
+        (reason ??
+          `This flow needs a signer beyond the connected wallet party.`),
     );
     this.name = 'HostedWalletWriteUnsupportedError';
   }
@@ -161,6 +165,82 @@ export class CantonStreamsApi {
   // wallet's `ledgerApi`. The probe path is documented in the
   // module's top JSDoc and in lib/hostedWalletLedger.ts.)
 
+  /**
+   * Resolve the active StreamEscrow for (sender, streamId) from the
+   * wallet-visible ACS. The proxy keys streams the same way; hosted
+   * sessions re-derive the contract id per write because exercised
+   * choices archive-and-recreate the escrow.
+   */
+  private async findHostedEscrow(
+    party: string,
+    sender: string,
+    streamId: string,
+  ): Promise<{ contractId: string; stream: Stream }> {
+    const entries = await queryActiveContracts([HOSTED_TID_STREAM_ESCROW], party);
+    for (const e of entries) {
+      const stream = decodeStreamEscrow(e.contractId, e.createArguments);
+      if (stream && stream.config.sender === sender && stream.config.streamId === streamId) {
+        return { contractId: e.contractId, stream };
+      }
+    }
+    throw new Error(
+      `Stream "${streamId}" from ${sender} is not visible to the connected wallet party.`,
+    );
+  }
+
+  /** Resolve a pending CreateStreamRequest contract id by (sender, streamId). */
+  private async findHostedCreateRequest(
+    party: string,
+    sender: string,
+    streamId: string,
+  ): Promise<string> {
+    const entries = await queryActiveContracts([HOSTED_TID_CREATE_REQUEST], party);
+    for (const e of entries) {
+      const req = decodeCreateStreamRequest(e.contractId, e.templateId, e.createArguments);
+      if (req && req.config.sender === sender && req.config.streamId === streamId) {
+        return e.contractId;
+      }
+    }
+    throw new Error(
+      `No pending request for stream "${streamId}" from ${sender} is visible to the connected wallet party.`,
+    );
+  }
+
+  /**
+   * Exercise a choice on a streams contract via the wallet's
+   * submit-and-wait endpoint. Returns the updateId when the wallet
+   * surfaces one (hosted wallets do not return exercise results).
+   */
+  private async hostedExercise(
+    templateId: string,
+    contractId: string,
+    choice: string,
+    choiceArgument: Record<string, unknown>,
+    party: string,
+  ): Promise<string> {
+    const result = (await submitAndWait(
+      [
+        {
+          ExerciseCommand: {
+            templateId,
+            contractId,
+            choice,
+            choiceArgument,
+          },
+        },
+      ],
+      party,
+    )) as { updateId?: string; transactionId?: string; commandId?: string } | null;
+    return (
+      result?.updateId ?? result?.transactionId ?? result?.commandId ?? '<submitted-via-wallet>'
+    );
+  }
+
+  /** Daml Time wire value (microseconds since epoch, string-encoded). */
+  private hostedTime(date: Date): string {
+    return String(BigInt(date.getTime()) * 1000n);
+  }
+
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${this.baseUrl}${path}`, {
       method,
@@ -236,12 +316,12 @@ export class CantonStreamsApi {
     if (this.isHostedWalletSession()) {
       const party = await this.readHostedParty();
       try {
-        // Query both the numeric and the token-standard request
-        // templates — the wallet's adapter only takes the first
-        // templateId, so the two-templateId list is structurally
-        // valid but Loop will run two separate queries internally.
+        // Only the numeric CreateStreamRequest template exists in the
+        // current DAR (the per-mode token-standard request module was
+        // folded into Workflow.UnifiedStream); querying a removed
+        // template would fail the whole ACS read.
         const entries = await queryActiveContracts(
-          [HOSTED_TID_CREATE_REQUEST, HOSTED_TID_TOKEN_STANDARD_REQUEST],
+          [HOSTED_TID_CREATE_REQUEST],
           party,
         );
         const pending = entries
@@ -274,12 +354,9 @@ export class CantonStreamsApi {
 
   async getStream(sender: string, streamId: string): Promise<Stream> {
     if (this.isHostedWalletSession()) {
-      // No way to honestly answer "this specific contract id exists"
-      // without a real ledger decode. Surface a clear error.
-      throw new Error(
-        'Single-stream lookup is not yet wired for hosted wallets. ' +
-          'Sign in with a dapp-sdk wallet (LocalNet Amulet) to inspect a stream by id.',
-      );
+      const party = await this.readHostedParty();
+      const { stream } = await this.findHostedEscrow(party, sender, streamId);
+      return stream;
     }
     const raw = await this.request<RawStream>(
       'GET',
@@ -340,49 +417,86 @@ export class CantonStreamsApi {
 
   /**
    * Build the Daml record arguments for `CreateStreamRequest` from
-   * the dashboard's `CreateStreamParams`. The exact field set is
-   * what the Daml template declares, in v2 JSON-wire form
-   * (microseconds for `Time`, decimals as strings). Loop expects
-   * the templateId in the command itself to be the
-   * `#package-name:module:entity` form already handled by the
-   * caller; the record fields below are positional by name.
+   * the dashboard's `CreateStreamParams`. The field set mirrors the
+   * Daml template exactly (`config`, `depositAmount`, `observers`),
+   * in JSON-wire form (microseconds for `Time`, decimals as strings,
+   * variants as `{ tag, value }`). The template's `ensure` requires
+   * `depositAmount == config.totalDeposited`.
    */
   private serializeCreateRequestArgs(
     params: CreateStreamParams,
     party: string,
   ): Record<string, unknown> {
-    const startTimeUs = params.startTime
-      ? String(BigInt(params.startTime.getTime()) * 1000n)
-      : null;
-    const endTimeUs = params.endTime
-      ? String(BigInt(params.endTime.getTime()) * 1000n)
-      : null;
     return {
-      sender: params.sender ?? party,
-      recipient: params.recipient,
-      observers: [],
       config: {
         streamId: params.streamId,
         sender: params.sender ?? party,
         recipient: params.recipient,
         totalDeposited: params.totalDeposited.toString(),
-        startTime: startTimeUs,
-        endTime: endTimeUs,
-        vestingMode: { tag: params.vestingMode.mode, value: {} },
+        startTime: this.hostedTime(params.startTime),
+        endTime: this.hostedTime(params.endTime),
+        vestingMode: this.serializeHostedVestingMode(params.vestingMode),
         assetType: params.assetType,
+        instrumentRef: params.instrumentRef ?? null,
         cancellable: params.cancellable ?? false,
         settlementMode: params.settlementMode ?? SettlementMode.TokenStandardCustody,
       },
+      depositAmount: params.totalDeposited.toString(),
+      observers: [],
     };
+  }
+
+  /**
+   * Encode a VestingModeConfig as the Daml variant JSON
+   * (`CantonStreams.Interface.Types.VestingMode`). RelTime fields
+   * are `{ microseconds }` records; the SDK config carries them as
+   * microsecond numbers already.
+   */
+  private serializeHostedVestingMode(
+    config: VestingModeConfig,
+  ): Record<string, unknown> {
+    switch (config.mode) {
+      case VestingMode.CliffLinear:
+        return {
+          tag: 'CliffLinear',
+          value: { cliffTime: this.hostedTime(config.cliffTime) },
+        };
+      case VestingMode.Stepped:
+        return {
+          tag: 'Stepped',
+          value: {
+            stepInterval: { microseconds: String(config.stepInterval) },
+            amountPerStep: config.amountPerStep.toString(),
+          },
+        };
+      case VestingMode.RenewableTerm:
+        return {
+          tag: 'RenewableTerm',
+          value: { termDuration: { microseconds: String(config.termDuration) } },
+        };
+      case VestingMode.Linear:
+      default:
+        return { tag: 'Linear', value: {} };
+    }
   }
 
   async acceptStream(sender: string, streamId: string): Promise<{ escrowContractId: string }> {
     if (this.isHostedWalletSession()) {
-      throw new Error(
-        'Accept stream from the hosted-wallet flow needs the request ' +
-          'contract id, not just (sender, streamId). Use the Inbox UI flow ' +
-          'when wallet-side command submission is available.',
+      // Resolve the pending request from the wallet-visible ACS and
+      // exercise AcceptStream (controller: recipient = wallet party).
+      const party = await this.readHostedParty();
+      const requestCid = await this.findHostedCreateRequest(party, sender, streamId);
+      const updateId = await this.hostedExercise(
+        HOSTED_TID_CREATE_REQUEST,
+        requestCid,
+        'AcceptStream',
+        {},
+        party,
       );
+      // Hosted wallets don't return the created contract id; the
+      // updateId stands in until callers need the real escrow cid
+      // (the post-mutation refetch re-reads the ACS anyway).
+      return { escrowContractId: updateId };
     }
     return this.request(
       'POST',
@@ -392,7 +506,29 @@ export class CantonStreamsApi {
 
   async withdraw(sender: string, streamId: string): Promise<WithdrawResult> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Withdraw');
+      const party = await this.readHostedParty();
+      const { contractId, stream } = await this.findHostedEscrow(party, sender, streamId);
+      const now = new Date();
+      await this.hostedExercise(
+        HOSTED_TID_STREAM_ESCROW,
+        contractId,
+        'Withdraw_Stream',
+        { withdrawTime: this.hostedTime(now) },
+        party,
+      );
+      // submit-and-wait via the wallet doesn't return exercise
+      // results — report the client-side accrual estimate; the
+      // ledger remains authoritative and the refetch shows the
+      // updated state.
+      const balances = getBalances(stream, now);
+      const newTotal = stream.state.totalWithdrawn.plus(balances.withdrawable);
+      return {
+        amountWithdrawn: balances.withdrawable,
+        newTotalWithdrawn: newTotal,
+        newStatus: newTotal.greaterThanOrEqualTo(stream.config.totalDeposited)
+          ? StreamStatus.Completed
+          : StreamStatus.Active,
+      };
     }
     const raw = await this.request<RawWithdrawResult>(
       'POST',
@@ -420,7 +556,22 @@ export class CantonStreamsApi {
     settlementArgs?: TokenStandardCancelArgs,
   ): Promise<CancelResult> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Cancel stream');
+      const party = await this.readHostedParty();
+      const { contractId, stream } = await this.findHostedEscrow(party, sender, streamId);
+      const now = new Date();
+      await this.hostedExercise(
+        HOSTED_TID_STREAM_ESCROW,
+        contractId,
+        'Cancel_Stream',
+        { cancelTime: this.hostedTime(now) },
+        party,
+      );
+      // Client-side estimate; the ledger computes the real split.
+      const balances = getBalances(stream, now);
+      return {
+        recipientAmount: balances.withdrawable,
+        senderRefund: balances.refundable,
+      };
     }
     const raw = await this.request<RawCancelResult>(
       'POST',
@@ -439,7 +590,14 @@ export class CantonStreamsApi {
     settlementArgs?: TokenStandardCancelArgs,
   ): Promise<CancelResult> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Mutual cancel');
+      // MutualCancel_Stream is controlled by sender AND recipient; a
+      // hosted wallet session only acts as the connected party, so it
+      // cannot authorize the joint exercise. Route via an operator
+      // (proxy) or use the unilateral cancel when cancellable.
+      throw new HostedWalletWriteUnsupportedError(
+        'Mutual cancel',
+        'The choice needs both sender and recipient signatures; the connected wallet only signs for one party.',
+      );
     }
     const raw = await this.request<RawCancelResult>(
       'POST',
@@ -454,7 +612,20 @@ export class CantonStreamsApi {
 
   async renew(sender: string, streamId: string, params: RenewParams): Promise<string> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Renew');
+      const party = await this.readHostedParty();
+      const { contractId } = await this.findHostedEscrow(party, sender, streamId);
+      const now = new Date();
+      return this.hostedExercise(
+        HOSTED_TID_STREAM_ESCROW,
+        contractId,
+        'Renew_Stream',
+        {
+          additionalDeposit: params.additionalAmount.toString(),
+          newEndTime: this.hostedTime(params.newEndTime),
+          renewTime: this.hostedTime(now),
+        },
+        party,
+      );
     }
     return this.request(
       'POST',
@@ -511,7 +682,16 @@ export class CantonStreamsApi {
 
   async revokePolicy(contractId: string): Promise<{ newContractId: string }> {
     if (this.isHostedWalletSession()) {
-      throw new HostedWalletWriteUnsupportedError('Policy revoke');
+      // RevokePolicy is sender-controlled and the cid is in hand.
+      const party = await this.readHostedParty();
+      const updateId = await this.hostedExercise(
+        HOSTED_TID_POLICY,
+        contractId,
+        'RevokePolicy',
+        {},
+        party,
+      );
+      return { newContractId: updateId };
     }
     return this.request('POST', `/api/policies/${encodeURIComponent(contractId)}/revoke`);
   }
@@ -526,6 +706,78 @@ export class CantonStreamsApi {
     }
     const qs = policyId ? `?policyId=${encodeURIComponent(policyId)}` : '';
     return this.request<RawExecutionLog[]>('GET', `/api/execution-logs${qs}`);
+  }
+
+  // --- Open-ended Flows (StreamFlow, non-prefunded / rolling top-up) ---
+
+  async listFlows(filter?: { sender?: string; recipient?: string }): Promise<RawFlow[]> {
+    if (this.isHostedWalletSession()) {
+      // No browser-side StreamFlow decoder yet; keep the honest empty
+      // state for hosted wallets (same posture as execution logs).
+      return [];
+    }
+    const params = new URLSearchParams();
+    if (filter?.sender) params.set('sender', filter.sender);
+    if (filter?.recipient) params.set('recipient', filter.recipient);
+    const qs = params.toString();
+    return this.request<RawFlow[]>('GET', `/api/flows${qs ? `?${qs}` : ''}`);
+  }
+
+  async createFlow(params: CreateFlowRequest): Promise<{ contractId: string; streamId: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Create flow');
+    }
+    return this.request('POST', '/api/flows', params);
+  }
+
+  async topUpFlow(
+    sender: string,
+    flowId: string,
+    args: { topUpAmount: string; settlementReference: string },
+  ): Promise<{ newFlowCid: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Flow top-up');
+    }
+    return this.request(
+      'POST',
+      `/api/flows/${encodeURIComponent(sender)}/${encodeURIComponent(flowId)}/top-up`,
+      args,
+    );
+  }
+
+  async withdrawFlow(
+    sender: string,
+    flowId: string,
+    args: { settlementReference: string },
+  ): Promise<{ newFlowCid: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Flow withdraw');
+    }
+    return this.request(
+      'POST',
+      `/api/flows/${encodeURIComponent(sender)}/${encodeURIComponent(flowId)}/withdraw`,
+      args,
+    );
+  }
+
+  async stopFlow(
+    sender: string,
+    flowId: string,
+    args: {
+      recipientSettlement: string;
+      senderRefund: string;
+      recipientSettlementReference?: string;
+      senderRefundReference?: string;
+    },
+  ): Promise<{ newFlowCid: string }> {
+    if (this.isHostedWalletSession()) {
+      throw new HostedWalletWriteUnsupportedError('Flow stop');
+    }
+    return this.request(
+      'POST',
+      `/api/flows/${encodeURIComponent(sender)}/${encodeURIComponent(flowId)}/stop`,
+      args,
+    );
   }
 }
 
@@ -596,6 +848,40 @@ interface RawWithdrawResult {
   amountWithdrawn: string;
   newTotalWithdrawn: string;
   newStatus: string;
+}
+
+/** Wire shape of a StreamFlow contract as serialized by the proxy. */
+export interface RawFlow {
+  contractId: string;
+  streamId: string;
+  sender: string;
+  recipient: string;
+  escrowOperator: string;
+  instrumentRef: RawInstrumentRef;
+  flowRate: string;
+  startTime: string;
+  fundedAmount: string;
+  totalWithdrawn: string;
+  status: 'FlowActive' | 'FlowPaused' | 'FlowStopped';
+  pausedAt?: string;
+  cumulativePausedMicros: number;
+  lastSettlementReference?: string;
+  numIterations: number;
+}
+
+/** Create-flow request body (POST /api/flows). */
+export interface CreateFlowRequest {
+  streamId?: string;
+  sender?: string;
+  recipient: string;
+  escrowOperator?: string;
+  instrumentRef: RawInstrumentRef;
+  /** Tokens per microsecond, decimal string. */
+  flowRate: string;
+  /** Initial funded balance, decimal string (>= 0). */
+  fundedAmount: string;
+  /** ISO timestamp; defaults to now on the proxy. */
+  startTime?: string;
 }
 
 interface RawCancelResult {

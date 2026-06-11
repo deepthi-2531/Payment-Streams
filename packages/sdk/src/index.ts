@@ -81,6 +81,13 @@ export {
   CHOICE_RENEW_LOCAL_ASSET,
   CHOICE_EXECUTE_POLICY,
   CHOICE_REVOKE_POLICY,
+  TEMPLATE_STREAM_FLOW,
+  CHOICE_TOP_UP_FLOW,
+  CHOICE_WITHDRAW_FLOW,
+  CHOICE_PAUSE_FLOW,
+  CHOICE_RESUME_FLOW,
+  CHOICE_STOP_FLOW,
+  CHOICE_GET_FLOW_INFO,
   ESCROW_TEMPLATES,
   CREATE_REQUEST_TEMPLATES,
   validateTemplateRegistry,
@@ -253,6 +260,39 @@ export type {
   AllocationMetadataV1,
 } from './commands/allocation-v1.js';
 
+// StreamFlow — non-prefunded / rolling top-up open-ended streaming.
+// Sender maintains a funded balance via TopUp_Flow; withdrawals are
+// bounded by the funded balance. Settlement is V2 iterated allocation.
+export {
+  buildFlowCreate,
+  buildTopUpFlow,
+  buildWithdrawFlow,
+  buildPauseFlow,
+  buildResumeFlow,
+  buildStopFlow,
+  createFlow,
+  topUpFlow,
+  withdrawFlow,
+  pauseFlow,
+  resumeFlow,
+  stopFlow,
+  listFlows,
+  getFlow,
+} from './commands/flow.js';
+export type {
+  CreateFlowParams,
+  FlowCreatePayload,
+  FlowExercisePayload,
+  TopUpFlowParams,
+  WithdrawFlowParams,
+  PauseFlowParams,
+  ResumeFlowParams,
+  StopFlowParams,
+  FlowInfo,
+  FlowFilter,
+  FlowStatus,
+} from './commands/flow.js';
+
 // StreamAdmin orchestration — admin/observability surface for V2
 // iterated-allocation streaming. Records per-stream metadata + pointers
 // to the active V2 Allocation cid; lifecycle proper lives in
@@ -272,3 +312,34 @@ export type {
   VestingMode as StreamAdminVestingMode,
   InstrumentRefSdk,
 } from './commands/stream-admin.js';
+
+// Transitional CIP-0047 featured-app marker emission (opt-in).
+export {
+  disabledFeaturedApp,
+  enabledFeaturedApp,
+  buildEmission,
+  estimateRewardCapUsd,
+} from './featured-app.js';
+export type {
+  ActivityType,
+  FeaturedAppConfig,
+  FeaturedAppEmission,
+  FeaturedAppRewardEstimateOptions,
+} from './featured-app.js';
+
+// Use-case facades — vesting, LP incentives, validator billing.
+// Also published as the `@canton-streams/sdk/helpers` subpath.
+export {
+  buildVestingStream,
+  buildIncentiveStream,
+  buildRecurringBillingStream,
+  buildUsageBillingFlow,
+} from './helpers/index.js';
+export type {
+  VestingStreamOptions,
+  VestingStyle,
+  IncentiveStreamOptions,
+  RecurringBillingOptions,
+  UsageBillingFlowOptions,
+  FlowCreateParams,
+} from './helpers/index.js';

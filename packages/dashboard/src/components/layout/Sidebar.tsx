@@ -28,6 +28,7 @@ const NAV: ReadonlyArray<NavEntry> = [
   { route: '/', label: 'Dashboard', icon: 'Dashboard' },
   { route: '/streams', label: 'Streams', icon: 'Stream' },
   { route: '/create', label: 'Create', icon: 'Plus' },
+  { route: '/flows', label: 'Flows', icon: 'Refresh' },
   { route: '/batch', label: 'Batch', icon: 'Layers' },
   { route: '/inbox', label: 'Inbox', icon: 'Inbox', badgeKey: 'inbox' },
   { divider: true },

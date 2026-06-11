@@ -23,12 +23,21 @@
 
 import Decimal from 'decimal.js';
 
-import { SettlementMode, AssetType } from '../types/stream.js';
+import { SettlementMode, AssetType, VestingMode } from '../types/stream.js';
 import type {
   CreateStreamParams,
   InstrumentRef,
+  LedgerRecord,
   VestingModeConfig,
 } from '../types/stream.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MICROS = 86_400_000_000; // one day as Daml RelTime microseconds
+
+/** Default V2 account record for a bare party. */
+function partyAccount(owner: string): LedgerRecord {
+  return { owner, id: '' };
+}
 
 export interface RecurringBillingOptions {
   readonly streamId: string;
@@ -48,6 +57,12 @@ export interface RecurringBillingOptions {
   readonly instrumentRef: InstrumentRef;
   /** Escrow operator party. */
   readonly escrowOperator: string;
+  /** Payer-side funding reference from the wallet's V2 allocation step. */
+  readonly fundingReference: string;
+  /** Payer custody account. Defaults to `{ owner: payer, id: '' }`. */
+  readonly senderAccount?: LedgerRecord;
+  /** Payee account for withdrawals. Defaults to `{ owner: payee, id: '' }`. */
+  readonly recipientAccount?: LedgerRecord;
   /** Customer can cancel (e.g. service degradation). Defaults to true. */
   readonly cancellable?: boolean;
 }
@@ -64,16 +79,25 @@ export function buildRecurringBillingStream(
 ): CreateStreamParams {
   const periodDays = opts.periodDays ?? 30;
   const totalPeriods = opts.totalPeriods ?? 1;
+  const perPeriod = new Decimal(opts.amountPerPeriod);
+
+  if (!perPeriod.isFinite() || perPeriod.lte(0)) {
+    throw new Error('amountPerPeriod must be > 0');
+  }
+  if (periodDays <= 0) {
+    throw new Error('periodDays must be > 0 (endTime must be after startTime)');
+  }
   if (totalPeriods < 1) {
     throw new Error('totalPeriods must be at least 1');
   }
-  const total = new Decimal(opts.amountPerPeriod).mul(totalPeriods);
-  const endTime = new Date(opts.startTime.getTime() + totalPeriods * periodDays * 24 * 60 * 60 * 1000);
+
+  const total = perPeriod.mul(totalPeriods);
+  const endTime = new Date(opts.startTime.getTime() + totalPeriods * periodDays * DAY_MS);
 
   const vestingMode: VestingModeConfig = {
-    kind: 'RenewableTerm',
-    termDuration: { days: periodDays },
-  } as unknown as VestingModeConfig;
+    mode: VestingMode.RenewableTerm,
+    termDuration: Math.floor(periodDays * DAY_MICROS),
+  };
 
   return {
     streamId: opts.streamId,
@@ -88,6 +112,9 @@ export function buildRecurringBillingStream(
     settlementMode: SettlementMode.TokenStandardCustody,
     assetType: AssetType.GlobalCip56,
     escrowOperator: opts.escrowOperator,
+    fundingReference: opts.fundingReference,
+    senderAccount: opts.senderAccount ?? partyAccount(opts.payer),
+    recipientAccount: opts.recipientAccount ?? partyAccount(opts.payee),
   };
 }
 
@@ -104,20 +131,20 @@ export interface UsageBillingFlowOptions {
   readonly startTime: Date;
   /** Initial funded balance. Customer must top-up to extend. */
   readonly initialFundedAmount: Decimal | string | number;
+  /** Settlement reference for the initial funding leg. */
   readonly initialFundingReference: string;
   readonly instrumentRef: InstrumentRef;
   readonly escrowOperator: string;
+  /** Additional observer parties on the flow contract. */
+  readonly observers?: readonly string[];
 }
 
 /**
- * Construct a StreamFlow-shaped params record for the usage-based
- * billing model. Returns a plain object that maps onto the StreamFlow
- * Daml template's create arguments.
- *
- * Note: StreamFlow is a separate template from StreamEscrow, so we
- * return a different params shape here (not CreateStreamParams). The
- * SDK's flow-side create helper (to be added under
- * `commands/createFlow.ts`) consumes this directly.
+ * Create-time params for the `StreamFlow` Daml template
+ * (`CantonStreams.Stream.StreamFlow`). Field names mirror the template;
+ * the SDK flow create command (`commands/flow.ts`) fills the remaining
+ * creation defaults (totalWithdrawn = 0, status = FlowActive,
+ * pausedAt = None, cumulativePausedDuration = 0, numIterations = 0).
  */
 export interface FlowCreateParams {
   readonly streamId: string;
@@ -125,24 +152,44 @@ export interface FlowCreateParams {
   readonly recipient: string;
   readonly escrowOperator: string;
   readonly instrumentRef: InstrumentRef;
-  readonly flowRate: Decimal; // tokens per microsecond
+  /** Tokens per microsecond. Must be > 0 (template `ensure`). */
+  readonly flowRate: Decimal;
   readonly startTime: Date;
-  readonly initialFundedAmount: Decimal;
-  readonly fundingReference: string;
+  /** Initial funded balance; grows via TopUp_Flow. Must be >= 0. */
+  readonly fundedAmount: Decimal;
+  /** Settlement reference recorded for the initial funding leg. */
+  readonly lastSettlementReference?: string;
+  readonly observers: readonly string[];
 }
 
+/**
+ * Construct a StreamFlow-shaped params record for the usage-based
+ * billing model.
+ *
+ * Note: StreamFlow is a separate template from StreamEscrow, so we
+ * return a different params shape here (not CreateStreamParams).
+ */
 export function buildUsageBillingFlow(opts: UsageBillingFlowOptions): FlowCreateParams {
-  // pricePerUnitPerSecond → tokens per microsecond
-  const tokensPerMicro = new Decimal(opts.pricePerUnitPerSecond).div(1_000_000);
+  const pricePerSecond = new Decimal(opts.pricePerUnitPerSecond);
+  if (!pricePerSecond.isFinite() || pricePerSecond.lte(0)) {
+    throw new Error('pricePerUnitPerSecond must be > 0');
+  }
+  const funded = new Decimal(opts.initialFundedAmount);
+  if (!funded.isFinite() || funded.isNegative()) {
+    throw new Error('initialFundedAmount must be >= 0');
+  }
+
   return {
     streamId: opts.streamId,
     sender: opts.payer,
     recipient: opts.payee,
     escrowOperator: opts.escrowOperator,
     instrumentRef: opts.instrumentRef,
-    flowRate: tokensPerMicro,
+    // pricePerUnitPerSecond → tokens per microsecond
+    flowRate: pricePerSecond.div(1_000_000),
     startTime: opts.startTime,
-    initialFundedAmount: new Decimal(opts.initialFundedAmount),
-    fundingReference: opts.initialFundingReference,
+    fundedAmount: funded,
+    lastSettlementReference: opts.initialFundingReference,
+    observers: opts.observers ?? [],
   };
 }

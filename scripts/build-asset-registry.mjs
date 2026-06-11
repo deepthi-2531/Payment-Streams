@@ -93,28 +93,33 @@ function log(...args) {
 
 /**
  * Load the seed file. Seeds pin per-asset display names, optional manual
- * overrides for admin party / Scan URL, and the capability flags that
- * the SV status can't surface (allocationsV2, transferEventsV2 — these
- * come from asset admin metadata, not the SV listing).
+ * overrides for admin party / Scan URL / token-standard API URL, and the
+ * capability flags that the SV status can't surface (allocationsV2,
+ * allocationsV1, transferEventsV2 — these come from asset admin metadata,
+ * not the SV listing).
  *
  * Format:
  *   {
- *     "version": "0.3.0",
+ *     "version": "0.4.0",
  *     "assets": {
  *       "v2-test-asset": {
  *         "displayName": "V2 Test Asset",
  *         "instrumentIdV2": { "admin": "TBD::admin", "id": "v2-test-asset-001" },
  *         "scanEndpointUrl": "...",
  *         "walletGatewayUrl": "...",
+ *         "tokenStandardApiUrl": "...",   // optional; falls back to scanEndpointUrl
  *         "allocationsV2": true,
+ *         "allocationsV1": false,
  *         "transferEventsV2": true
  *       },
  *       ...
  *     }
  *   }
  *
- * Per CIP-0112 §5, V1-only assets are not eligible — assets must publish
- * V2 interfaces before being added to the registry.
+ * V2 is the preferred lane. Assets live on MainNet that have not yet
+ * published V2 (CC / Amulet, USDCx) set `allocationsV1: true` to route the
+ * transitional V1 lane; per CIP-0112 §5 they flip to V2 with a flag change
+ * once supportedApis advertises it. At least one lane must be true.
  */
 function loadSeeds(seedsPath) {
   const abs = resolve(REPO_ROOT, seedsPath);
@@ -201,8 +206,8 @@ async function fetchSvStatus(network, svStatusUrl) {
  * Returns the `assets` map for the registry file.
  */
 async function buildAssets(network, svStatus, seeds) {
-  // V1 assets are not eligible for the registry until they publish V2
-  // interfaces per CIP-0112 section 5.
+  // V2 is the preferred lane; assets not yet publishing V2 (per CIP-0112
+  // section 5) may route the transitional V1 lane via allocationsV1.
   const assets = {};
   for (const [key, seed] of Object.entries(seeds.assets ?? {})) {
     const config = {
@@ -212,18 +217,24 @@ async function buildAssets(network, svStatus, seeds) {
       adminParty: seed.adminParty ?? seed.instrumentIdV2?.admin,
       scanEndpointUrl: seed.scanEndpointUrl ?? svStatus.scanEndpoints[0],
       walletGatewayUrl: seed.walletGatewayUrl ?? svStatus.defaultWalletGateway,
+      // Optional; consumers fall back to scanEndpointUrl (Scan serves the
+      // registry API for Amulet). Omitted from output when unset.
+      tokenStandardApiUrl: seed.tokenStandardApiUrl,
       allocationsV2: seed.allocationsV2 ?? false,
+      // Transitional V1 lane flag; omitted from output unless true.
+      allocationsV1: seed.allocationsV1 === true ? true : undefined,
       transferEventsV2: seed.transferEventsV2 ?? false,
       meta: seed.meta,
     };
-    // Skip assets that don't advertise V2 — V1-only assets aren't supported.
-    if (!config.allocationsV2) {
-      log(`skipping "${key}": allocationsV2 is false. ` +
-          `Per CIP-0112 section 5, "${key}" must publish V2 interfaces before it can be registered.`);
+    // Every asset must support at least one lane (registry.ts enforces
+    // the same rule at load time).
+    if (!config.allocationsV2 && !config.allocationsV1) {
+      log(`skipping "${key}": neither allocationsV2 nor allocationsV1 is true. ` +
+          `Set allocationsV2 (preferred) or allocationsV1 (transitional, per CIP-0112 section 5).`);
       continue;
     }
     if (!config.instrumentIdV2) {
-      log(`skipping "${key}": no instrumentIdV2 in seed — required for V2 routing`);
+      log(`skipping "${key}": no instrumentIdV2 in seed — required for routing (doubles as the V1 InstrumentId)`);
       continue;
     }
     if (!config.adminParty) {

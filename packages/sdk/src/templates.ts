@@ -141,6 +141,30 @@ export const CHOICE_MARK_COMPLETED = 'Mark_Completed';
 export const CHOICE_GET_STREAM_ADMIN_INFO = 'GetStreamAdminInfo';
 
 // ---------------------------------------------------------------------------
+// Non-prefunded / rolling top-up flow template
+// ---------------------------------------------------------------------------
+
+/**
+ * StreamFlow — open-ended stream with a flowRate (tokens per microsecond)
+ * and no fixed end time. The sender maintains a funded balance via TopUp;
+ * withdrawals are bounded by the actually-funded balance. Uses V2 iterated
+ * allocation for settlement (see CantonStreams.Stream.StreamFlow).
+ */
+export const TEMPLATE_STREAM_FLOW: TemplateId = {
+  packageId: MAIN_PACKAGE_ID,
+  moduleName: 'CantonStreams.Stream.StreamFlow',
+  entityName: 'StreamFlow',
+};
+
+/** Choices on StreamFlow. */
+export const CHOICE_TOP_UP_FLOW = 'TopUp_Flow';
+export const CHOICE_WITHDRAW_FLOW = 'Withdraw_Flow';
+export const CHOICE_PAUSE_FLOW = 'Pause_Flow';
+export const CHOICE_RESUME_FLOW = 'Resume_Flow';
+export const CHOICE_STOP_FLOW = 'Stop_Flow';
+export const CHOICE_GET_FLOW_INFO = 'GetFlowInfo';
+
+// ---------------------------------------------------------------------------
 // Utility/CIP Holding custody templates
 // ---------------------------------------------------------------------------
 
