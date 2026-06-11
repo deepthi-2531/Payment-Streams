@@ -61,6 +61,8 @@ export type Action =
   | 'cancel'
   | 'mutual-cancel'
   | 'renew'
+  | 'top-up'
+  | 'stop'
   | 'query'
   | 'finalize';
 
@@ -85,6 +87,8 @@ const ACTION_SPECS: Record<Action, ActionSpec> = {
   cancel:          { tier: 'user',    role: 'sender' },
   'mutual-cancel': { tier: 'user',    role: 'participant' },
   renew:           { tier: 'user',    role: 'sender' },
+  'top-up':        { tier: 'user',    role: 'sender' },
+  stop:            { tier: 'user',    role: 'participant' },
   query:           { tier: 'user',    role: 'any' },
   finalize:        { tier: 'service', role: 'any' },
 };

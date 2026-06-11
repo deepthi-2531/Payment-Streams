@@ -1,15 +1,19 @@
-# Per-Asset Configuration (V2-only)
+# Per-Asset Configuration
 
 How to configure Canton Payment Streams to work with a specific
-Token-Standard-V2 asset.
+Token-Standard asset.
 
-> **Status:** this library only supports assets that advertise CIP-56 V2 interfaces
-> in their `supportedApis` metadata field. Per
+> **Status:** V2 is the preferred lane — assets that advertise CIP-56 V2
+> interfaces in their `supportedApis` metadata field route it automatically.
+> Assets live on MainNet that have not yet published V2 (Canton Coin /
+> Amulet, USDCx) set `allocationsV1: true` and route the transitional V1
+> lane (`splice-api-token-allocation-v1`) instead; see
+> [V1-LANE-TESTING.md](../V1-LANE-TESTING.md). V1 has no iterated-allocation
+> or batch primitive, so those actions stay V2-only and recurring streams on
+> V1 run one allocation cycle per withdrawal. Per
 > [CIP-0112 §5](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility),
-> V1 assets are expected to publish V2 alongside V1; once your asset
-> advertises V2, register it here. V1-only assets cannot stream with this
-> library — V1 has no iterated-allocation primitive that the streaming
-> model requires.
+> V1 assets are expected to publish V2 alongside V1; once an asset
+> advertises V2, its registry flags flip with no code change.
 
 ---
 
@@ -25,14 +29,28 @@ For each asset, you supply:
 |---|---|---|
 | `key` | Stable identifier ("cc", "usdcx", "my-asset") | You choose |
 | `displayName` | Human-readable | You choose |
-| `instrumentIdV2` | V2 2-field record `{ admin, id }` | From the asset admin's V2 metadata |
-| `adminParty` | Party id of the registry app administering the asset | From the SV listing |
+| `instrumentIdV2` | 2-field record `{ admin, id }`; doubles as the V1 `InstrumentId` for V1-lane assets | From the asset admin's metadata |
+| `adminParty` | Party id of the registry app administering the asset | From the SV listing / asset admin |
 | `scanEndpointUrl` | SV Scan endpoint URL | From the SV listing |
-| `walletGatewayUrl` | Wallet-gateway base URL (JSON-RPC dApp API) | From the SV listing or the asset admin |
-| `allocationsV2` | true if V2 allocations are supported (required true) | From asset admin metadata |
+| `walletGatewayUrl` | Wallet-gateway base URL (JSON-RPC dApp API) | Deployment-specific (your operator's gateway) |
+| `tokenStandardApiUrl` | Token-standard registry API base (optional; falls back to `scanEndpointUrl`) | Scan for Amulet; the issuer's registry endpoint otherwise |
+| `allocationsV2` | true if V2 allocations are supported (preferred lane) | From asset admin metadata |
+| `allocationsV1` | true to route the transitional V1 lane; at least one of `allocationsV2`/`allocationsV1` must be true | From asset admin metadata |
 | `transferEventsV2` | true if V2 TransferEvents are supported | From asset admin metadata |
 | `paused` | true if V2 metadata signals the instrument is paused | From asset admin metadata |
 | `pauseInfo` | Optional explanation for paused state | From asset admin metadata |
+
+### Registered assets
+
+| Key | Lane | Notes |
+|---|---|---|
+| `cc` (Canton Coin / Amulet) | V1 (transitional) | Instrument id `Amulet`; admin = the network's DSO party — resolve via `GET {scan}/api/scan/v0/dso` (see entry `meta.adminResolution`). Registry API served by Scan. |
+| `usdcx` (USDCx) | V1 (transitional) | Issuer admin party + dedicated registry endpoint are deployment-specific — resolve from the issuer's published metadata (see entry `meta`). Live checklist: [usdcx-field-validation.md](../validation/usdcx-field-validation.md). |
+| `v2-test-asset` | V2 | DevNet-only probe asset. |
+
+The `cc`/`usdcx` entries ship with explicit `TBD::`/`TBD-` placeholders for
+the network- or deployment-specific values; probe pre-flight warns on them
+(and hard-fails on mainnet) until they are filled.
 
 ---
 
@@ -45,9 +63,9 @@ node scripts/build-asset-registry.mjs --network mainnet --out config/asset-regis
 ```
 
 This consumes `scripts/asset-registry-seeds.json` (which you edit to pin
-per-asset display names + V2 capability flags) and merges with the SV
-status to produce the final registry. Assets without `allocationsV2 =
-true` are skipped with a clear log message.
+per-asset display names + capability flags) and merges with the SV
+status to produce the final registry. Assets with neither `allocationsV2`
+nor `allocationsV1` set to true are skipped with a clear log message.
 
 For one-off / custom assets not in the SV listing, edit
 `config/asset-registry.json` directly.
@@ -91,6 +109,7 @@ console.log(caps);
 // {
 //   key: 'my-asset',
 //   allocationsV2: true,
+//   allocationsV1: false,
 //   transferEventsV2: true,
 //   paused: false,
 //   source: 'registry',
@@ -109,6 +128,8 @@ try {
 `assertActionSupported` throws:
 
 * `PausedInstrumentError` if the asset is paused per V2 metadata
+* Generic `Error` if `allocation-iterated` / `allocation-batch` is
+  requested on an asset that routes the V1 lane
 * Generic `Error` if `event-subscription` is requested on an asset without
   `transferEventsV2`
 
@@ -116,23 +137,30 @@ try {
 
 ## Adding a new asset
 
-1. Confirm the asset advertises V2 in its `supportedApis` metadata field
+1. Confirm which lane the asset supports: V2 advertised in its
+   `supportedApis` metadata field (preferred), or the V1 token standard
+   (transitional)
 2. Get the asset's `adminParty`, `scanEndpointUrl`, `walletGatewayUrl`
+   (and `tokenStandardApiUrl` if the registry API is not Scan)
    from the SV operator + asset admin
 3. Look up `instrumentIdV2.admin` (the issuing party) and
-   `instrumentIdV2.id` (the asset's opaque V2 identifier) from the asset
+   `instrumentIdV2.id` (the asset's opaque identifier) from the asset
    admin metadata
 4. Add an entry to `scripts/asset-registry-seeds.json` with
-   `allocationsV2: true`
+   `allocationsV2: true` (or `allocationsV1: true` for V1-lane assets)
 5. Run `node scripts/build-asset-registry.mjs` to regenerate
 6. Commit the resulting `config/asset-registry.json`
-7. Test with the V2 testnet probe when you have a live participant and wallet gateway
+7. Test with the matching testnet probe when you have a live participant
+   and wallet gateway (`--asset-key <key>` resolves routing from the
+   registry)
 
 ---
 
 ## V1 → V2 transition story (for partners)
 
-If your asset is V1-only today, the path forward is:
+If your asset is V1-only today, register it with `allocationsV1: true`
+(streams settle one allocation cycle per withdrawal; iterated/batch
+actions stay V2-only). The path to the full feature set is:
 
 1. **Add V2 interfaces to your asset's Daml package** per the
    [CIP-0112 §5 dual-implementation requirement](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility).

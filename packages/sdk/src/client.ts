@@ -35,6 +35,25 @@ import { cancel, mutualCancel } from './commands/cancel.js';
 import { renew } from './commands/renew.js';
 import { finalizeEscrow } from './commands/finalize.js';
 import { getStream, listStreams, getStreamHistory } from './commands/query.js';
+import {
+  createFlow,
+  topUpFlow,
+  withdrawFlow,
+  pauseFlow,
+  resumeFlow,
+  stopFlow,
+  listFlows,
+} from './commands/flow.js';
+import type {
+  CreateFlowParams,
+  TopUpFlowParams,
+  WithdrawFlowParams,
+  PauseFlowParams,
+  ResumeFlowParams,
+  StopFlowParams,
+  FlowInfo,
+  FlowFilter,
+} from './commands/flow.js';
 import { listPendingStreamRequests } from './commands/requests.js';
 import { listPolicies, revokePolicy, listExecutionLogs } from './commands/policy.js';
 import { ESCROW_TEMPLATES } from './templates.js';
@@ -161,6 +180,81 @@ export class CantonStreamsClient {
    */
   async renew(sender: string, streamId: string, params: RenewParams): Promise<string> {
     return renew(this.transport, sender, streamId, params, this.config.actAs, this.logger);
+  }
+
+  // --- Open-ended Flows (StreamFlow, non-prefunded / rolling top-up) ---
+
+  /**
+   * Create an open-ended StreamFlow. All three signatories (sender,
+   * recipient, escrowOperator) must be covered by the client's actAs.
+   */
+  async createFlow(params: CreateFlowParams): Promise<{ contractId: string; streamId: string }> {
+    return createFlow(this.transport, params, this.config.actAs, this.logger);
+  }
+
+  /**
+   * Top up the funded balance of a flow. Requires sender + escrowOperator
+   * authority.
+   */
+  async topUpFlow(
+    sender: string,
+    streamId: string,
+    params: TopUpFlowParams,
+  ): Promise<{ newFlowCid: string }> {
+    return topUpFlow(this.transport, sender, streamId, params, this.config.actAs, this.logger);
+  }
+
+  /**
+   * Withdraw the accrued + funded amount from a flow. Requires
+   * recipient + escrowOperator authority.
+   */
+  async withdrawFlow(
+    sender: string,
+    streamId: string,
+    params: WithdrawFlowParams,
+  ): Promise<{ newFlowCid: string }> {
+    return withdrawFlow(this.transport, sender, streamId, params, this.config.actAs, this.logger);
+  }
+
+  /**
+   * Pause accrual on a flow. Sender-only.
+   */
+  async pauseFlow(
+    sender: string,
+    streamId: string,
+    params: PauseFlowParams = {},
+  ): Promise<{ newFlowCid: string }> {
+    return pauseFlow(this.transport, sender, streamId, params, this.config.actAs, this.logger);
+  }
+
+  /**
+   * Resume accrual on a paused flow. Sender-only.
+   */
+  async resumeFlow(
+    sender: string,
+    streamId: string,
+    params: ResumeFlowParams = {},
+  ): Promise<{ newFlowCid: string }> {
+    return resumeFlow(this.transport, sender, streamId, params, this.config.actAs, this.logger);
+  }
+
+  /**
+   * Stop a flow (mutual termination — sender + recipient + escrowOperator).
+   * The settlement split must match the contract's accrual at stopTime.
+   */
+  async stopFlow(
+    sender: string,
+    streamId: string,
+    params: StopFlowParams,
+  ): Promise<{ newFlowCid: string }> {
+    return stopFlow(this.transport, sender, streamId, params, this.config.actAs, this.logger);
+  }
+
+  /**
+   * List active StreamFlow contracts visible to the acting parties.
+   */
+  async listFlows(filter?: FlowFilter): Promise<FlowInfo[]> {
+    return listFlows(this.transport, filter, this.config.actAs, this.config.readAs, this.logger);
   }
 
   // --- Balance Queries ---

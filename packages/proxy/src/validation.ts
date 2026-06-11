@@ -46,6 +46,25 @@ export function optionalAmount(value: unknown, field: string): Decimal | undefin
   return requireAmount(value, field);
 }
 
+/** As requireAmount, but zero is allowed (flow stop legs, initial funding). */
+export function requireNonNegativeAmount(value: unknown, field: string): Decimal {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    fail(`Invalid ${field}: expected a non-negative numeric amount`);
+  }
+  const raw = String(value).trim();
+  if (raw === '') fail(`Invalid ${field}: amount is required`);
+  let dec: Decimal;
+  try {
+    dec = new Decimal(raw);
+  } catch {
+    fail(`Invalid ${field}: not a valid amount`);
+  }
+  if (!dec.isFinite() || dec.lessThan(0)) {
+    fail(`Invalid ${field}: amount must be a finite value of at least zero`);
+  }
+  return dec;
+}
+
 /** Non-empty party id matching name::fingerprint with no comma/CR/LF. */
 export function requirePartyId(value: unknown, field: string): string {
   if (typeof value !== 'string' || !PARTY_ID.test(value)) {

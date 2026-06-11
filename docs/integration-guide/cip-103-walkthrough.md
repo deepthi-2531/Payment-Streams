@@ -72,6 +72,7 @@ const params = buildVestingStream({
   cliffDays: 90,
   instrumentRef: usdcx.instrumentRef!,
   escrowOperator: escrowOperatorParty,
+  fundingReference: walletFundingRef, // from the wallet's V2 allocation funding step
 });
 ```
 

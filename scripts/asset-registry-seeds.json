@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
-  "note": "Seed file consumed by scripts/build-asset-registry.mjs. Pins per-asset display names, V2 capability flags, and per-asset overrides (admin party, Scan URL, wallet-gateway URL). Add assets once they advertise Token Standard V2 support in supportedApis. When SV status / asset-admin metadata is not fully programmatically accessible, populate TBD fields manually after reviewing the public SV network status listing (https://canton.foundation/sv-network-status-2/).",
+  "version": "0.4.0",
+  "note": "Seed file consumed by scripts/build-asset-registry.mjs. Pins per-asset display names, capability flags (V2 preferred; allocationsV1 for the transitional V1 lane), and per-asset overrides (admin party, Scan URL, wallet-gateway URL, token-standard API URL). When SV status / asset-admin metadata is not fully programmatically accessible, populate TBD fields manually after reviewing the public SV network status listing (https://canton.foundation/sv-network-status-2/).",
   "assets": {
     "v2-test-asset": {
       "displayName": "V2 Test Asset (DevNet only)",
@@ -15,6 +15,48 @@
       "meta": {
         "standard": "CIP-56 V2",
         "note": "Test asset for V2-DevNet probes. Not for Mainnet."
+      }
+    },
+    "cc": {
+      "displayName": "Canton Coin (Amulet)",
+      "instrumentIdV2": {
+        "admin": "TBD::dso-resolve-via-scan-v0-dso",
+        "id": "Amulet"
+      },
+      "scanEndpointUrl": "https://scan.sv-1.test.global.canton.network.sync.global",
+      "walletGatewayUrl": "TBD-operator-wallet-gateway",
+      "tokenStandardApiUrl": "https://scan.sv-1.test.global.canton.network.sync.global",
+      "allocationsV2": false,
+      "allocationsV1": true,
+      "transferEventsV2": false,
+      "meta": {
+        "standard": "CIP-56 V1 (transitional)",
+        "note": "Live on MainNet on the V1 token standard today. Per CIP-0112 §5 Amulet is expected to publish V2 interfaces; once supportedApis advertises V2, flip allocationsV2/transferEventsV2 here — no code change.",
+        "adminResolution": "The instrument admin is the network's DSO party (network-specific). Resolve at runtime: GET {scanEndpointUrl}/api/scan/v0/dso → dso_party_id; copy into instrumentIdV2.admin and adminParty.",
+        "tokenStandardApiNote": "Amulet's token-standard registry API is served by Scan at the bare host — choice-context endpoints live under /registry/allocations/v1/..., NOT under /api/scan.",
+        "scanUrls": "TestNet reference encoded above; MainNet equivalent: https://scan.sv-1.global.canton.network.sync.global",
+        "walletGatewayResolution": "Deployment-specific — each operator runs their own wallet gateway. Point walletGatewayUrl at your operator's gateway."
+      }
+    },
+    "usdcx": {
+      "displayName": "USDCx",
+      "instrumentIdV2": {
+        "admin": "TBD::usdcx-issuer-resolve-via-issuer-metadata",
+        "id": "USDCx"
+      },
+      "scanEndpointUrl": "https://scan.sv-1.test.global.canton.network.sync.global",
+      "walletGatewayUrl": "TBD-operator-wallet-gateway",
+      "tokenStandardApiUrl": "TBD-usdcx-registry-api",
+      "allocationsV2": false,
+      "allocationsV1": true,
+      "transferEventsV2": false,
+      "meta": {
+        "standard": "CIP-56 V1 (transitional)",
+        "note": "Live on MainNet on the V1 token standard today. Per CIP-0112 §5 USDCx is expected to publish V2 interfaces; once supportedApis advertises V2, flip allocationsV2/transferEventsV2 here — no code change.",
+        "adminResolution": "The issuer admin party is deployment-specific. Resolve from the issuer's published token-standard metadata or the public SV network status listing (https://canton.foundation/sv-network-status-2/); copy into instrumentIdV2.admin and adminParty.",
+        "tokenStandardApiResolution": "USDCx runs a dedicated registry endpoint (not Scan). Resolve the base URL from the issuer's published metadata; choice-context endpoints live under /registry/allocations/v1/... on that base.",
+        "scanUrls": "TestNet SV Scan reference encoded above (transaction history is network-wide); MainNet equivalent: https://scan.sv-1.global.canton.network.sync.global",
+        "walletGatewayResolution": "Deployment-specific — each operator runs their own wallet gateway. Point walletGatewayUrl at your operator's gateway."
       }
     }
   }
