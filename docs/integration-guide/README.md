@@ -21,6 +21,7 @@ You do not need all of them. Most integrations use the SDK directly
 |---|---|
 | Understand the integration architecture in 5 minutes | this README (you're here) |
 | **Use the V2-native AllocationRequest pattern (default going forward)** | [**`allocation-request-pattern.md`**](./allocation-request-pattern.md) |
+| Integrate the non-prefunded / rolling top-up flow (`StreamFlow`) | [`non-prefunded-flow.md`](./non-prefunded-flow.md) |
 | See a complete browser-wallet integration end-to-end | [`cip-103-walkthrough.md`](./cip-103-walkthrough.md) |
 | Onboard a hosted wallet (connect/read/write/approval, capability matrix) | [`host-wallet-onboarding.md`](./host-wallet-onboarding.md) |
 | Run the CIP-103 conformance suite against your dApp | [`cip-103-conformance.md`](./cip-103-conformance.md) |

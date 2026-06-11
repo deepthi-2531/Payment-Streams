@@ -5,7 +5,11 @@
 | Version | Supported |
 | --- | --- |
 | `0.2.x` | Yes |
+| `1.0.0` line | Planned (release candidate); supported once it ships |
 | `< 0.2.0` | No |
+
+For the maintenance window, security-patch SLA targets, maintainer ownership
+model, and end-of-life policy, see [docs/SUPPORT.md](docs/SUPPORT.md).
 
 ## Reporting a Vulnerability
 

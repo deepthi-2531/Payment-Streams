@@ -308,3 +308,9 @@ Keep secrets in env vars, never in the JSON config file.
 ## Upgrade and migration
 
 For breaking changes between releases, see [CHANGELOG.md](../CHANGELOG.md).
+
+## See also
+
+For running the system day to day — health and readiness, SLOs, backup and
+restore of stateful files, incident runbooks, upgrade/rollback, and on-call
+ownership — see [OPERATIONS.md](OPERATIONS.md).

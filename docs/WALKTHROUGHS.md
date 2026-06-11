@@ -121,6 +121,12 @@ Total Bob received: exactly 1200 (Daml accrual math is exact under V2 atomic set
 
 ## Walkthrough 2 — `StreamFlow`: rolling subscription
 
+> **Non-prefunded flows:** for the full `StreamFlow` reference — the
+> create → top-up → withdraw → pause/resume → stop lifecycle, the SDK
+> builders, the `/api/flows` routes, the dashboard actions, and the
+> `devnet-streamflow-probe.mjs` probe — see
+> [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
+
 **Scenario:** Acme charges Bob a recurring infrastructure-billing subscription. Acme bills Bob ~$50/month, but the amount varies based on usage.
 
 ### Step 1 — Create
