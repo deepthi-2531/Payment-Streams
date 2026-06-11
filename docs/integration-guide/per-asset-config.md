@@ -44,13 +44,16 @@ For each asset, you supply:
 
 | Key | Lane | Notes |
 |---|---|---|
-| `cc` (Canton Coin / Amulet) | V1 (transitional) | Instrument id `Amulet`; admin = the network's DSO party — resolve via `GET {scan}/api/scan/v0/dso` (see entry `meta.adminResolution`). Registry API served by Scan. |
-| `usdcx` (USDCx) | V1 (transitional) | Issuer admin party + dedicated registry endpoint are deployment-specific — resolve from the issuer's published metadata (see entry `meta`). Live checklist: [usdcx-field-validation.md](../validation/usdcx-field-validation.md). |
+| `cc` (Canton Coin / Amulet) | V1 (transitional) | Instrument id `Amulet`; admin = DSO party (DA-docs reference value, network-specific — confirm via `GET {scan}/api/scan/v0/dso-party-id`, see entry `meta.adminResolution`). Registry API served by Scan. |
+| `usdcx` (USDCx) | V1 (transitional) | Instrument id `USDCx`; real per-network issuer admin + registry base URL from Circle xReserve / DA docs (TestNet in fields, MainNet in `meta.mainnet`). Live checklist: [usdcx-field-validation.md](../validation/usdcx-field-validation.md). |
 | `v2-test-asset` | V2 | DevNet-only probe asset. |
 
-The `cc`/`usdcx` entries ship with explicit `TBD::`/`TBD-` placeholders for
-the network- or deployment-specific values; probe pre-flight warns on them
-(and hard-fails on mainnet) until they are filled.
+The `cc`/`usdcx` entries carry the real published instrument ids, admin
+parties, and registry/Scan endpoints. The only remaining placeholder is
+`walletGatewayUrl` (operator-specific — each operator runs their own
+gateway); probe pre-flight warns on it and hard-fails on mainnet until set.
+The CC DSO party is a documented reference value; confirm it against your
+target network's Scan before a mainnet run.
 
 ---
 
