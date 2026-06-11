@@ -350,14 +350,14 @@ Do not use `*` in production.
 
 ### Rate limiting
 
-The proxy does not implement rate limiting by default. For production
-deployments:
+The proxy ships an in-process rate limiter, enabled by default
+(`PROXY_RATE_LIMIT_MAX` requests per `PROXY_RATE_LIMIT_WINDOW_MS`, default
+120 per 60s; `PROXY_RATE_LIMIT_DISABLE=true` turns it off). For production
+deployments, layer additional controls:
 
-- Deploy behind a reverse proxy (nginx, Envoy) with rate limiting.
-- Consider per-party rate limits to prevent a single party from
-  monopolizing the Ledger API.
-- Suggested limits: 100 requests/minute per party for write operations,
-  1000 requests/minute for reads.
+- Deploy behind a reverse proxy (nginx, Envoy) with its own rate limiting.
+- Consider per-party rate limits — the built-in limiter is per-process,
+  not per-party — to stop one party monopolizing the Ledger API.
 
 ### Service token for operator actions
 
@@ -519,8 +519,8 @@ appropriate for direct internet exposure.
 **Threats not yet mitigated**
 
 - `PROXY_SERVICE_TOKEN` in env-var memory rather than vault
-- Permissive CORS; no origin allowlist
-- No per-party / per-action rate limiting
+- No per-party / per-action rate limiting (the built-in limiter is
+  per-process; CORS is allow-list, not permissive)
 - No CSRF on state-changing routes
 - Audit trail to stdout only (not append-only durable storage)
 - No request correlation IDs propagated browser → proxy → ledger

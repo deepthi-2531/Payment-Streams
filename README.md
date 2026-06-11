@@ -330,8 +330,13 @@ participant.
 | Integrate into your dApp | [docs/integration-guide/README.md](docs/integration-guide/README.md) |
 | Understand the architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
 | Deploy safely | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| Operate in production | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
 | Review risks | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) |
+| See findings and their fixes | [docs/SECURITY-FINDINGS.md](docs/SECURITY-FINDINGS.md) |
+| Scope an independent review | [docs/AUDIT-SCOPE.md](docs/AUDIT-SCOPE.md) |
+| Cut a release candidate | [docs/RELEASE-CANDIDATE.md](docs/RELEASE-CANDIDATE.md) |
 | Check REST endpoints | [docs/API.md](docs/API.md) |
+| Know what's supported | [docs/SUPPORT.md](docs/SUPPORT.md) |
 
 ## Contributing
 

@@ -2,6 +2,11 @@
 
 End-to-end host-app integration of Canton Payment Streams, V2-only via the CIP-103 wallet flow and CIP-56 V2 token standard. This walks through a complete vesting-stream rollout for a hypothetical host app.
 
+Canton Payment Streams ships **two funding models**:
+
+- **Prefunded** (`StreamAdmin` / `StreamEscrow`) — bounded term, the total is committed up front. This example uses the prefunded path.
+- **Non-prefunded** (`StreamFlow`) — open-ended, the sender keeps a funded balance via rolling top-ups and withdrawals are bounded by that balance. See the [Subscriptions variation](#subscriptions-instead-of-fixed-term) below, and the dedicated reference [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
+
 ## Scenario
 
 `AcmeCo` runs a Canton-based marketplace. They want to ship a "streaming payroll" feature where employees get paid continuously across the month instead of a lump sum on the 1st.
@@ -245,7 +250,7 @@ const request = buildAllocationRequest({
 });
 ```
 
-The sender keeps the funded balance topped up via `TopUp` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit).
+The sender keeps the funded balance topped up via `TopUp` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit). For the full `StreamFlow` lifecycle — choices, SDK builders, `/api/flows` routes, dashboard actions, and the probe — see [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
 
 ### Milestone-gated releases
 
