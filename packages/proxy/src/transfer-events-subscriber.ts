@@ -572,9 +572,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       beginExclusive: { offset: resumeOffset },
     };
 
-    // Never follow a 3xx on an authenticated call (the default redirect
-    // replays the Authorization header to the target), and bound the call
-    // so a hung event source cannot wedge the poll loop.
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 30_000);
     let res: Response;
@@ -745,8 +743,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       beginExclusive: { offset: resumeOffset },
     };
 
-    // Same authenticated-call guards as the V2 events poll: no redirect
-    // follow, bounded duration.
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort(), 30_000);
     let res: Response;
