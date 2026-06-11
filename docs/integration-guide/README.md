@@ -21,7 +21,9 @@ You do not need all of them. Most integrations use the SDK directly
 |---|---|
 | Understand the integration architecture in 5 minutes | this README (you're here) |
 | **Use the V2-native AllocationRequest pattern (default going forward)** | [**`allocation-request-pattern.md`**](./allocation-request-pattern.md) |
+| Integrate the non-prefunded / rolling top-up flow (`StreamFlow`) | [`non-prefunded-flow.md`](./non-prefunded-flow.md) |
 | See a complete browser-wallet integration end-to-end | [`cip-103-walkthrough.md`](./cip-103-walkthrough.md) |
+| Onboard a hosted wallet (connect/read/write/approval, capability matrix) | [`host-wallet-onboarding.md`](./host-wallet-onboarding.md) |
 | Run the CIP-103 conformance suite against your dApp | [`cip-103-conformance.md`](./cip-103-conformance.md) |
 | Configure your dApp for the right asset | [`per-asset-config.md`](./per-asset-config.md) |
 | Review the transitional CIP-0047/CIP-0104 marker seam | [`featured-app-rewards.md`](./featured-app-rewards.md) |
@@ -69,14 +71,19 @@ location differs.
 ## Minimum integration shape (≈30 lines)
 
 ```ts
-import { CantonStreamsClient } from '@canton-streams/sdk';
-import { loadAssetRegistry } from '@canton-streams/sdk/assets/registry';
+import { CantonStreamsClient, loadAssetRegistry } from '@canton-streams/sdk';
 import { buildVestingStream } from '@canton-streams/sdk/helpers';
 import assetRegistryFile from './asset-registry.json' assert { type: 'json' };
 
 // 1. Load the asset registry (per-asset routing)
 const registry = loadAssetRegistry(assetRegistryFile);
 const usdcx = registry.requireAsset('usdcx');
+const usdcxInstrumentRef = {
+  depository: usdcx.instrumentIdV2.admin,
+  issuer: usdcx.instrumentIdV2.admin,
+  instrumentId: usdcx.instrumentIdV2.id,
+  instrumentVersion: usdcx.allocationsV2 ? 'v2' : 'v1',
+};
 
 // 2. Construct the stream params via a use-case helper
 const params = buildVestingStream({
@@ -87,8 +94,9 @@ const params = buildVestingStream({
   startTime: new Date('2026-07-01'),
   durationDays: 365 * 4,        // 4-year vest
   cliffDays: 365,                // 1-year cliff
-  instrumentRef: usdcx.instrumentRef!,
+  instrumentRef: usdcxInstrumentRef,
   escrowOperator: ourOperatorParty,
+  fundingReference: walletFundingRef, // from the wallet's V2 allocation funding step
 });
 
 // 3. Submit via the SDK (Path B — server-side, service-account signing)
@@ -105,7 +113,7 @@ into `provider.prepareExecute({...})`. See `cip-103-walkthrough.md`.
 
 ## What you do NOT need to do
 
-- **Branch by asset name**: the library gates on V2 capability flags.
+- **Branch by asset name**: the library gates on V1/V2 capability flags.
 You pick a registered V2 asset; the library rejects assets that do
 not advertise the required V2 allocation support.
 - **Manage your own signing**: use Path A (wallet) or Path B (vault).
@@ -123,4 +131,5 @@ not advertise the required V2 allocation support.
 - **GitHub Discussions**: architecture + design questions
 - **GitHub Issues**: bugs + feature requests
 - **Canton community channels**: real-time community
-- **`security@…`** (see SECURITY.md): private security disclosure
+- **Security**: report suspected vulnerabilities privately to the
+  maintainers rather than opening a public issue

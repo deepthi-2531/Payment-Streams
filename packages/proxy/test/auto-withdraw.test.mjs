@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
+import { createPublicKey, generateKeyPairSync } from 'node:crypto';
 import Decimal from 'decimal.js';
 
 import {
@@ -12,6 +12,13 @@ import {
 } from '../dist/auto-withdraw.js';
 
 const now = new Date('2026-04-01T06:00:00.000Z');
+
+// Derive the raw Ed25519 public key (base64) from a PKCS8 private key PEM
+// so test credentials carry a matching key pair.
+function rawPublicKeyBase64(privateKeyPem) {
+  const spki = createPublicKey(privateKeyPem).export({ type: 'spki', format: 'der' });
+  return spki.subarray(spki.length - 32).toString('base64');
+}
 
 function activeTokenStandardStream(overrides = {}) {
   return {
@@ -189,15 +196,15 @@ test('executeInteractiveWithdraw prepares the ledger withdraw before locking wal
   const originalCredentials = process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON;
 
   const { privateKey } = generateKeyPairSync('ed25519');
-  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const escrowPrivateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
   const calls = [];
 
   process.env.CANTON_STREAMS_WALLET_GATEWAY_URL = 'https://wallet.example';
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
-      privateKey: privateKeyPem,
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
+      privateKey: escrowPrivateKeyPem,
     },
   });
 
@@ -217,7 +224,7 @@ test('executeInteractiveWithdraw prepares the ledger withdraw before locking wal
     if (url.endsWith('/api/wallet-gateway/prepare-action')) {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-1',
-        expectedPublicKey: 'escrow-public-key',
+        expectedPublicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('wallet-prepared-hash').toString('base64'),
         },
@@ -321,7 +328,7 @@ test('executeInteractiveWithdraw routes signing through the Wallet Gateway when 
   const originalCredentials = process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON;
 
   const { privateKey } = generateKeyPairSync('ed25519');
-  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const escrowPrivateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 
   __resetSigningResolverForTests();
   // Split the URLs so the amulet adapter's legacy /api/wallet-gateway/ traffic
@@ -331,8 +338,8 @@ test('executeInteractiveWithdraw routes signing through the Wallet Gateway when 
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
-      privateKey: privateKeyPem,
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
+      privateKey: escrowPrivateKeyPem,
     },
   });
 
@@ -355,7 +362,7 @@ test('executeInteractiveWithdraw routes signing through the Wallet Gateway when 
     if (url.endsWith('/api/wallet-gateway/prepare-action')) {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-1',
-        expectedPublicKey: 'escrow-public-key',
+        expectedPublicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('wallet-prepared-hash').toString('base64'),
         },
@@ -502,12 +509,12 @@ test('executeInteractiveWithdraw does not double-claim when the transfer adapter
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
       appToken: 'recipient-app-token',
-      publicKey: 'recipient-public-key',
+      publicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
       privateKey: recipientPrivateKeyPem,
     },
   });
@@ -562,7 +569,7 @@ test('executeInteractiveWithdraw does not double-claim when the transfer adapter
     if (url.endsWith('/api/wallet-gateway/prepare-action')) {
       return new Response(JSON.stringify({
         sessionId: 'receiver-accept-session-1',
-        expectedPublicKey: 'recipient-public-key',
+        expectedPublicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('recipient-accept-hash').toString('base64'),
         },
@@ -666,12 +673,12 @@ test('executeInteractiveWithdraw auto-accepts the recipient pending transfer bef
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
       appToken: 'recipient-app-token',
-      publicKey: 'recipient-public-key',
+      publicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
       privateKey: recipientPrivateKeyPem,
     },
   });
@@ -712,7 +719,7 @@ test('executeInteractiveWithdraw auto-accepts the recipient pending transfer bef
       pendingTransferListed = true;
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-transfer',
-        expectedPublicKey: 'escrow-public-key',
+        expectedPublicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('wallet-prepared-hash').toString('base64'),
         },
@@ -722,7 +729,7 @@ test('executeInteractiveWithdraw auto-accepts the recipient pending transfer bef
     if (url.endsWith('/api/wallet-gateway/prepare-action') && body?.action === 'transfer_accept') {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-accept',
-        expectedPublicKey: 'recipient-public-key',
+        expectedPublicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('recipient-prepared-hash').toString('base64'),
         },
@@ -818,7 +825,7 @@ test('executeInteractiveWithdraw can claim recipient payouts via host-wallet cla
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
@@ -864,7 +871,7 @@ test('executeInteractiveWithdraw can claim recipient payouts via host-wallet cla
       pendingTransferListed = true;
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-transfer',
-        expectedPublicKey: 'escrow-public-key',
+        expectedPublicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('wallet-prepared-hash').toString('base64'),
         },
@@ -967,12 +974,12 @@ test('executeInteractiveWithdraw falls back to transfer_accept when host-wallet 
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
       appToken: 'recipient-app-token',
-      publicKey: 'recipient-public-key',
+      publicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
       privateKey: recipientPrivateKeyPem,
     },
   });
@@ -1013,7 +1020,7 @@ test('executeInteractiveWithdraw falls back to transfer_accept when host-wallet 
       pendingTransferListed = true;
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-transfer',
-        expectedPublicKey: 'escrow-public-key',
+        expectedPublicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('wallet-prepared-hash').toString('base64'),
         },
@@ -1029,7 +1036,7 @@ test('executeInteractiveWithdraw falls back to transfer_accept when host-wallet 
     if (url.endsWith('/api/wallet-gateway/prepare-action') && body?.action === 'transfer_accept') {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-accept',
-        expectedPublicKey: 'recipient-public-key',
+        expectedPublicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('recipient-prepared-hash').toString('base64'),
         },
@@ -1111,12 +1118,12 @@ test('executeInteractiveWithdraw reuses an existing recipient pending transfer b
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
       appToken: 'recipient-app-token',
-      publicKey: 'recipient-public-key',
+      publicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
       privateKey: recipientPrivateKeyPem,
     },
   });
@@ -1152,7 +1159,7 @@ test('executeInteractiveWithdraw reuses an existing recipient pending transfer b
     if (url.endsWith('/api/wallet-gateway/prepare-action') && body?.action === 'transfer_accept') {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-accept',
-        expectedPublicKey: 'recipient-public-key',
+        expectedPublicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('recipient-prepared-hash').toString('base64'),
         },
@@ -1248,12 +1255,12 @@ test('executeInteractiveWithdraw reuses a smaller existing pending transfer befo
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
       appToken: 'recipient-app-token',
-      publicKey: 'recipient-public-key',
+      publicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
       privateKey: recipientPrivateKeyPem,
     },
   });
@@ -1289,7 +1296,7 @@ test('executeInteractiveWithdraw reuses a smaller existing pending transfer befo
     if (url.endsWith('/api/wallet-gateway/prepare-action') && body?.action === 'transfer_accept') {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-accept',
-        expectedPublicKey: 'recipient-public-key',
+        expectedPublicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('recipient-prepared-hash').toString('base64'),
         },
@@ -1383,12 +1390,12 @@ test('executeInteractiveWithdraw reuses the strongest recoverable pending transf
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
       privateKey: escrowPrivateKeyPem,
     },
     'Recipient::1': {
       appToken: 'recipient-app-token',
-      publicKey: 'recipient-public-key',
+      publicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
       privateKey: recipientPrivateKeyPem,
     },
   });
@@ -1432,7 +1439,7 @@ test('executeInteractiveWithdraw reuses the strongest recoverable pending transf
     if (url.endsWith('/api/wallet-gateway/prepare-action') && body?.action === 'transfer_accept') {
       return new Response(JSON.stringify({
         sessionId: 'wallet-session-accept',
-        expectedPublicKey: 'recipient-public-key',
+        expectedPublicKey: rawPublicKeyBase64(recipientPrivateKeyPem),
         prepared: {
           preparedTransactionHash: Buffer.from('recipient-prepared-hash').toString('base64'),
         },
@@ -1507,15 +1514,15 @@ test('executeInteractiveWithdraw does not call wallet-gateway when ledger prepar
   const originalCredentials = process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON;
 
   const { privateKey } = generateKeyPairSync('ed25519');
-  const privateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const escrowPrivateKeyPem = privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
   const calls = [];
 
   process.env.CANTON_STREAMS_WALLET_GATEWAY_URL = 'https://wallet.example';
   process.env.CANTON_STREAMS_WALLET_GATEWAY_CREDENTIALS_JSON = JSON.stringify({
     'Escrow::1': {
       appToken: 'escrow-app-token',
-      publicKey: 'escrow-public-key',
-      privateKey: privateKeyPem,
+      publicKey: rawPublicKeyBase64(escrowPrivateKeyPem),
+      privateKey: escrowPrivateKeyPem,
     },
   });
 

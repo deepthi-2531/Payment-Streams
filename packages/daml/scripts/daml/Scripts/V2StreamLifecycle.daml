@@ -22,7 +22,7 @@
 --
 --   daml build
 --   daml script --no-legacy-assistant-warning \
---     --dar .daml/dist/canton-streams-scripts-0.2.7.dar \
+--     --dar .daml/dist/canton-streams-scripts-1.0.0.dar \
 --     --script-name Scripts.V2StreamLifecycle:runV2Stream \
 --     --ledger-host localhost --ledger-port 5001
 --

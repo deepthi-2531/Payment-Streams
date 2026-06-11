@@ -21,20 +21,26 @@ supports the CIP-0047 marker path.
 
 ## Opting in
 
-Per-stream config flag at create time, after confirming the active
-reward/marker regime for the target network:
+Opt in per stream, after confirming the active reward/marker regime
+for the target network:
 
 ```ts
-const params = buildIncentiveStream({
-  // ... other fields ...
-  meta: {
-    emitFeaturedAppMarker: true,
-    featuredAppKey: 'your-cip-0047-key', // from your program registration
-  },
-});
+import { enabledFeaturedApp, buildEmission } from '@canton-streams/sdk';
+import { buildIncentiveStream } from '@canton-streams/sdk/helpers';
+
+const params = buildIncentiveStream({ /* ... campaign fields ... */ });
+
+// Opt in with the key from your CIP-0047 program registration
+const featuredApp = enabledFeaturedApp('your-cip-0047-key');
+
+// On each lifecycle event, build the marker emission record.
+// Returns undefined when emission is disabled.
+const emission = buildEmission(
+  featuredApp, 'create', params.totalDeposited, params.streamId, operatorParty,
+);
 ```
 
-The flag is opt-in. Default behaviour emits no markers. The SDK does
+The config is opt-in. Default behaviour emits no markers. The SDK does
 not provide a default reward projection; callers must supply current
 network economics explicitly if they choose to show projections.
 

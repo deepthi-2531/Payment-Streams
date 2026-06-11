@@ -80,3 +80,7 @@ export {
   RenewParamsSchema,
   StreamFilterSchema,
 } from './utils/validation.js';
+
+// Per-asset registry — browser-safe (pure data + lookups)
+export { AssetRegistry, loadAssetRegistry } from './assets/registry.js';
+export type { AssetConfig, AssetRegistryFile } from './assets/registry.js';

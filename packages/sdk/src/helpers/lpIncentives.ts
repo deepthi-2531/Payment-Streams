@@ -16,12 +16,21 @@
 
 import Decimal from 'decimal.js';
 
-import { SettlementMode, AssetType } from '../types/stream.js';
+import { SettlementMode, AssetType, VestingMode } from '../types/stream.js';
 import type {
   CreateStreamParams,
   InstrumentRef,
+  LedgerRecord,
   VestingModeConfig,
 } from '../types/stream.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MICROS = 86_400_000_000; // one day as Daml RelTime microseconds
+
+/** Default V2 account record for a bare party. */
+function partyAccount(owner: string): LedgerRecord {
+  return { owner, id: '' };
+}
 
 export interface IncentiveStreamOptions {
   /** Caller-supplied unique id for this LP stream. */
@@ -40,6 +49,12 @@ export interface IncentiveStreamOptions {
   readonly instrumentRef: InstrumentRef;
   /** Escrow operator party. */
   readonly escrowOperator: string;
+  /** Sender-side funding reference from the wallet's V2 allocation step. */
+  readonly fundingReference: string;
+  /** Sender custody account. Defaults to `{ owner: sender, id: '' }`. */
+  readonly senderAccount?: LedgerRecord;
+  /** Recipient account for withdrawals. Defaults to `{ owner: recipient, id: '' }`. */
+  readonly recipientAccount?: LedgerRecord;
   /**
    * If true, the campaign auto-renews into a new term after expiry
    * (sender can extend by exercising Renew). Defaults to false.
@@ -61,15 +76,23 @@ export interface IncentiveStreamOptions {
  */
 export function buildIncentiveStream(opts: IncentiveStreamOptions): CreateStreamParams {
   const durationDays = opts.durationDays ?? 30;
-  const endTime = new Date(opts.startTime.getTime() + durationDays * 24 * 60 * 60 * 1000);
   const total = new Decimal(opts.rewardAmount);
 
+  if (!total.isFinite() || total.lte(0)) {
+    throw new Error('Incentive rewardAmount must be > 0');
+  }
+  if (durationDays <= 0) {
+    throw new Error('Campaign durationDays must be > 0 (endTime must be after startTime)');
+  }
+
+  const endTime = new Date(opts.startTime.getTime() + durationDays * DAY_MS);
+
   const vestingMode: VestingModeConfig = opts.renewable
-    ? ({
-        kind: 'RenewableTerm',
-        termDuration: { days: durationDays },
-      } as unknown as VestingModeConfig)
-    : ({ kind: 'Linear' } as unknown as VestingModeConfig);
+    ? {
+        mode: VestingMode.RenewableTerm,
+        termDuration: Math.floor(durationDays * DAY_MICROS),
+      }
+    : { mode: VestingMode.Linear };
 
   return {
     streamId: opts.streamId,
@@ -84,5 +107,8 @@ export function buildIncentiveStream(opts: IncentiveStreamOptions): CreateStream
     settlementMode: SettlementMode.TokenStandardCustody,
     assetType: AssetType.GlobalCip56,
     escrowOperator: opts.escrowOperator,
+    fundingReference: opts.fundingReference,
+    senderAccount: opts.senderAccount ?? partyAccount(opts.sender),
+    recipientAccount: opts.recipientAccount ?? partyAccount(opts.recipient),
   };
 }

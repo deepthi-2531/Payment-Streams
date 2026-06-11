@@ -1,6 +1,6 @@
 {
-  "version": "0.3.0",
-  "note": "Seed file consumed by scripts/build-asset-registry.mjs. Pins per-asset display names, V2 capability flags, and per-asset overrides (admin party, Scan URL, wallet-gateway URL). Add assets once they advertise Token Standard V2 support in supportedApis. When SV status / asset-admin metadata is not fully programmatically accessible, populate TBD fields manually after reviewing the public SV network status listing (https://canton.foundation/sv-network-status-2/).",
+  "version": "0.5.0",
+  "note": "Seed file consumed by scripts/build-asset-registry.mjs. Pins per-asset display names, capability flags (V2 preferred; allocationsV1 for the transitional V1 lane), and per-asset overrides (admin party, Scan URL, wallet-gateway URL, token-standard API URL). When SV status / asset-admin metadata is not fully programmatically accessible, populate TBD fields manually after reviewing the public SV network status listing (https://canton.foundation/sv-network-status-2/).",
   "assets": {
     "v2-test-asset": {
       "displayName": "V2 Test Asset (DevNet only)",
@@ -15,6 +15,58 @@
       "meta": {
         "standard": "CIP-56 V2",
         "note": "Test asset for V2-DevNet probes. Not for Mainnet."
+      }
+    },
+    "cc": {
+      "displayName": "Canton Coin (Amulet)",
+      "instrumentIdV2": {
+        "admin": "DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a",
+        "id": "Amulet"
+      },
+      "adminParty": "DSO::1220be58c29e65de40bf273be1dc2b266d43a9a002ea5b18955aeef7aac881bb471a",
+      "scanEndpointUrl": "https://scan.sv-1.test.global.canton.network.sync.global",
+      "walletGatewayUrl": "TBD-operator-wallet-gateway",
+      "tokenStandardApiUrl": "https://scan.sv-1.test.global.canton.network.sync.global",
+      "allocationsV2": false,
+      "allocationsV1": true,
+      "transferEventsV2": false,
+      "meta": {
+        "standard": "CIP-56 V1 (transitional)",
+        "source": "Amulet instrument id and DSO admin per Digital Asset / Splice docs (docs.digitalasset.com, docs.sync.global).",
+        "note": "Live on MainNet on the V1 token standard. Per CIP-0112 §5 Amulet is expected to publish V2 interfaces; when supportedApis advertises V2, flip allocationsV2/transferEventsV2 — no code change.",
+        "adminResolution": "The DSO party is network-specific and the published value is a documented reference. Confirm for your target network: GET {scanEndpointUrl}/api/scan/v0/dso-party-id.",
+        "tokenStandardApiNote": "Amulet's registry API is served by Scan at the bare host; choice-context endpoints live under /registry/allocations/v1/..., not under /api/scan.",
+        "mainnet": {
+          "scanEndpointUrl": "https://scan.sv-1.global.canton.network.sync.global"
+        },
+        "walletGatewayResolution": "Deployment-specific — point walletGatewayUrl at your operator's wallet gateway."
+      }
+    },
+    "usdcx": {
+      "displayName": "USDCx",
+      "instrumentIdV2": {
+        "admin": "decentralized-usdc-interchain-rep::122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61",
+        "id": "USDCx"
+      },
+      "adminParty": "decentralized-usdc-interchain-rep::122049e2af8a725bd19759320fc83c638e7718973eac189d8f201309c512d1ffec61",
+      "scanEndpointUrl": "https://scan.sv-1.test.global.canton.network.sync.global",
+      "walletGatewayUrl": "TBD-operator-wallet-gateway",
+      "tokenStandardApiUrl": "https://api.utilities.digitalasset-staging.com",
+      "allocationsV2": false,
+      "allocationsV1": true,
+      "transferEventsV2": false,
+      "meta": {
+        "standard": "CIP-56 V1 (transitional; Circle xReserve Registry Utility token)",
+        "source": "USDCx instrument id, per-network registrar admin, and registry base URL per Circle xReserve / Digital Asset docs (docs.digitalasset.com/usdc/xreserve, docs.digitalasset.com/integrate/devnet/usdcx-support).",
+        "note": "USDCx is Circle's USDC on Canton via xReserve. V1 token standard today; flip V2 flags when it advertises V2.",
+        "fieldsAreFor": "TestNet — the admin and tokenStandardApiUrl above are the TestNet values.",
+        "mainnet": {
+          "admin": "decentralized-usdc-interchain-rep::12208115f1e168dd7e792320be9c4ca720c751a02a3053c7606e1c1cd3dad9bf60ef",
+          "tokenStandardApiUrl": "https://api.utilities.digitalasset.com",
+          "scanEndpointUrl": "https://scan.sv-1.global.canton.network.sync.global"
+        },
+        "registryEndpoint": "Burn/mint factory at /api/utilities/v0/registry/burn-mint-instruction/v0/burn-mint-factory on tokenStandardApiUrl.",
+        "walletGatewayResolution": "Deployment-specific — point walletGatewayUrl at your operator's wallet gateway."
       }
     }
   }

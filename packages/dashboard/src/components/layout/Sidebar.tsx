@@ -28,6 +28,7 @@ const NAV: ReadonlyArray<NavEntry> = [
   { route: '/', label: 'Dashboard', icon: 'Dashboard' },
   { route: '/streams', label: 'Streams', icon: 'Stream' },
   { route: '/create', label: 'Create', icon: 'Plus' },
+  { route: '/flows', label: 'Flows', icon: 'Refresh' },
   { route: '/batch', label: 'Batch', icon: 'Layers' },
   { route: '/inbox', label: 'Inbox', icon: 'Inbox', badgeKey: 'inbox' },
   { divider: true },
@@ -80,7 +81,7 @@ export function Sidebar() {
               className="mono"
               style={{ fontSize: 9.5, color: 'var(--fg-4)', letterSpacing: '0.05em' }}
             >
-              v0.2.7
+              v1.0.0-rc.1
             </span>
           </div>
         </div>

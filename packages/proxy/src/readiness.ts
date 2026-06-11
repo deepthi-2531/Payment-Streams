@@ -595,10 +595,20 @@ async function requestJson<T>(
     headers.set('Authorization', `Bearer ${token}`);
   }
 
-  const response = await fetch(url, {
-    ...init,
-    headers,
-  });
+  // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers,
+      redirect: 'error',
+      signal: ac.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   const payload = parseJsonSafely(text);

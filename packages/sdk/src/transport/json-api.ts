@@ -15,7 +15,8 @@
  * @license Apache-2.0
  */
 
-import type { Transport, CreateResult, TemplateId } from './base.js';
+import type { Transport, CreateResult, TemplateId, CommandOptions, DisclosedContract } from './base.js';
+import { parseTemplateId } from './base.js';
 
 /**
  * Configuration for the JSON API transport.
@@ -27,11 +28,35 @@ export interface JsonApiConfig {
   /** JWT bearer token for authentication. */
   readonly token?: string;
 
+  /** Per-request timeout in ms (default 30000). Guards against a
+   * hung upstream wedging the caller. */
+  readonly requestTimeoutMs?: number;
+
   /** Parties to act as when submitting commands. */
   readonly actAs: string[];
 
   /** Additional parties whose contracts may be read. */
   readonly readAs?: string[];
+}
+
+/**
+ * Build a comma-joined party header value, rejecting any party id
+ * that contains a comma, CR, or LF. Without this a crafted party string
+ * like `Victim,Other` would widen the acting set, and a CR/LF would
+ * inject additional HTTP headers. Party ids are
+ * `<name>::<fingerprint>` and never legitimately contain these bytes.
+ */
+function assertSafePartyHeader(parties: readonly string[]): string {
+  for (const p of parties) {
+    if (/[,\r\n]/.test(p)) {
+      throw new Error(
+        `Refusing to build an act-as/read-as header: party id contains a ` +
+          `comma or CR/LF and could widen the acting set or inject headers: ` +
+          `${JSON.stringify(p)}`,
+      );
+    }
+  }
+  return parties.join(',');
 }
 
 /**
@@ -42,6 +67,27 @@ export interface JsonApiConfig {
  */
 function formatTemplateId(t: TemplateId): string {
   return `${t.packageId}:${t.moduleName}:${t.entityName}`;
+}
+
+/**
+ * Encode disclosed contracts for the JSON API command `meta`. The
+ * created-event blob stays base64 on this wire.
+ */
+function formatDisclosedContracts(
+  disclosed: ReadonlyArray<DisclosedContract> | undefined,
+): Array<Record<string, unknown>> | undefined {
+  if (!disclosed || disclosed.length === 0) return undefined;
+  return disclosed.map((dc) => {
+    const entry: Record<string, unknown> = {
+      templateId: formatTemplateId(parseTemplateId(dc.templateId)),
+      contractId: dc.contractId,
+      createdEventBlob: dc.createdEventBlob,
+    };
+    if (dc.synchronizerId !== undefined) {
+      entry['synchronizerId'] = dc.synchronizerId;
+    }
+    return entry;
+  });
 }
 
 /**
@@ -63,11 +109,13 @@ export class JsonApiTransport implements Transport {
   private readonly token?: string;
   private readonly defaultActAs: string[];
   private readonly defaultReadAs: string[];
+  private readonly requestTimeoutMs: number;
 
   constructor(config: JsonApiConfig) {
     // Strip trailing slash from base URL
     this.baseUrl = config.baseUrl.replace(/\/$/, '');
     this.token = config.token;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? 30_000;
     this.defaultActAs = config.actAs;
     this.defaultReadAs = config.readAs ?? [];
   }
@@ -80,13 +128,16 @@ export class JsonApiTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<CreateResult<T>> {
+    const disclosed = formatDisclosedContracts(opts?.disclosedContracts);
     const body = {
       templateId: formatTemplateId(templateId),
       payload: argument,
       meta: {
         actAs: actAs.length > 0 ? actAs : this.defaultActAs,
         readAs: readAs ?? this.defaultReadAs,
+        ...(disclosed ? { disclosedContracts: disclosed } : {}),
       },
     };
 
@@ -111,7 +162,9 @@ export class JsonApiTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T> {
+    const disclosed = formatDisclosedContracts(opts?.disclosedContracts);
     const body = {
       templateId: formatTemplateId(templateId),
       contractId,
@@ -120,6 +173,7 @@ export class JsonApiTransport implements Transport {
       meta: {
         actAs: actAs.length > 0 ? actAs : this.defaultActAs,
         readAs: readAs ?? this.defaultReadAs,
+        ...(disclosed ? { disclosedContracts: disclosed } : {}),
       },
     };
 
@@ -141,7 +195,9 @@ export class JsonApiTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T> {
+    const disclosed = formatDisclosedContracts(opts?.disclosedContracts);
     const body = {
       templateId: formatTemplateId(templateId),
       key,
@@ -150,6 +206,7 @@ export class JsonApiTransport implements Transport {
       meta: {
         actAs: actAs.length > 0 ? actAs : this.defaultActAs,
         readAs: readAs ?? this.defaultReadAs,
+        ...(disclosed ? { disclosedContracts: disclosed } : {}),
       },
     };
 
@@ -184,10 +241,10 @@ export class JsonApiTransport implements Transport {
     const parties = actAs.length > 0 ? actAs : this.defaultActAs;
     const readers = readAs ?? this.defaultReadAs;
     if (parties.length > 0) {
-      headers['X-Da-Act-As'] = parties.join(',');
+      headers['X-Da-Act-As'] = assertSafePartyHeader(parties);
     }
     if (readers.length > 0) {
-      headers['X-Da-Read-As'] = readers.join(',');
+      headers['X-Da-Read-As'] = assertSafePartyHeader(readers);
     }
 
     const response = await this.post<{
@@ -230,11 +287,28 @@ export class JsonApiTransport implements Transport {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    // Two guards on the authenticated outbound call:
+    //  - `redirect: 'error'`: never follow a 3xx. The default `follow`
+    //    re-sends the Authorization header to the redirect target, so a
+    //    malicious/compromised endpoint returning a 302 to an
+    //    attacker host would exfiltrate the bearer token.
+    //  - an AbortController timeout so a hung upstream can't wedge the
+    //    caller indefinitely (DoS).
+    const ac = new AbortController();
+    const timeoutMs = this.requestTimeoutMs;
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!response.ok) {
       let errorDetail: string;

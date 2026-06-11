@@ -1,6 +1,6 @@
 {
   "name": "canton-streams",
-  "version": "0.2.7",
+  "version": "1.0.0-rc.1",
   "private": true,
   "description": "Continuous payment streaming for Canton — Daml templates, TypeScript SDK, CLI, and dashboard",
   "license": "Apache-2.0",

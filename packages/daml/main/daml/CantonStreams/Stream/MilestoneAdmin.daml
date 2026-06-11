@@ -71,6 +71,13 @@ data Milestone = Milestone with
   deriving (Eq, Show)
 
 -- | A V2-only milestone-stream admin/observability contract.
+--
+-- Trust boundary: the confirm/cancel choices are operator-controlled
+-- bookkeeping, so a faulty or malicious operator can desync this record
+-- from real settlement. The underlying V2 `Allocation` (see
+-- `allocationCid`) is the authoritative settlement state — consumers
+-- must reconcile against it and treat this contract as a non-binding
+-- index over it.
 template MilestoneAdmin
   with
     streamId : StreamId
@@ -103,6 +110,8 @@ template MilestoneAdmin
       -- Milestones list must be non-empty + sum equals totalDeposited
       && length milestones > 0
       && sum (map (.amount) milestones) == totalDeposited
+      -- Each leg amount strictly positive (sum alone allowed +X/-X pairs).
+      && all (\m -> m.amount > 0.0) milestones
 
     -- | Bind the multi-leg V2 `Allocation` cid after the sender
     -- creates it. Idempotent if already bound to the same cid.

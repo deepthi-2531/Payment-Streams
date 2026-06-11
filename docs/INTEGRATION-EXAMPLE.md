@@ -1,6 +1,14 @@
 # Integration Example
 
-End-to-end host-app integration of Canton Payment Streams, V2-only via the CIP-103 wallet flow and CIP-56 V2 token standard. This walks through a complete vesting-stream rollout for a hypothetical host app.
+End-to-end host-app integration of Canton Payment Streams through the CIP-103
+wallet flow and the CIP-56 token standard. V2 is the preferred allocation lane;
+registered V1 assets can use the transitional V1 lane until they advertise V2.
+This walks through a complete vesting-stream rollout for a hypothetical host app.
+
+Canton Payment Streams ships **two funding models**:
+
+- **Prefunded** (`StreamAdmin` / `StreamEscrow`) — bounded term, the total is committed up front. This example uses the prefunded path.
+- **Non-prefunded** (`StreamFlow`) — open-ended, the sender keeps a funded balance via rolling top-ups and withdrawals are bounded by that balance. See the [Subscriptions variation](#subscriptions-instead-of-fixed-term) below, and the dedicated reference [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
 
 ## Scenario
 
@@ -8,7 +16,7 @@ End-to-end host-app integration of Canton Payment Streams, V2-only via the CIP-1
 
 - Sender: `AcmeCo` treasury party
 - Recipient: each employee party
-- Asset: `USDCx` (or any other CIP-56 V2 asset)
+- Asset: `USDCx` (or any registered CIP-56 asset; V2 preferred, V1 transitional)
 - Schedule: `Linear` vesting from the 1st of the month to the 1st of the next month
 
 ## Step 1 — Register the asset
@@ -17,24 +25,30 @@ Add an entry to `config/asset-registry.json`:
 
 ```json
 {
-  "assets": [
-    {
-      "id": "USDCx",
-      "admin": "USDCxAdmin::1220...",
-      "scanEndpoint": "https://scan.example.com",
+  "assets": {
+    "usdcx": {
+      "key": "usdcx",
+      "displayName": "USDCx",
+      "instrumentIdV2": {
+        "admin": "USDCxAdmin::1220...",
+        "id": "USDCx"
+      },
+      "adminParty": "USDCxAdmin::1220...",
+      "scanEndpointUrl": "https://scan.example.com",
       "walletGatewayUrl": "https://wallet.example.com/api/v0/dapp",
-      "capabilities": {
-        "transfersV1": true,
-        "transfersV2": true,
-        "allocationsV2": true,
-        "transferEventsV2": true
-      }
+      "tokenStandardApiUrl": "https://token-standard.example.com",
+      "allocationsV2": true,
+      "allocationsV1": false,
+      "transferEventsV2": true
     }
-  ]
+  }
 }
 ```
 
-The SDK reads this on startup. When AcmeCo's frontend calls `buildAllocationRequest({ asset: { instrumentId: 'USDCx', admin: 'USDCxAdmin::...' } })`, the library uses the V2 adapter automatically.
+The SDK reads this on startup. When AcmeCo's frontend builds a stream
+against a registered asset (e.g. `registry.requireAsset('usdcx')`), the
+library uses the V2 adapter when available and the transitional V1 adapter
+only when the asset entry explicitly advertises `allocationsV1`.
 
 ## Step 2 — Provision identities
 
@@ -55,7 +69,7 @@ This gives the proxy a least-privilege service principal: it can read any party'
 ```bash
 # Upload
 daml ledger upload-dar --host acme-validator --port 5001 \
-  packages/daml/main/.daml/dist/canton-streams-0.2.8.dar
+  packages/daml/main/.daml/dist/canton-streams-1.0.0.dar
 
 # Vet on the synchronizer (see docs/DEPLOYMENT.md for the console snippet)
 
@@ -124,59 +138,58 @@ The user picks their wallet (Splice Wallet Kernel, browser extension, etc.) and 
 ### Create a stream
 
 ```typescript
-import { buildAllocationRequest, VestingMode, SettlementMode } from '@canton-streams/sdk';
+import { CantonStreamsClient, VestingMode, SettlementMode } from '@canton-streams/sdk';
 import Decimal from 'decimal.js';
 
+// `client` is a CantonStreamsClient configured with the treasury's
+// wallet-issued credentials (Path A) or a service-party signer (Path B).
 async function createSalaryStream(employeeParty: string, monthlySalary: Decimal) {
   const startTime = startOfMonth(new Date());
   const endTime = startOfMonth(addMonths(new Date(), 1));
 
-  const request = buildAllocationRequest({
+  const { streamId } = await client.createStream({
+    streamId: `salary-${employeeParty}-${startTime.getFullYear()}-${startTime.getMonth() + 1}`,
     sender: treasuryParty,
     recipient: employeeParty,
-    asset: { instrumentId: 'USDCx', admin: 'USDCxAdmin::1220...' },
-    totalAmount: monthlySalary,
-    vestingMode: { mode: VestingMode.Linear },
+    totalDeposited: monthlySalary,
     startTime,
     endTime,
+    vestingMode: { mode: VestingMode.Linear },
     settlementMode: SettlementMode.TokenStandardCustody,
+    instrumentRef: usdcxRef,            // from registry.requireAsset('USDCx')
+    fundingReference: walletFundingRef, // from the wallet's V2 allocation step
+    escrowOperator: 'AcmeStreamsEscrow::1220...',
     cancellable: false,
   });
 
-  const { txId } = await dappSDK.prepareExecuteAndWait({
-    commands: request.commands,
-    actAs: [treasuryParty],
-  });
-
-  return txId;
+  return streamId;
 }
 ```
 
-The treasury party signs through their wallet. The `AllocationRequest` lands on-ledger and is visible to the employee party.
+The treasury party signs through their wallet. The create emits the
+underlying CIP-0112 `AllocationRequest`, which lands on-ledger and is
+visible to the employee party.
 
 ### Bulk-create for the whole company
 
 ```typescript
-import { batchCreate } from '@canton-streams/sdk';
-
 const employees = await acmeHR.getEmployeesWithSalaries();
 
-const batchRequest = batchCreate(
-  employees.map((emp) => ({
+const { streamIds } = await client.createBatch({
+  streams: employees.map((emp) => ({
+    streamId: `salary-${emp.party}`,
     sender: treasuryParty,
     recipient: emp.party,
-    asset: { instrumentId: 'USDCx', admin: 'USDCxAdmin::1220...' },
-    totalAmount: emp.monthlySalary,
-    vestingMode: { mode: VestingMode.Linear },
+    totalDeposited: emp.monthlySalary,
     startTime,
     endTime,
+    vestingMode: { mode: VestingMode.Linear },
     settlementMode: SettlementMode.TokenStandardCustody,
+    instrumentRef: usdcxRef,
+    fundingReference: emp.walletFundingRef,
+    escrowOperator: 'AcmeStreamsEscrow::1220...',
+    cancellable: false,
   })),
-);
-
-const { txId } = await dappSDK.prepareExecuteAndWait({
-  commands: batchRequest.commands,
-  actAs: [treasuryParty],
 });
 ```
 
@@ -187,14 +200,12 @@ One signature, N streams.
 In the employee's dashboard:
 
 ```typescript
-const incoming = await fetch('/api/pending?direction=incoming').then(r => r.json());
+// The employee's client recipient accepts each pending request with
+// client.acceptStream(sender, streamId) (see packages/sdk/src/client.ts).
+const incoming = await client.listPendingStreamRequests();
 
 for (const req of incoming) {
-  const acceptRequest = buildAcceptAllocationRequest({ requestContractId: req.contractId });
-  await dappSDK.prepareExecuteAndWait({
-    commands: acceptRequest.commands,
-    actAs: [req.recipient],
-  });
+  await client.acceptStream(req.config.sender, req.config.streamId);
 }
 ```
 
@@ -234,58 +245,54 @@ Output includes distinct streams, cumulative notional, days continuous, and per-
 
 ### Subscriptions instead of fixed-term
 
-For SaaS-style monthly billing where the bill amount changes month-to-month, use `StreamFlow` instead of `StreamAdmin`:
+For SaaS-style monthly billing where the bill amount changes month-to-month, use the non-prefunded `StreamFlow` path — `client.createFlow(params)` / `buildFlowCreate` (`CreateFlowParams`; see `packages/sdk/src/commands/flow.ts`) — instead of `createStream`:
 
 ```typescript
-const request = buildAllocationRequest({
-  // ...
-  streamType: 'flow',          // → StreamFlow + StreamFlowAdmin templates
-  fundingPerPeriod: monthlyBill,
-  periodDuration: { days: 30 },
+const { streamId } = await client.createFlow({
+  sender: bobParty,
+  recipient: acmeParty,
+  escrowOperator: 'AcmeStreamsEscrow::1220...',
+  instrumentRef: usdcxRef,
+  flowRate: monthlyBill.div(30 * 86_400_000_000), // tokens per microsecond
+  fundedAmount: monthlyBill,                       // first period's funding
 });
 ```
 
-The sender keeps the funded balance topped up via `TopUp` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit).
+The sender keeps the funded balance topped up via `client.topUpFlow` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit). For the full `StreamFlow` lifecycle — choices, SDK builders, `/api/flows` routes, dashboard actions, and the probe — see [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
+
+> Note: `StreamFlow` is currently an operator/co-hosted reference — the SDK and proxy paths are solid (the proxy submits with sender + recipient + escrowOperator in `actAs`), but a fully hosted-wallet StreamFlow UX is future work. See the maturity note in [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
 
 ### Milestone-gated releases
 
-For an `AcmeSponsor` milestone program disbursed as KPIs hit:
+Milestone streams are **admin-driven** — there is no SDK milestone-create method. The operator creates a `MilestoneAdmin` contract (`packages/daml/main/daml/CantonStreams/Stream/MilestoneAdmin.daml`) recording the milestone list, and the sender then approves a single multi-leg `AllocationFactory_Allocate` (one `TransferLegSide` per milestone, `committed=True`):
 
-```typescript
-const request = buildAllocationRequest({
-  // ...
-  streamType: 'milestone',     // → MilestoneAdmin template
-  milestones: [
-    { id: 'mvp-shipped', amount: new Decimal('25000'),  confirmer: sponsorAdmin },
-    { id: '1k-users',    amount: new Decimal('50000'),  confirmer: sponsorAdmin },
-    { id: '10k-users',   amount: new Decimal('100000'), confirmer: sponsorAdmin },
-  ],
-});
+```
+-- Operator-created admin/observability contract for an AcmeSponsor program:
+create MilestoneAdmin with
+  streamId, sender = sponsorTreasury, recipient = projectRecipient,
+  operator = sponsorAdmin, instrumentRef = usdcxRef,
+  milestones =
+    [ Milestone with name = "mvp-shipped"; amount = 25000.0;  ...
+    , Milestone with name = "1k-users";    amount = 50000.0;  ...
+    , Milestone with name = "10k-users";   amount = 100000.0; ... ]
+  totalDeposited = 175000.0; ...
 ```
 
-Each leg of the multi-leg `AllocationSpec` is gated on a `ConfirmMilestone` choice from the named confirmer.
+Each leg of the multi-leg V2 `Allocation` is settled with the standard V2 `Allocation_Settle` when the operator confirms the milestone (recorded via `Confirm_Milestone`). The admin record is operator-controlled bookkeeping over the authoritative allocation — reconcile against the allocation, not the admin contract.
 
 ### Trust-minimized executor
 
-For trust-minimized recurring withdrawals — the employee doesn't want to click withdraw daily but doesn't want to give the company unlimited authority either:
+For trust-minimized recurring withdrawals — the employee doesn't want to click withdraw daily but doesn't want to give the company unlimited authority either — the employee creates an on-ledger `DelegatedPolicy` (`CantonStreams.Policy.DelegatedPolicy`) bounding the executor's authority (allowed actions, rate limit, max amount per execution, expiry). The proxy's executor honors those on-ledger bounds.
+
+The SDK manages policies read-side and supports revocation through the client (`packages/sdk/src/commands/policy.ts`):
 
 ```typescript
-const policy = buildDelegatedPolicy({
-  delegator: employeeParty,
-  executor: acmeStreamsService,
-  allowedActions: ['withdraw'],
-  rateLimit: { maxExecutionsPerPeriod: 24, periodDuration: { hours: 24 } },
-  maxAmountPerExecution: new Decimal('500'),
-  expiresAt: endOfFiscalYear,
-});
-
-await dappSDK.prepareExecuteAndWait({
-  commands: policy.commands,
-  actAs: [employeeParty],
-});
+const policies = await client.listPolicies();              // active delegations
+const logs = await client.listExecutionLogs(policyId);     // per-policy execution audit
+await client.revokePolicy(policyContractId);               // sender revokes at any time
 ```
 
-The proxy's executor honors the on-ledger policy bounds. The employee can revoke at any time.
+The employee can revoke at any time; the policy also expires on its own deadline.
 
 ## Validation checklist before going to production
 

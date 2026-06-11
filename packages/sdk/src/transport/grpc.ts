@@ -16,7 +16,8 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Logger } from 'pino';
-import type { Transport, CreateResult, TemplateId } from './base.js';
+import type { Transport, CreateResult, TemplateId, CommandOptions, DisclosedContract } from './base.js';
+import { parseTemplateId } from './base.js';
 import type { ClientConfig } from '../types/config.js';
 import { LedgerError, TransportError } from '../utils/errors.js';
 import { createLogger } from '../utils/logger.js';
@@ -149,6 +150,28 @@ function toProtoTemplateId(t: TemplateId): Record<string, string> {
   };
 }
 
+/**
+ * Encode explicitly disclosed contracts into the Ledger API v2
+ * `Commands.disclosed_contracts` shape. The created-event blob arrives
+ * base64-encoded from registry APIs and goes on the wire as bytes.
+ */
+function toProtoDisclosedContracts(
+  disclosed: ReadonlyArray<DisclosedContract> | undefined,
+): Array<Record<string, unknown>> | undefined {
+  if (!disclosed || disclosed.length === 0) return undefined;
+  return disclosed.map((dc) => {
+    const entry: Record<string, unknown> = {
+      template_id: toProtoTemplateId(parseTemplateId(dc.templateId)),
+      contract_id: dc.contractId,
+      created_event_blob: Buffer.from(dc.createdEventBlob, 'base64'),
+    };
+    if (dc.synchronizerId !== undefined) {
+      entry['synchronizer_id'] = dc.synchronizerId;
+    }
+    return entry;
+  });
+}
+
 /** Map a gRPC status code to a structured LedgerError. */
 function mapGrpcError(err: grpc.ServiceError): LedgerError {
   const code = err.code ?? grpc.status.UNKNOWN;
@@ -196,6 +219,28 @@ function commandId(): string {
  * Supports plaintext, TLS, and mTLS channels with optional JWT bearer-token
  * authentication.
  */
+
+/**
+ * Convert a ledger offset string (an int64) to the JS number the
+ * proto field expects, WITHOUT silently losing precision. `parseInt`
+ * truncates above 2^53, which would resolve a money-bearing ACS/update
+ * read to the WRONG offset. We assert the value is within
+ * Number.MAX_SAFE_INTEGER and throw loudly otherwise — a real ledger
+ * won't reach 2^53 offsets for ~centuries, so this is safe in practice
+ * and fails visibly if that assumption ever breaks.
+ */
+function toSafeOffset(offset: string): number {
+  const big = BigInt(offset);
+  if (big > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(
+      `Ledger offset ${offset} exceeds Number.MAX_SAFE_INTEGER; refusing to ` +
+        `truncate it to a wrong offset. The transport needs a BigInt-aware ` +
+        `proto mapping for offsets this large.`,
+    );
+  }
+  return Number(big);
+}
+
 export class GrpcTransport implements Transport {
   private readonly commandService: CommandServiceClient;
   private readonly stateService: StateServiceClient;
@@ -238,6 +283,28 @@ export class GrpcTransport implements Transport {
         callCreds,
       );
     } else if (config.token) {
+      // Attaching a bearer JWT to a plaintext channel makes a
+      // long-lived ledger token sniffable and replayable by any on-path
+      // observer. Permit it only for loopback targets (local dev) or when
+      // the caller explicitly opts in via `allowInsecureToken`.
+      const host = config.host;
+      const isLoopback =
+        host === 'localhost' ||
+        host === '127.0.0.1' ||
+        host === '::1' ||
+        host.startsWith('127.');
+      if (!isLoopback && !config.allowInsecureToken) {
+        throw new Error(
+          `Refusing to send a bearer token over a plaintext gRPC channel to ` +
+            `non-loopback host "${host}". Enable TLS (useTls: true) — or, for ` +
+            `a trusted private network only, set allowInsecureToken: true to ` +
+            `acknowledge the risk.`,
+        );
+      }
+      this.log.warn(
+        `Attaching auth token to an INSECURE gRPC channel (host=${host}). ` +
+          `The token is transmitted in plaintext. Use TLS in production.`,
+      );
       // Insecure channel: use an interceptor to inject the auth metadata.
       const tokenValue = config.token;
       const authInterceptor = (options: any, nextCall: any) => {
@@ -302,6 +369,7 @@ export class GrpcTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<CreateResult<T>> {
     this.assertOpen();
 
@@ -321,6 +389,10 @@ export class GrpcTransport implements Transport {
     };
     if (this.config.synchronizerId) {
       commands.synchronizer_id = this.config.synchronizerId;
+    }
+    const disclosedCreate = toProtoDisclosedContracts(opts?.disclosedContracts);
+    if (disclosedCreate) {
+      commands.disclosed_contracts = disclosedCreate;
     }
 
     this.log.debug({ templateId, actAs }, 'Submitting create command');
@@ -344,6 +416,7 @@ export class GrpcTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T> {
     this.assertOpen();
 
@@ -366,6 +439,10 @@ export class GrpcTransport implements Transport {
     if (this.config.synchronizerId) {
       commands.synchronizer_id = this.config.synchronizerId;
     }
+    const disclosedExercise = toProtoDisclosedContracts(opts?.disclosedContracts);
+    if (disclosedExercise) {
+      commands.disclosed_contracts = disclosedExercise;
+    }
 
     this.log.debug({ templateId, contractId, choiceName, actAs }, 'Submitting exercise command');
 
@@ -386,6 +463,7 @@ export class GrpcTransport implements Transport {
     argument: Record<string, unknown>,
     actAs: string[],
     readAs?: string[],
+    opts?: CommandOptions,
   ): Promise<T> {
     this.assertOpen();
 
@@ -407,6 +485,10 @@ export class GrpcTransport implements Transport {
     };
     if (this.config.synchronizerId) {
       commands.synchronizer_id = this.config.synchronizerId;
+    }
+    const disclosedByKey = toProtoDisclosedContracts(opts?.disclosedContracts);
+    if (disclosedByKey) {
+      commands.disclosed_contracts = disclosedByKey;
     }
 
     this.log.debug({ templateId, choiceName, actAs }, 'Submitting exerciseByKey command');
@@ -447,7 +529,7 @@ export class GrpcTransport implements Transport {
     const offset = await this.getLedgerEnd();
 
     const request = {
-      active_at_offset: parseInt(offset, 10),
+      active_at_offset: toSafeOffset(offset),
       event_format: {
         filters_by_party: Object.fromEntries(
           uniqueParties.map((party) => [party, partyFilters]),
@@ -539,7 +621,7 @@ export class GrpcTransport implements Transport {
     };
 
     const request: Record<string, unknown> = {
-      begin_exclusive: beginOffset ? parseInt(beginOffset, 10) : 0,
+      begin_exclusive: beginOffset ? toSafeOffset(beginOffset) : 0,
       update_format: {
         include_transactions: {
           event_format: eventFormat,
@@ -549,7 +631,7 @@ export class GrpcTransport implements Transport {
     };
 
     if (endOffset !== undefined) {
-      request['end_inclusive'] = parseInt(endOffset, 10);
+      request['end_inclusive'] = toSafeOffset(endOffset);
     }
 
     const metadata = this.buildMetadata();

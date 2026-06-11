@@ -9,7 +9,7 @@ WORKDIR /app
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/proxy/package.json packages/proxy/
-RUN pnpm install --frozen-lockfile || pnpm install
+RUN pnpm install --frozen-lockfile
 
 COPY packages/sdk/ packages/sdk/
 COPY packages/proxy/ packages/proxy/
@@ -17,6 +17,11 @@ COPY tsconfig.base.json ./
 
 RUN pnpm --filter @canton-streams/sdk build
 RUN pnpm --filter @canton-streams/proxy build
+
+# Drop root. The node:alpine image ships an unprivileged `node` user; run
+# the fund-moving proxy as it so a container escape doesn't start from uid 0.
+RUN chown -R node:node /app
+USER node
 
 EXPOSE 4000
 

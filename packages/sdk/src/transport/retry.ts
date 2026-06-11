@@ -26,6 +26,13 @@ export interface RetryOptions {
   readonly maxDelayMs?: number;
   /** Jitter factor 0–1 added to each delay to decorrelate retries. Default: 0.2. */
   readonly jitterFactor?: number;
+  /**
+   * Whether the wrapped operation is safe to retry. Reads are idempotent and
+   * default to retrying. Command submissions must pass `false`: each retry
+   * mints a fresh command id, so a retried submission can double-apply.
+   * Default: true (preserves read retry behavior for existing callers).
+   */
+  readonly idempotent?: boolean;
 }
 
 const DEFAULT_OPTIONS: Required<RetryOptions> = {
@@ -33,6 +40,7 @@ const DEFAULT_OPTIONS: Required<RetryOptions> = {
   baseDelayMs: 250,
   maxDelayMs: 5_000,
   jitterFactor: 0.2,
+  idempotent: true,
 };
 
 // ---------------------------------------------------------------------------
@@ -99,6 +107,10 @@ function sleep(ms: number): Promise<void> {
  * DEADLINE_EXCEEDED) and transport-level errors are retried. All other
  * errors propagate immediately.
  *
+ * Pass `idempotent: false` for command submissions: a retried submission
+ * uses a fresh command id and can double-apply, so submissions must surface
+ * the transient error to the caller rather than retry it.
+ *
  * @param fn      - The async operation to execute (and potentially retry).
  * @param options - Retry configuration overrides.
  * @returns The result of `fn` on success.
@@ -106,9 +118,12 @@ function sleep(ms: number): Promise<void> {
  *
  * @example
  * ```ts
+ * // Read: safe to retry (default).
+ * const stream = await withRetry(() => transport.query(templateId, undefined, actAs));
+ * // Submission: not retried.
  * const result = await withRetry(
- *   () => transport.create(templateId, arg, actAs),
- *   { maxRetries: 5, baseDelayMs: 500 },
+ *   () => transport.exercise(templateId, cid, choice, arg, actAs),
+ *   { idempotent: false },
  * );
  * ```
  */
@@ -125,8 +140,8 @@ export async function withRetry<T>(
     } catch (err) {
       lastError = err;
 
-      if (!isTransient(err)) {
-        // Non-transient error — fail immediately.
+      if (!opts.idempotent || !isTransient(err)) {
+        // Non-idempotent operations and non-transient errors fail immediately.
         throw err;
       }
 

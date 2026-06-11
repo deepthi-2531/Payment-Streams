@@ -236,14 +236,24 @@ export class AmuletWalletGatewayAdapter implements SettlementAdapter {
     body: Record<string, unknown>,
     token: string,
   ): Promise<T> {
-    const response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(body),
-    });
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;

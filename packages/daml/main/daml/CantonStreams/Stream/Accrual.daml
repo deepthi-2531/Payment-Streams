@@ -68,9 +68,17 @@ steppedAccrual totalDeposited startTime stepInterval amountPerStep now
   | otherwise =
       let elapsed   = convertRelTimeToMicroseconds (subTime now startTime)
           interval  = convertRelTimeToMicroseconds stepInterval
-          steps     = elapsed / interval  -- integer division
-          accrued   = intToDecimal steps * amountPerStep
-      in min totalDeposited (max 0.0 accrued)
+      -- Defensive guard: a zero/negative interval would divide-by-
+      -- zero and abort every lifecycle choice, locking the funds. Creation
+      -- is already gated by `validVestingMode`, but guard here too so a
+      -- legacy/migrated contract degrades to "nothing accrued" rather than
+      -- a hard abort.
+      in if interval <= 0
+         then 0.0
+         else
+           let steps   = elapsed / interval  -- integer division
+               accrued = intToDecimal steps * amountPerStep
+           in min totalDeposited (max 0.0 accrued)
 
 -- | Compute withdrawable amount: accrued(now) - totalWithdrawn.
 -- Always >= 0.

@@ -162,4 +162,13 @@ describe('withRetry', () => {
     await assertion;
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  it('does not retry transient errors when idempotent: false', async () => {
+    const fn = vi.fn().mockRejectedValue(new TransportError('submission failed'));
+
+    await expect(
+      withRetry(fn, { maxRetries: 3, idempotent: false }),
+    ).rejects.toThrow(TransportError);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
 });

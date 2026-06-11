@@ -38,6 +38,8 @@ template CreateLocalAssetStreamRequest
       -- ^ Service party that will finalize custody.
     recipientAccount : AccountKey
       -- ^ Recipient's Daml Finance account for withdrawals.
+    senderAccount : AccountKey
+      -- ^ Sender's Daml Finance account — where cancel refunds land.
     observers : [Party]
   where
     signatory config.sender
@@ -58,6 +60,7 @@ template CreateLocalAssetStreamRequest
           depositAmount
           escrowOperator
           recipientAccount
+          senderAccount
           observers
 
     -- | Sender withdraws (cancels) the request before acceptance.
@@ -77,6 +80,7 @@ template AcceptedLocalAssetRequest
     depositAmount : Decimal
     escrowOperator : Party
     recipientAccount : AccountKey
+    senderAccount : AccountKey
     observers : [Party]
   where
     signatory config.sender, config.recipient
@@ -100,12 +104,16 @@ template AcceptedLocalAssetRequest
     choice FinalizeLocalAssetEscrow : ContractId LocalAssetEscrow
       controller escrowOperator
       do
-        -- Split the funding holding: take depositAmount for escrow
+        -- Split the funding holding: take depositAmount for escrow.
+        -- The funding holding belongs to the sender, so its account
+        -- is the sender's account — label it correctly here. Refund routing
+        -- on the LocalAssetEscrow uses the explicit `senderAccount` field
+        -- regardless, so a mislabel here can no longer mis-route funds.
         let fundingEscrow = HoldingEscrow with
               holdingCid = fundingHoldingCid
               amount = depositAmount  -- Will be validated by splitHolding
               owner = config.sender
-              account = recipientAccount  -- split preserves original account
+              account = senderAccount
 
         -- splitHolding exercises Fungible.Split on the holding
         (escrowPortion, _remainderPortion) <- splitHolding fundingEscrow depositAmount
@@ -116,4 +124,5 @@ template AcceptedLocalAssetRequest
           escrow = escrowPortion
           escrowOperator
           recipientAccount
+          senderAccount
           observers

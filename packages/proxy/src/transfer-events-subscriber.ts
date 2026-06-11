@@ -42,8 +42,11 @@
  */
 
 import { EventEmitter } from 'node:events';
-import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+
+/** Cap on concurrently-scheduled instruction TTL timers. */
+const MAX_PENDING_EXPIRIES = 10_000;
 
 /**
  * V2 settlement choice name.
@@ -114,7 +117,7 @@ export interface SubscriberConfig {
    * The file holds a `{ [assetKey]: { offset, ts } }` map. Updated
    * atomically (tmp + rename) after each batch.
    *
-   * [C4 fix] Previously the subscriber hardcoded `beginExclusive: { offset: '0' }`
+   * Previously the subscriber hardcoded `beginExclusive: { offset: '0' }`
    * on every reconnect, replaying every settlement event from genesis on
    * every restart. With this, the subscriber resumes from last checkpoint.
    */
@@ -133,10 +136,9 @@ interface OffsetCheckpoint {
 export class OffsetStore {
   constructor(private readonly path: string) {}
 
-  load(): Record<string, OffsetCheckpoint> {
-    if (!existsSync(this.path)) return {};
+  async load(): Promise<Record<string, OffsetCheckpoint>> {
     try {
-      const raw = readFileSync(this.path, 'utf8');
+      const raw = await readFile(this.path, 'utf8');
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object') return parsed as Record<string, OffsetCheckpoint>;
       return {};
@@ -145,23 +147,23 @@ export class OffsetStore {
     }
   }
 
-  save(map: Record<string, OffsetCheckpoint>): void {
+  async save(map: Record<string, OffsetCheckpoint>): Promise<void> {
     const dir = dirname(this.path);
-    mkdirSync(dir, { recursive: true });
+    await mkdir(dir, { recursive: true });
     const tmp = this.path + '.tmp';
-    writeFileSync(tmp, JSON.stringify(map, null, 2) + '\n', 'utf8');
-    renameSync(tmp, this.path);
+    await writeFile(tmp, JSON.stringify(map, null, 2) + '\n', 'utf8');
+    await rename(tmp, this.path);
   }
 
-  getAssetOffset(assetKey: string): string {
-    const map = this.load();
+  async getAssetOffset(assetKey: string): Promise<string> {
+    const map = await this.load();
     return map[assetKey]?.offset ?? '0';
   }
 
-  setAssetOffset(assetKey: string, offset: string): void {
-    const map = this.load();
+  async setAssetOffset(assetKey: string, offset: string): Promise<void> {
+    const map = await this.load();
     map[assetKey] = { offset, ts: Date.now() };
-    this.save(map);
+    await this.save(map);
   }
 }
 
@@ -324,13 +326,13 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
   }
 
   /** Public accessor so the proxy can expose offset state via admin route. */
-  getCheckpoints(): Record<string, { offset: string; ts: number }> {
+  getCheckpoints(): Promise<Record<string, { offset: string; ts: number }>> {
     return this.offsetStore.load();
   }
 
   /** Used by admin/troubleshooting; resets all checkpoints to 0. */
-  resetCheckpoints(): void {
-    this.offsetStore.save({});
+  async resetCheckpoints(): Promise<void> {
+    await this.offsetStore.save({});
     this.config.logger.warn('TransferEventsSubscriber: all offset checkpoints reset to 0');
   }
 
@@ -390,6 +392,15 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     if (existing) {
       clearTimeout(existing);
       this.pendingExpiries.delete(schedule.instructionCid);
+    } else if (this.pendingExpiries.size >= MAX_PENDING_EXPIRIES) {
+      // Refuse to grow the timer map past the cap so a flood of
+      // instruction-created events can't exhaust memory. The instruction
+      // still expires on-ledger; we just skip the proactive TTL handler.
+      this.config.logger.warn(
+        { instructionCid: schedule.instructionCid, cap: MAX_PENDING_EXPIRIES },
+        'Pending-expiry cap reached; not scheduling instruction TTL handler',
+      );
+      return { cancel: () => {} };
     }
 
     const fireExpiry = () => {
@@ -547,7 +558,7 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     }
 
     // Resume from last persisted offset instead of replaying from genesis.
-    const resumeOffset = this.offsetStore.getAssetOffset(asset.key);
+    const resumeOffset = await this.offsetStore.getAssetOffset(asset.key);
     this.config.logger.info(
       { assetKey: asset.key, resumeOffset },
       'pollHoldingsChangeEvents: resuming from checkpoint',
@@ -561,11 +572,21 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       beginExclusive: { offset: resumeOffset },
     };
 
-    const res = await this.config.fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await this.config.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       throw new Error(`V2 events endpoint ${url} returned ${res.status}`);
@@ -575,9 +596,12 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       events?: ReadonlyArray<HoldingsChangeEvent>;
       endOffset?: string;
     };
-    if (!payload.events) return;
+    // Keep only the fields we need; let the rest of the response body GC.
+    const events = payload.events;
+    const endOffset = payload.endOffset;
+    if (!events) return;
 
-    for (const event of payload.events) {
+    for (const event of events) {
       // Only AllocationSettle resolves to a stream-state advancement.
       // Transfer/Lock/Unlock/Burn/Mint are out of scope here (subscriber
       // is a settlement reactor, not a generic holdings observer).
@@ -613,9 +637,9 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     // — order matters: a crash between emit and save is replayed at most
     // once (idempotent withdraw handlers tolerate this), but a crash
     // between save and emit silently drops events.
-    if (payload.endOffset) {
+    if (endOffset) {
       try {
-        this.offsetStore.setAssetOffset(asset.key, payload.endOffset);
+        await this.offsetStore.setAssetOffset(asset.key, endOffset);
       } catch (err) {
         // Persist failures should be visible but non-fatal — at worst we
         // re-process from the previous checkpoint on next reconnect.
@@ -699,8 +723,8 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       headers['authorization'] = `Bearer ${this.config.ledgerApiToken}`;
     }
 
-    // [C4 fix] Resume from checkpoint instead of replaying from 0.
-    const resumeOffset = this.offsetStore.getAssetOffset(asset.key);
+    // Resume from checkpoint instead of replaying from 0.
+    const resumeOffset = await this.offsetStore.getAssetOffset(asset.key);
     this.config.logger.info(
       { assetKey: asset.key, resumeOffset },
       'pollLedgerApiUpdates: resuming from checkpoint',
@@ -719,11 +743,21 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       beginExclusive: { offset: resumeOffset },
     };
 
-    const res = await this.config.fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let res: Response;
+    try {
+      res = await this.config.fetchImpl(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     if (!res.ok) {
       throw new Error(`Ledger API ${url} returned ${res.status}`);
@@ -736,10 +770,13 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
       updates?: ReadonlyArray<RawUpdate>;
       endOffset?: string;
     };
-    if (!payload.updates) return;
+    // Keep only the fields we need; let the rest of the response body GC.
+    const updates = payload.updates;
+    const endOffset = payload.endOffset;
+    if (!updates) return;
 
     let maxOffset = resumeOffset;
-    for (const update of payload.updates) {
+    for (const update of updates) {
       const event = this.tryParseSettlementEvent(asset, update);
       if (event) {
         this.config.logger.info(
@@ -756,10 +793,10 @@ class TransferEventsSubscriberImpl extends EventEmitter implements TransferEvent
     }
 
     // Persist the high-water mark.
-    const newOffset = payload.endOffset ?? maxOffset;
+    const newOffset = endOffset ?? maxOffset;
     if (newOffset !== resumeOffset) {
       try {
-        this.offsetStore.setAssetOffset(asset.key, newOffset);
+        await this.offsetStore.setAssetOffset(asset.key, newOffset);
       } catch (err) {
         this.config.logger.warn(
           { assetKey: asset.key, err },

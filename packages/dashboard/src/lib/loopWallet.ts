@@ -8,7 +8,9 @@
  * user's full asset list — symbol, name, instrument admin party,
  * locked / unlocked balances, decimals. We call it directly using
  * the auth token that 5N Loop stashes in `localStorage.loop_connect`
- * after a successful sign-in.
+ * after a successful sign-in. We lift that token into memory on first
+ * use and clear the persisted copy so the bearer is not left in web
+ * storage (see `readLoopToken`).
  *
  * This is wallet-specific (Loop only). Other hosted wallets
  * (Cantor8, Send) each have their own native API; if/when the
@@ -124,20 +126,51 @@ export class LoopWalletNotConnectedError extends Error {
   }
 }
 
+// In-memory bearer token for the Loop REST API. The Loop SDK persists its
+// session under `localStorage.loop_connect`; we lift the token into this
+// module-scoped variable on first read and clear the persisted copy, so the
+// long-lived bearer is not left sitting in web storage for an XSS to exfiltrate.
+let loopAuthToken: string | null = null;
+
+/**
+ * Resolve the Loop bearer token. Prefers the in-memory copy; otherwise lifts
+ * it out of the SDK's `localStorage.loop_connect` entry, caches it, and removes
+ * the persisted entry. Returns null when there is no Loop session.
+ */
+function readLoopToken(): string | null {
+  if (loopAuthToken) return loopAuthToken;
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem('loop_connect');
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  let session: LoopConnectStorage;
+  try {
+    session = JSON.parse(raw) as LoopConnectStorage;
+  } catch {
+    return null;
+  }
+  const token = session.authToken ?? session.auth_token ?? null;
+  if (!token) return null;
+  loopAuthToken = token;
+  // Drop the persisted bearer now that it lives in memory.
+  try {
+    localStorage.removeItem('loop_connect');
+  } catch {
+    /* storage unavailable — token is still cached in memory */
+  }
+  return token;
+}
+
 /**
  * True when the active wallet session is 5N Loop and we have an
  * auth token to call Loop's REST API.
  */
 export function isLoopWalletActive(): boolean {
   if (walletClient.layer !== 'partylayer') return false;
-  try {
-    const raw = localStorage.getItem('loop_connect');
-    if (!raw) return false;
-    const session = JSON.parse(raw) as LoopConnectStorage;
-    return Boolean(session.authToken ?? session.auth_token);
-  } catch {
-    return false;
-  }
+  return Boolean(readLoopToken());
 }
 
 /**
@@ -153,17 +186,7 @@ export function isLoopWalletActive(): boolean {
  *     user with a "Refresh" CTA rather than swallowing.
  */
 export async function getLoopHoldings(): Promise<readonly LoopHolding[]> {
-  const raw = localStorage.getItem('loop_connect');
-  if (!raw) throw new LoopWalletNotConnectedError();
-  let session: LoopConnectStorage;
-  try {
-    session = JSON.parse(raw) as LoopConnectStorage;
-  } catch {
-    throw new LoopWalletNotConnectedError(
-      'Loop session data could not be parsed — try re-signing into the wallet.',
-    );
-  }
-  const token = session.authToken ?? session.auth_token;
+  const token = readLoopToken();
   if (!token) {
     throw new LoopWalletNotConnectedError(
       'Loop session has no auth token — try re-signing into the wallet.',

@@ -10,16 +10,22 @@ name: Daml Build & Test (manual)
 # push. Run this when you want to verify the Daml side end-to-end.
 #
 # Inputs:
-#   splice_ref — git ref in canton-network/splice to build V2 DARs from
-#                (default: main)
+#   splice_ref — git ref in canton-network/splice to build V2 DARs from.
+#                Defaults to the pinned commit baked into
+#                scripts/fetch-v2-dars.mjs; the build verifies fetched DAR
+#                hashes against scripts/v2-dar-pins.json either way.
 
 on:
   workflow_dispatch:
     inputs:
       splice_ref:
-        description: 'Splice git ref to build V2 DARs from'
+        description: 'Splice git ref to build V2 DARs from (empty = pinned commit)'
         required: false
-        default: 'main'
+        default: ''
+
+# Least-privilege default token scope.
+permissions:
+  contents: read
 
 jobs:
   daml:
@@ -27,16 +33,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
-      - name: Install Daml SDK 3.4.10
+      - name: Install Daml SDK
+        # Pin the SDK version and the installer itself: fetch the script,
+        # verify its sha256 against the expected digest, then run it with the
+        # explicit version so it never resolves the moving "latest" channel.
+        # Bump DAML_SDK_VERSION / DAML_INSTALLER_SHA256 together on upgrade.
+        env:
+          DAML_SDK_VERSION: '3.4.10'
+          DAML_INSTALLER_SHA256: d3d5527e3d535df2c723d8d2b68d72d224b9e0c74554e38192e1435df5c5b92c
         run: |
-          curl -sSL https://get.daml.com/ | sh -s -- 3.4.10
-          echo "$HOME/.daml/bin" >> $GITHUB_PATH
+          curl -sSL https://get.daml.com/ -o /tmp/daml-install.sh
+          echo "${DAML_INSTALLER_SHA256}  /tmp/daml-install.sh" | sha256sum -c -
+          sh /tmp/daml-install.sh "$DAML_SDK_VERSION"
+          rm -f /tmp/daml-install.sh
+          echo "$HOME/.daml/bin" >> "$GITHUB_PATH"
 
       - name: Verify Daml SDK install
         run: |
@@ -44,10 +60,17 @@ jobs:
           ls -la "$HOME/.daml/bin"
 
       - name: Fetch Splice V2 DARs (source build)
+        # Pass the user-controlled input via the environment, not by
+        # interpolating `${{ inputs.* }}` directly into the run block (which
+        # would let a crafted ref inject shell). `$SPLICE_REF` is quoted.
+        env:
+          SPLICE_REF: ${{ inputs.splice_ref }}
         run: |
-          node scripts/fetch-v2-dars.mjs \
-            --mode source-build \
-            --splice-ref "${{ inputs.splice_ref }}"
+          if [ -n "$SPLICE_REF" ]; then
+            node scripts/fetch-v2-dars.mjs --mode source-build --splice-ref "$SPLICE_REF"
+          else
+            node scripts/fetch-v2-dars.mjs --mode source-build
+          fi
 
       - name: Verify V2 DARs are in place
         run: |
@@ -69,7 +92,7 @@ jobs:
 
       - name: Upload built DARs as artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: canton-streams-dars
           path: packages/daml/**/.daml/dist/*.dar

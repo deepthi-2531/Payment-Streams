@@ -14,6 +14,11 @@ export {
 } from './createStream.js';
 
 export {
+  createFlowSchema,
+  type CreateFlowSchemaValues,
+} from './createFlow.js';
+
+export {
   withdrawSchema,
   type WithdrawSchemaValues,
 } from './withdraw.js';

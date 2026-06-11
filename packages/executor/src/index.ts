@@ -22,10 +22,29 @@ import { evaluatePolicy } from './evaluator.js';
 import { executeAction } from './executor.js';
 import { fetchStreamBalances } from './balance-query.js';
 import { OffsetStore } from './offset.js';
+import { ExecutionGuardStore } from './guard-store.js';
 
 const config = loadConfig();
 const logger = pino({ level: config.logLevel });
 const offsetStore = new OffsetStore(config.offsetStorePath);
+const guardStore = new ExecutionGuardStore(config.guardStorePath);
+
+// In-process reservation of execution ids that are in-flight or recently
+// completed within this instance. Reserved synchronously before the async
+// submit so a mid-cycle restart or re-entrant cycle cannot double-submit.
+// Cross-instance safety is NOT provided here — the on-ledger DelegatedPolicy
+// rate limit is the final backstop against two executors racing.
+const reservedExecutionIds = new Set<string>();
+
+// Ids that were in-flight when a prior process exited. Consulted only for the
+// first cycle after startup to avoid replaying a payout whose submit outcome
+// was never observed, then cleared — the on-ledger cooldown governs the rest.
+let startupGuard = new Set<string>();
+
+/** Deterministic id for a single intended payout, used for idempotency. */
+function executionKey(policyId: string, streamId: string): string {
+  return `${policyId}::${streamId}`;
+}
 
 /**
  * Main execution loop.
@@ -50,10 +69,11 @@ async function runOnce(transport: any): Promise<void> {
     // Step 2: For each policy, evaluate and execute
     for (const policy of policies) {
       try {
-        // Fetch recent executions for rate limiting + idempotency check
+        // Fetch recent executions for rate limiting + idempotency check.
+        // Bounded to the policy's own rate-limit window (see watcher).
         const recentExecutions = await fetchRecentExecutions(
           transport,
-          policy.policyId,
+          policy,
           config.executorParty,
           logger,
         );
@@ -84,8 +104,11 @@ async function runOnce(transport: any): Promise<void> {
 
         // Step 3: Execute approved actions
         for (const execution of pendingExecutions) {
+          const key = executionKey(execution.policyId, execution.targetStreamId);
+
           // Idempotency check: skip if there's already a recent successful execution
-          // for this exact (policyId, streamId) combination
+          // for this exact (policyId, streamId) combination, or if this id is
+          // already reserved (in-flight this instance, or persisted from a prior run).
           const alreadyExecuted = recentExecutions.some(
             (e) =>
               e.targetStreamId === execution.targetStreamId &&
@@ -93,7 +116,7 @@ async function runOnce(transport: any): Promise<void> {
               (new Date().getTime() - e.executionTime.getTime()) < (policy.rateLimit.cooldownInterval / 1000),
           );
 
-          if (alreadyExecuted) {
+          if (alreadyExecuted || reservedExecutionIds.has(key) || startupGuard.has(key)) {
             logger.debug(
               { policyId: execution.policyId, streamId: execution.targetStreamId },
               'Skipping — recent successful execution exists (idempotency)',
@@ -101,18 +124,31 @@ async function runOnce(transport: any): Promise<void> {
             continue;
           }
 
-          const result = await executeAction(
-            transport,
-            execution,
-            config.executorParty,
-            policy.escrowOperator,
-            logger,
-          );
-          if (!result.success) {
-            logger.warn(
-              { policyId: result.policyId, error: result.error },
-              'Execution failed — will retry next cycle',
+          // Reserve the id synchronously before awaiting the submit so a
+          // re-entrant cycle or a restart mid-submit cannot double-submit the
+          // same payout. Released once the attempt resolves; spacing between
+          // legitimate cycles is enforced by the on-ledger cooldown, and the
+          // DelegatedPolicy rate limit remains the cross-instance backstop.
+          reservedExecutionIds.add(key);
+          await guardStore.persist(reservedExecutionIds);
+
+          try {
+            const result = await executeAction(
+              transport,
+              execution,
+              config.executorParty,
+              policy.escrowOperator,
+              logger,
             );
+            if (!result.success) {
+              logger.warn(
+                { policyId: result.policyId, error: result.error },
+                'Execution failed — will retry next cycle',
+              );
+            }
+          } finally {
+            reservedExecutionIds.delete(key);
+            await guardStore.persist(reservedExecutionIds);
           }
         }
       } catch (err) {
@@ -152,11 +188,26 @@ export async function start(transport: any): Promise<() => void> {
     logger.info({ lastOffset }, 'Resuming from saved offset');
   }
 
+  // Load ids that were in-flight when a prior process exited so the first cycle
+  // does not replay a payout whose submit outcome was never observed.
+  const persistedIds = await guardStore.load();
+  startupGuard = new Set(persistedIds);
+  if (persistedIds.length > 0) {
+    logger.info({ count: persistedIds.length }, 'Restored execution idempotency guard');
+  }
+
   let running = true;
 
   const loop = async () => {
+    let firstCycle = true;
     while (running) {
       await runOnce(transport);
+      if (firstCycle) {
+        // After one full cycle the on-ledger cooldown governs replay; drop the
+        // restart guard so legitimate recurring payouts are not skipped.
+        firstCycle = false;
+        startupGuard.clear();
+      }
       await new Promise((resolve) => setTimeout(resolve, config.pollIntervalMs));
     }
   };

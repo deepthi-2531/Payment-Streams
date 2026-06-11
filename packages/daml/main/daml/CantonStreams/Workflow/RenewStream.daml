@@ -23,7 +23,7 @@ template RenewRequest
     choice ExecuteRenewal : ContractId StreamEscrow
       controller sender
       do
-        -- [H2 fix] Renew_Stream now requires renewTime so it can reset
+        -- Renew_Stream now requires renewTime so it can reset
         -- the accrual anchor when renewing a Completed stream. Use
         -- ledger time at the moment of exercise.
         now <- getTime

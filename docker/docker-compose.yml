@@ -4,9 +4,15 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.canton
+    # Bind published ports to loopback only. The Admin API (10011)
+    # has NO authentication — party allocation, DAR upload, user management
+    # are all open to anyone who can reach it. On shared Wi-Fi or a cloud
+    # VM a 0.0.0.0 publish would hand full participant control to the
+    # network. Override the host interface via DOCKER_BIND_HOST for a
+    # deliberately-exposed deployment behind its own firewall.
     ports:
-      - '5001:6865' # Ledger API (gRPC)
-      - '5002:10011' # Admin API
+      - '${DOCKER_BIND_HOST:-127.0.0.1}:5001:6865' # Ledger API (gRPC)
+      - '${DOCKER_BIND_HOST:-127.0.0.1}:5002:10011' # Admin API
     volumes:
       - canton-data:/canton/data
       - ../packages/daml:/daml-packages:ro
@@ -24,8 +30,9 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.proxy
+    # Loopback-bind the proxy's published port too.
     ports:
-      - '4000:4000'
+      - '${DOCKER_BIND_HOST:-127.0.0.1}:4000:4000'
     depends_on:
       canton:
         condition: service_healthy
@@ -36,7 +43,12 @@ services:
       # Main package id from the Docker-built canton-streams DAR.
       # Required because Ledger API gRPC template identifiers use package hashes.
       - CANTON_STREAMS_PACKAGE_ID=e7761a44781d89616e98f3a521cf6bc3095b37bd5343b219dc9a996424f3319a
+      # This is a LOCAL DEV compose. Dev auth is explicitly
+      # acknowledged here; the proxy refuses to boot in dev mode without
+      # this flag. NEVER set PROXY_ALLOW_DEV_AUTH in a real deployment —
+      # use PROXY_AUTH_MODE=jwt with PROXY_OIDC_ISSUER instead.
       - PROXY_AUTH_MODE=dev
+      - PROXY_ALLOW_DEV_AUTH=true
       - ALLOWED_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
     healthcheck:
       test: ['CMD', 'wget', '-qO-', 'http://localhost:4000/api/health']
@@ -58,7 +70,7 @@ services:
         VITE_PARTYLAYER_NETWORK: ${VITE_PARTYLAYER_NETWORK:-devnet}
         VITE_PARTYLAYER_APP_NAME: ${VITE_PARTYLAYER_APP_NAME:-Canton Payment Streams}
     ports:
-      - '3000:80'
+      - '3000:8080'
     depends_on:
       proxy:
         condition: service_healthy

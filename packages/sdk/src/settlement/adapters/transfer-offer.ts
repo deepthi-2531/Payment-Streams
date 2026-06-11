@@ -687,14 +687,24 @@ export class TransferOfferAdapter implements SettlementAdapter {
   }
 
   private async requestRegistryJson<T>(url: string, body: Record<string, unknown>): Promise<T> {
-    const response = await this.fetchImpl(url, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(this.registryToken ? { authorization: `Bearer ${this.registryToken}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(this.registryToken ? { authorization: `Bearer ${this.registryToken}` } : {}),
+        },
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;
@@ -748,14 +758,24 @@ export class TransferOfferAdapter implements SettlementAdapter {
       );
     }
 
-    const response = await this.fetchImpl(`${this.jsonApiUrl}${path}`, {
-      method: options.method,
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.ledgerToken}`,
-      },
-      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-    });
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.jsonApiUrl}${path}`, {
+        method: options.method,
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.ledgerToken}`,
+        },
+        redirect: 'error',
+        signal: ac.signal,
+        ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;
@@ -898,14 +918,24 @@ export class TransferOfferAdapter implements SettlementAdapter {
       url.searchParams.set('party', party);
     }
 
-    const response = await this.fetchImpl(url, {
-      method: body ? 'POST' : 'GET',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${token}`,
-      },
-      ...(body ? { body: JSON.stringify(body) } : {}),
-    });
+    // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 30_000);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(url, {
+        method: body ? 'POST' : 'GET',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`,
+        },
+        redirect: 'error',
+        signal: ac.signal,
+        ...(body ? { body: JSON.stringify(body) } : {}),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     const text = await response.text();
     let payload: unknown = null;

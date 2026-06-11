@@ -16,12 +16,21 @@
 
 import Decimal from 'decimal.js';
 
-import { SettlementMode, AssetType } from '../types/stream.js';
+import { SettlementMode, AssetType, VestingMode } from '../types/stream.js';
 import type {
   CreateStreamParams,
   InstrumentRef,
+  LedgerRecord,
   VestingModeConfig,
 } from '../types/stream.js';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DAY_MICROS = 86_400_000_000; // one day as Daml RelTime microseconds
+
+/** Default V2 account record for a bare party. */
+function partyAccount(owner: string): LedgerRecord {
+  return { owner, id: '' };
+}
 
 /**
  * Vesting style. `cliffLinear` is the default; `linear` for cliffless;
@@ -52,6 +61,12 @@ export interface VestingStreamOptions {
   readonly instrumentRef: InstrumentRef;
   /** Escrow operator party (custody operator). */
   readonly escrowOperator: string;
+  /** Sender-side funding reference from the wallet's V2 allocation step. */
+  readonly fundingReference: string;
+  /** Sender custody account. Defaults to `{ owner: sender, id: '' }`. */
+  readonly senderAccount?: LedgerRecord;
+  /** Recipient account for withdrawals. Defaults to `{ owner: recipient, id: '' }`. */
+  readonly recipientAccount?: LedgerRecord;
   /** Whether the sender (vesting agent) can cancel. Defaults to false. */
   readonly cancellable?: boolean;
 }
@@ -71,39 +86,48 @@ export function buildVestingStream(opts: VestingStreamOptions): CreateStreamPara
   const durationDays = opts.durationDays ?? 365;
   const cliffDays = opts.cliffDays ?? 90;
   const style = opts.style ?? 'cliffLinear';
+  const total = new Decimal(opts.totalAmount);
 
-  if (cliffDays >= durationDays) {
+  if (!total.isFinite() || total.lte(0)) {
+    throw new Error('Vesting totalAmount must be > 0');
+  }
+  if (durationDays <= 0) {
+    throw new Error('Vesting durationDays must be > 0 (endTime must be after startTime)');
+  }
+  if (style === 'cliffLinear' && cliffDays <= 0) {
+    throw new Error('CliffLinear vesting requires cliffDays > 0');
+  }
+  if (style === 'cliffLinear' && cliffDays >= durationDays) {
     throw new Error(`Vesting cliff (${cliffDays}d) must be shorter than total duration (${durationDays}d)`);
   }
   if (style === 'stepped' && (opts.steps ?? 4) < 1) {
     throw new Error('Stepped vesting requires at least 1 step');
   }
 
-  const endTime = new Date(opts.startTime.getTime() + durationDays * 24 * 60 * 60 * 1000);
-  const cliffTime = new Date(opts.startTime.getTime() + cliffDays * 24 * 60 * 60 * 1000);
-  const total = new Decimal(opts.totalAmount);
+  const endTime = new Date(opts.startTime.getTime() + durationDays * DAY_MS);
+  const cliffTime = new Date(opts.startTime.getTime() + cliffDays * DAY_MS);
 
   let vestingMode: VestingModeConfig;
   switch (style) {
     case 'linear':
-      vestingMode = { kind: 'Linear' } as unknown as VestingModeConfig;
+      vestingMode = { mode: VestingMode.Linear };
       break;
     case 'stepped': {
       const steps = opts.steps ?? 4;
-      const stepDurationDays = Math.floor(durationDays / steps);
+      const stepInterval = Math.floor((durationDays * DAY_MICROS) / steps);
+      if (stepInterval < 1) {
+        throw new Error('Stepped vesting interval must be at least 1 microsecond');
+      }
       vestingMode = {
-        kind: 'Stepped',
-        stepInterval: { days: stepDurationDays },
+        mode: VestingMode.Stepped,
+        stepInterval,
         amountPerStep: total.div(steps),
-      } as unknown as VestingModeConfig;
+      };
       break;
     }
     case 'cliffLinear':
     default:
-      vestingMode = {
-        kind: 'CliffLinear',
-        cliffTime,
-      } as unknown as VestingModeConfig;
+      vestingMode = { mode: VestingMode.CliffLinear, cliffTime };
   }
 
   return {
@@ -119,5 +143,8 @@ export function buildVestingStream(opts: VestingStreamOptions): CreateStreamPara
     settlementMode: SettlementMode.TokenStandardCustody,
     assetType: AssetType.GlobalCip56,
     escrowOperator: opts.escrowOperator,
+    fundingReference: opts.fundingReference,
+    senderAccount: opts.senderAccount ?? partyAccount(opts.sender),
+    recipientAccount: opts.recipientAccount ?? partyAccount(opts.recipient),
   };
 }

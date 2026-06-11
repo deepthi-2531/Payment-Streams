@@ -82,25 +82,49 @@ export async function fetchActivePolicies(
   return policies;
 }
 
+/** Hard cap on retained logs per policy, regardless of window size. */
+const MAX_RETAINED_LOGS = 256;
+
 /**
  * Fetch recent execution logs for a policy.
+ *
+ * The full ExecutionLog ACS is never archived, so scanning all of it every
+ * cycle is O(policies × totalLogs) and can be inflated by failed-execution
+ * logs. We only need logs within the policy's own rate-limit window for the
+ * idempotency / rate / cooldown checks, so we bound the working set:
+ *   - filter server-side by policyId where the transport supports a payload
+ *     query (template-only transports ignore the filter and we bound below);
+ *   - drop anything older than the relevant window in memory;
+ *   - cap the retained count so a transport returning the whole template set
+ *     cannot grow the per-cycle working set without bound.
  */
 export async function fetchRecentExecutions(
   transport: Transport,
-  policyId: string,
+  policy: Pick<PolicyContract, 'policyId' | 'rateLimit'>,
   executorParty: string,
   _logger: Logger,
+  now: Date = new Date(),
 ): Promise<ExecutionLogContract[]> {
+  const { policyId, rateLimit } = policy;
+
+  // Window must cover whichever of period/cooldown the checks look back over.
+  // periodDuration/cooldownInterval are stored in microseconds.
+  const windowMicros = Math.max(rateLimit.periodDuration, rateLimit.cooldownInterval, 0);
+  const cutoff = new Date(now.getTime() - windowMicros / 1000);
+
   const results = await transport.query<any>(
     TEMPLATE_EXECUTION_LOG,
-    undefined,
+    { policyId },
     [executorParty],
     undefined,
   );
 
   return results
     .filter((raw: any) => raw.policyId === policyId)
-    .map(deserializeExecutionLog);
+    .map(deserializeExecutionLog)
+    .filter((log) => log.executionTime > cutoff)
+    .sort((a, b) => b.executionTime.getTime() - a.executionTime.getTime())
+    .slice(0, MAX_RETAINED_LOGS);
 }
 
 function deserializePolicy(raw: any): PolicyContract {

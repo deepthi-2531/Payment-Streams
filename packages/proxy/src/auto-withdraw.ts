@@ -30,6 +30,7 @@ import {
   type PendingTransferRecord,
   type WalletSigningCredentials,
 } from './host-wallet.js';
+import { SettlementJournal } from './settlement-journal.js';
 
 export interface AutoWithdrawConfig {
   readonly enabled: boolean;
@@ -67,6 +68,14 @@ export interface AutoWithdrawConfig {
    * `CANTON_STREAMS_WALLET_GATEWAY_TOKEN` in env.
    */
   readonly useSigningProvider: boolean;
+  /**
+   * File path for the pending-settlement journal
+   * (`PROXY_SETTLEMENT_JOURNAL_PATH`). The journal persists settlements
+   * across the off-chain-transfer → on-ledger-record window so a crash or
+   * a permanent submission failure is recovered on the next cycle instead
+   * of relying on log scraping. Unset disables journaling.
+   */
+  readonly settlementJournalPath?: string;
 }
 
 export interface AutoWithdrawCandidate {
@@ -172,7 +181,25 @@ export function parseAutoWithdrawConfig(
     useSigningProvider: parseBoolean(
       env['PROXY_AUTO_WITHDRAW_USE_SIGNING_PROVIDER'],
     ),
+    settlementJournalPath:
+      trimToUndefined(env['PROXY_SETTLEMENT_JOURNAL_PATH']) ??
+      '.proxy-settlement-journal.json',
   };
+}
+
+const settlementJournals = new Map<string, SettlementJournal>();
+
+function getSettlementJournal(
+  config: AutoWithdrawConfig,
+): SettlementJournal | null {
+  const path = trimToUndefined(config.settlementJournalPath);
+  if (!path) return null;
+  let journal = settlementJournals.get(path);
+  if (!journal) {
+    journal = new SettlementJournal(path);
+    settlementJournals.set(path, journal);
+  }
+  return journal;
 }
 
 export function findEligibleTokenStandardStreams(
@@ -197,7 +224,7 @@ export function findEligibleTokenStandardStreams(
         withdrawableDecimal: balances.withdrawable,
       };
     })
-    // [H9 fix] Previously this was `stream.withdrawable !== '0.0000000000'`,
+    // Previously this was `stream.withdrawable !== '0.0000000000'`,
     // which admitted any sub-cent value (e.g. '0.0000000001') and triggered
     // meaningless on-ledger withdraws that either fail at the Daml `ensure`
     // ("amount must be positive" is true but accrual not yet meaningful) or
@@ -465,7 +492,29 @@ async function runInteractiveTokenStandardAutoWithdrawCycle(
       serviceUserId: autoWithdrawConfig.serviceUserId ?? clientConfig.userId,
       discoveryParties: autoWithdrawConfig.discoveryParties,
     });
-    const eligible = findInteractiveWithdrawCandidates(streams, escrowOperator, now);
+
+    await recoverPendingSettlements(escrowOperator, autoWithdrawConfig, logger);
+
+    // Streams with a journaled settlement still pending must not be
+    // withdrawn again: their on-ledger totalWithdrawn does not yet include
+    // the off-chain-settled amount, so a fresh candidate computation would
+    // pay the same accrual twice.
+    const journal = getSettlementJournal(autoWithdrawConfig);
+    const blockedStreamIds = new Set(
+      (journal ? await journal.list() : [])
+        .filter((entry) => entry.escrowOperator === escrowOperator)
+        .map((entry) => entry.streamId),
+    );
+
+    const eligible = findInteractiveWithdrawCandidates(streams, escrowOperator, now)
+      .filter((candidate) => {
+        if (!blockedStreamIds.has(candidate.stream.config.streamId)) return true;
+        logger.warn(
+          { streamId: candidate.stream.config.streamId },
+          'Skipping auto-withdraw: a prior settlement for this stream is pending reconciliation',
+        );
+        return false;
+      });
 
     let executed = 0;
     let failed = 0;
@@ -503,6 +552,91 @@ async function runInteractiveTokenStandardAutoWithdrawCycle(
     };
   } finally {
     await client.close();
+  }
+}
+
+const SETTLEMENT_RECOVERY_MAX_ATTEMPTS = 5;
+
+/**
+ * Retry journaled settlements whose on-ledger record is still pending.
+ *
+ * Entries in phase `record` are re-submitted with their original command id
+ * and contract id: if the original record actually landed, the contract is
+ * archived (or the command id dedups) and the entry is cleared instead of
+ * double-applied. Entries in phase `transfer` have an unknown off-chain
+ * outcome and are only surfaced — never retried automatically.
+ */
+async function recoverPendingSettlements(
+  escrowOperator: string,
+  autoWithdrawConfig: AutoWithdrawConfig,
+  logger: any,
+): Promise<void> {
+  const journal = getSettlementJournal(autoWithdrawConfig);
+  if (!journal) return;
+
+  for (const entry of await journal.list()) {
+    if (entry.escrowOperator !== escrowOperator) continue;
+
+    const ref = {
+      streamId: entry.streamId,
+      settlementReference: entry.settlementReference,
+      settledAmount: entry.settledAmount,
+      attempts: entry.attempts,
+    };
+
+    if (entry.phase === 'transfer') {
+      logger.error(
+        ref,
+        'Off-chain transfer outcome unknown (process died mid-transfer); ' +
+        'reconcile manually and remove the journal entry',
+      );
+      continue;
+    }
+
+    if (entry.attempts >= SETTLEMENT_RECOVERY_MAX_ATTEMPTS) {
+      logger.error(
+        ref,
+        'Pending ledger record exceeded automatic recovery attempts; ' +
+        'replay manually (same commandId dedups) and remove the journal entry',
+      );
+      continue;
+    }
+
+    if (!autoWithdrawConfig.useSigningProvider) {
+      logger.error(
+        ref,
+        'Pending ledger record cannot be auto-recovered in in-process ' +
+        'signing mode; replay manually with the journaled commandId',
+      );
+      continue;
+    }
+
+    try {
+      await submitWithdrawViaSigningProvider({
+        escrowOperator,
+        commandId: entry.commandId,
+        stream: { templateId: entry.templateId, contractId: entry.contractId },
+        effectiveWithdrawTime: new Date(entry.withdrawTime),
+        settlementReference: entry.settlementReference,
+        settledAmount: new Decimal(entry.settledAmount),
+        synchronizerId: autoWithdrawConfig.synchronizerId,
+      });
+      await journal.remove(entry.settlementReference);
+      logger.info(ref, 'Recovered pending ledger record for settled transfer');
+    } catch (error) {
+      const message = String(
+        error instanceof Error ? error.message : error,
+      ).toLowerCase();
+      // An archived contract or a deduplicated command id means the
+      // original record landed; the entry is stale, not failed.
+      if (/contract_not_found|contract not found|duplicate_command|inactive contract/.test(message)) {
+        await journal.remove(entry.settlementReference);
+        logger.info(ref, 'Ledger record already present; cleared journal entry');
+      } else {
+        await journal.bumpAttempts(entry.settlementReference);
+        logger.warn({ ...ref, err: error }, 'Pending settlement recovery attempt failed');
+      }
+    }
   }
 }
 
@@ -603,6 +737,19 @@ export async function executeInteractiveWithdraw(
   const commandId =
     `streams-autowithdraw-${stream.config.streamId}-${effectiveWithdrawTime.getTime()}`;
 
+  const journal = getSettlementJournal(autoWithdrawConfig);
+  const journalEntry = {
+    settlementReference,
+    streamId: stream.config.streamId,
+    contractId: stream.contractId,
+    templateId: stream.templateId,
+    escrowOperator,
+    commandId,
+    settledAmount: settledAmount.toFixed(10),
+    withdrawTime: effectiveWithdrawTime.toISOString(),
+    attempts: 0,
+  };
+
   // Prepare the ledger withdraw first using the exact amount/time pair that the
   // choice will validate on-ledger. This prevents us from locking funds in an
   // external transfer instruction when the ledger rejects the withdraw request.
@@ -646,6 +793,11 @@ export async function executeInteractiveWithdraw(
         ? await snapshotPendingTransfers(recipientHostWalletClient, stream.config.recipient)
         : new Set<string>();
 
+    // Journal before initiating the transfer: if the process dies in this
+    // window the outcome is unknown and the entry is surfaced for manual
+    // reconciliation rather than retried.
+    await journal?.put({ ...journalEntry, phase: 'transfer' });
+
     const transferResult = await adapter.transfer(
       {
         from: escrowOperator,
@@ -678,6 +830,11 @@ export async function executeInteractiveWithdraw(
     );
   }
 
+  // Funds are settled off-chain past this point; journal the pending
+  // ledger record so a crash or failed submission is recovered on the
+  // next cycle instead of leaving the ledger silently behind.
+  await journal?.put({ ...journalEntry, phase: 'record' });
+
   // SigningProvider-routed path. The gateway holds the key for
   // `escrowOperator`; we never touch private material here.
   //
@@ -686,15 +843,21 @@ export async function executeInteractiveWithdraw(
   // the gateway-side prepare-and-execute should succeed (modulo races
   // with concurrent writers, which we surface as-is).
   if (autoWithdrawConfig.useSigningProvider) {
-    await submitWithdrawViaSigningProvider({
-      escrowOperator,
-      commandId,
-      stream,
-      effectiveWithdrawTime,
-      settlementReference,
-      settledAmount,
-      synchronizerId: autoWithdrawConfig.synchronizerId,
-    });
+    try {
+      await submitWithdrawViaSigningProvider({
+        escrowOperator,
+        commandId,
+        stream,
+        effectiveWithdrawTime,
+        settlementReference,
+        settledAmount,
+        synchronizerId: autoWithdrawConfig.synchronizerId,
+      });
+    } catch (error) {
+      await journal?.bumpAttempts(settlementReference);
+      throw error;
+    }
+    await journal?.remove(settlementReference);
     return;
   }
 
@@ -738,19 +901,18 @@ export async function executeInteractiveWithdraw(
     },
   };
 
-  // Atomicity gap: at this point the off-chain transfer
-  // (adapter.transfer above) has already moved funds. If executeAndWait
-  // fails permanently, the ledger has no record of the withdraw. The
-  // `commandId` / `submissionId` (line 617) is Canton's idempotency key —
-  // retrying with the same id is safe (Canton dedups), so transient
-  // failures can be retried without re-submitting the off-chain
-  // transfer.
+  // The off-chain transfer (adapter.transfer above) has already moved
+  // funds; the journal entry written above carries this settlement until
+  // the ledger record lands. `commandId` / `submissionId` is Canton's
+  // idempotency key — retrying with the same id is safe (Canton dedups),
+  // so transient failures can be retried without re-submitting the
+  // off-chain transfer.
   //
   // Strategy: bounded retry on transient errors (network, 5xx). On
-  // permanent failure, surface a STRUCTURED error log so ops can
-  // reconcile the off-chain transfer manually. We do NOT auto-rollback
-  // the transfer (compensating transfer is non-trivial without
-  // persistent state and creates risk of double-undo).
+  // permanent failure the journal entry remains in phase `record` and the
+  // next cycle retries the ledger record (or detects it already landed).
+  // We do NOT auto-rollback the transfer — a compensating transfer risks
+  // a double-undo.
   //
   // The long-term fix is the AllocationRequest pattern, where
   // the transfer + ledger record happen in one atomic transaction.
@@ -803,9 +965,9 @@ export async function executeInteractiveWithdraw(
   }
 
   if (executeError !== undefined) {
-    // Structured error for ops monitoring. Off-chain transfer
-    // already executed (settlementReference is the dedup key); operator
-    // must reconcile manually or invoke the admin retry endpoint.
+    // Structured error for ops monitoring. Off-chain transfer already
+    // executed; the journal entry stays in phase `record` and the next
+    // cycle retries the ledger record automatically.
     console.error(
       JSON.stringify({
         event: 'autowithdraw.execute_failed_after_transfer',
@@ -817,13 +979,17 @@ export async function executeInteractiveWithdraw(
         settledAmount: settledAmount.toFixed(10),
         attempts: executeAttempt,
         error: String(executeError instanceof Error ? executeError.message : executeError),
-        remediation: 'Off-chain transfer moved funds; ledger has no record. ' +
-          'Either re-run executeAndWait with the same commandId (Canton dedups), ' +
-          'or manually issue a Withdraw_TokenStandard exercise with matching settlementReference.',
+        remediation: 'Off-chain transfer moved funds; the ledger record is pending. ' +
+          'The settlement journal retries it next cycle; to replay manually, re-run ' +
+          'executeAndWait with the same commandId (Canton dedups) or issue a ' +
+          'Withdraw_TokenStandard exercise with the matching settlementReference.',
       }),
     );
+    await journal?.bumpAttempts(settlementReference);
     throw executeError;
   }
+
+  await journal?.remove(settlementReference);
 }
 
 function buildInteractiveSettlementReference(
@@ -891,7 +1057,7 @@ function resolveWithdrawTimeForRecoveredAmount(
 }
 
 /**
- * [H8 fix] Find the exact ms timestamp at which the stream's withdrawable
+ * Find the exact ms timestamp at which the stream's withdrawable
  * equals `settledAmount`.
  *
  * Previously this was a 1ms-step linear scan from `fromMs` to `toMs`. On
@@ -1145,14 +1311,24 @@ async function requestJson<T>(
     readonly body?: Record<string, unknown>;
   },
 ): Promise<T> {
-  const response = await fetch(url, {
-    method: init.method,
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    ...(init.body ? { body: JSON.stringify(init.body) } : {}),
-  });
+  // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: init.method,
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      redirect: 'error',
+      signal: ac.signal,
+      ...(init.body ? { body: JSON.stringify(init.body) } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   let payload: unknown = null;
@@ -1366,7 +1542,7 @@ function normalizeSigningCredentials(
 interface SigningProviderWithdrawArgs {
   readonly escrowOperator: string;
   readonly commandId: string;
-  readonly stream: DiscoveredTokenStandardStream;
+  readonly stream: Pick<DiscoveredTokenStandardStream, 'templateId' | 'contractId'>;
   readonly effectiveWithdrawTime: Date;
   readonly settlementReference: string;
   readonly settledAmount: Decimal;

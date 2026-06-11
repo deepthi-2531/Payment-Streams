@@ -49,6 +49,7 @@ template StreamHoldingEscrow
       && state.totalWithdrawn >= 0.0
       && state.totalWithdrawn <= config.totalDeposited
       && escrow.amount >= 0.0
+      && validVestingMode config.vestingMode
 
     -- | Compute accrued amount based on vesting mode.
     let computeAccrued : Time -> Decimal
@@ -75,6 +76,13 @@ template StreamHoldingEscrow
       controller config.recipient
       do
         assertMsg "Stream not active" (state.status == Active)
+
+        -- Bound the caller-supplied accrual time to ledger time.
+        -- Without this, the recipient could pass withdrawTime = endTime and
+        -- drain the entire escrow on day one. A Time choice argument is
+        -- ordinary data; Canton does NOT validate it against ledger time.
+        now <- getTime
+        assertMsg "withdrawTime must be at or before ledger time" (withdrawTime <= now)
 
         let accrued = computeAccrued withdrawTime
             amount = withdrawable accrued state.totalWithdrawn
@@ -125,6 +133,13 @@ template StreamHoldingEscrow
         assertMsg "Stream not cancellable" config.cancellable
         assertMsg "Stream not active" (state.status == Active)
 
+        -- Bound cancelTime to ledger time. Without this the sender
+        -- could pass cancelTime = startTime, clamp the recipient's payout to
+        -- zero, and refund themselves the full deposit — seizing the
+        -- recipient's vested-but-unwithdrawn entitlement.
+        now <- getTime
+        assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
+
         let accrued = computeAccrued cancelTime
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
@@ -170,9 +185,17 @@ template StreamHoldingEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
+        -- Bound cancelTime even on mutual cancel: although both
+        -- parties consent, a back-dated time still mis-splits the holding.
+        now <- getTime
+        assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
+
         let accrued = computeAccrued cancelTime
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
+
+        assertMsg "Invariant violation"
+          (checkInvariant config.totalDeposited accrued state.totalWithdrawn 0.0)
 
         if recipientAmount > 0.0 then do
           (recipientEscrow, senderEscrow) <- splitHolding escrow recipientAmount
@@ -234,6 +257,10 @@ template StreamHoldingEscrow
         completeTime : Time
       controller config.recipient
       do
+        -- Bound completeTime so the recipient cannot fast-
+        -- forward vesting by claiming a future evaluation time.
+        now <- getTime
+        assertMsg "completeTime must be at or before ledger time" (completeTime <= now)
         let accrued = computeAccrued completeTime
         assertMsg "Stream not fully vested" (accrued >= config.totalDeposited)
         assertMsg "Stream not active" (state.status == Active)

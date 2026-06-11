@@ -1,0 +1,49 @@
+{
+  "pinnedCommit": "2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea",
+  "dars": {
+    "splice-api-token-metadata-v1-1.0.0.dar": {
+      "sha256": "455eb160cb5abd4ae9918a6fbb9dad471f721adda39f0e5c76feef08d05637fc",
+      "size": 260414
+    },
+    "splice-api-token-holding-v2-1.0.0.dar": {
+      "sha256": "8144d55eaa3e5ace8977d72546ec69bda8f65c4c11e95c4cba87ccd1bb9c7e2f",
+      "size": 483157
+    },
+    "splice-api-token-transfer-instruction-v2-1.0.0.dar": {
+      "sha256": "e8d3f66debf9d27a5f5b68a95ba36d5ae8f2b1820b0643aa6aeb1cce56a8100e",
+      "size": 308289
+    },
+    "splice-api-token-allocation-v2-1.0.0.dar": {
+      "sha256": "55c7b72333fe19d4f0baa9ba498e5c559beeb0a41ceef904669743de2ac17f75",
+      "size": 542109
+    },
+    "splice-api-token-allocation-instruction-v2-1.0.0.dar": {
+      "sha256": "0d965edc2390c321449fd76229643729584a900752508ed0a6a8e91ea4e93284",
+      "size": 334313
+    },
+    "splice-api-token-allocation-request-v2-1.0.0.dar": {
+      "sha256": "0fd9d39d14016869bb15d6d30d820f05b5565e24a0e23d0aa3191645317d8244",
+      "size": 534839
+    },
+    "splice-api-token-transfer-events-v2-1.0.0.dar": {
+      "sha256": "b73e3e70419bc269f39e76e91dd334f54e3e19b4e0f63bb2ddd821b019a9da64",
+      "size": 286481
+    },
+    "splice-token-standard-utils-1.0.0.dar": {
+      "sha256": "ad3c0c44c259a3b0355214fd1972b45efe521681763fda7c63805776a1d95fe0",
+      "size": 683923
+    },
+    "splice-test-token-v2-1.0.0.dar": {
+      "sha256": "dd09e17b025864f24f9b3c722d9c492dfe0ff634545d6d0a5cca2da2d5e987c1",
+      "size": 776789
+    },
+    "splice-token-test-trading-app-v2-1.0.0.dar": {
+      "sha256": "3fbc26f2aeaf52594683d642b99d83e252e567a83bb68ddba80a8c1b6df24f40",
+      "size": 576911
+    },
+    "splice-token-standard-v2-test-1.0.0.dar": {
+      "sha256": "e0895aab248c69439d3c056c3bf4ebdd0793c823d1768a3724b9cc2f43729022",
+      "size": 2417684
+    }
+  }
+}

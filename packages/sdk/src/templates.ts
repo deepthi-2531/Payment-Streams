@@ -116,11 +116,53 @@ export const TEMPLATE_STREAM_ADMIN: TemplateId = {
   entityName: 'StreamAdmin',
 };
 
+/**
+ * Transitional V1 lane: per-cycle allocation-request shim implementing
+ * the CIP-56 V1 `AllocationRequest` interface. Lives in its OWN DAR
+ * (`canton-streams-v1-shim`) so the main package hash stays stable and
+ * retiring the lane is a deployment decision.
+ *
+ * Override: CANTON_STREAMS_V1_SHIM_PACKAGE_ID (package name or hash).
+ *
+ * @deprecated from birth — removed with the V1 lane (see "V1 lane
+ * retirement" in CHANGELOG.md).
+ */
+export const TEMPLATE_V1_ALLOCATION_REQUEST: TemplateId = {
+  packageId:
+    process.env['CANTON_STREAMS_V1_SHIM_PACKAGE_ID'] ?? 'canton-streams-v1-shim',
+  moduleName: 'CantonStreams.V1Shim.AllocationRequestShim',
+  entityName: 'StreamAllocationRequestV1',
+};
+
 /** Choices on StreamAdmin. */
 export const CHOICE_SYNC_ITERATION = 'Sync_Iteration';
 export const CHOICE_MARK_CANCELLED = 'Mark_Cancelled';
 export const CHOICE_MARK_COMPLETED = 'Mark_Completed';
 export const CHOICE_GET_STREAM_ADMIN_INFO = 'GetStreamAdminInfo';
+
+// ---------------------------------------------------------------------------
+// Non-prefunded / rolling top-up flow template
+// ---------------------------------------------------------------------------
+
+/**
+ * StreamFlow — open-ended stream with a flowRate (tokens per microsecond)
+ * and no fixed end time. The sender maintains a funded balance via TopUp;
+ * withdrawals are bounded by the actually-funded balance. Uses V2 iterated
+ * allocation for settlement (see CantonStreams.Stream.StreamFlow).
+ */
+export const TEMPLATE_STREAM_FLOW: TemplateId = {
+  packageId: MAIN_PACKAGE_ID,
+  moduleName: 'CantonStreams.Stream.StreamFlow',
+  entityName: 'StreamFlow',
+};
+
+/** Choices on StreamFlow. */
+export const CHOICE_TOP_UP_FLOW = 'TopUp_Flow';
+export const CHOICE_WITHDRAW_FLOW = 'Withdraw_Flow';
+export const CHOICE_PAUSE_FLOW = 'Pause_Flow';
+export const CHOICE_RESUME_FLOW = 'Resume_Flow';
+export const CHOICE_STOP_FLOW = 'Stop_Flow';
+export const CHOICE_GET_FLOW_INFO = 'GetFlowInfo';
 
 // ---------------------------------------------------------------------------
 // Utility/CIP Holding custody templates

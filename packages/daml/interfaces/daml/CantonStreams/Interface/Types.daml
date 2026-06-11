@@ -5,7 +5,7 @@
 -- and current state at any point in time.
 module CantonStreams.Interface.Types where
 
-import DA.Time (RelTime)
+import DA.Time (RelTime, convertRelTimeToMicroseconds)
 
 -- | Unique, opaque stream identifier. Caller-supplied (SDK generates UUID if not provided).
 -- Used as part of the contract key: (sender, streamId).
@@ -30,6 +30,23 @@ data VestingMode
     -- ^ Fixed-duration stream that can be renewed/topped up before expiry.
     -- Accrual follows linear within each term.
   deriving (Eq, Show)
+
+-- | A vesting mode is well-formed only if it cannot wedge a stream.
+-- A `Stepped` mode with `stepInterval <= 0` passes naive creation but then
+-- aborts EVERY lifecycle choice with a division-by-zero in `steppedAccrual`
+-- (steps = elapsed / interval), permanently locking the escrowed funds.
+-- A `Stepped` mode with `amountPerStep <= 0` never accrues. Likewise a
+-- `RenewableTerm` with `termDuration <= 0` is degenerate. Escrow templates
+-- and the create-request templates assert `validVestingMode` in their
+-- `ensure` so a wedged stream can never be created.
+validVestingMode : VestingMode -> Bool
+validVestingMode vm = case vm of
+  Linear -> True
+  CliffLinear _ -> True
+  Stepped stepInterval amountPerStep ->
+    convertRelTimeToMicroseconds stepInterval > 0 && amountPerStep > 0.0
+  RenewableTerm termDuration ->
+    convertRelTimeToMicroseconds termDuration > 0
 
 -- | Current lifecycle status of a stream.
 data StreamStatus

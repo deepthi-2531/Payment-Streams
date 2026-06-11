@@ -29,7 +29,7 @@ If you experience or witness unacceptable behavior:
 
 - Use the hosting platform's moderation or reporting features when available.
 - Contact the project maintainers or repository owner privately.
-- If the report also includes a security concern, follow [SECURITY.md](SECURITY.md).
+- If the report also includes a security concern, report it privately to the maintainers rather than in a public issue or PR.
 
 Maintainers will review reports promptly and may take any action they deem appropriate, including warnings, comment removal, temporary restrictions, or bans.
 

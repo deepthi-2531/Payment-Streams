@@ -52,7 +52,11 @@ Compiled to DARs and uploaded to the participant.
 | `BatchCreateRequest` | `CantonStreams.Workflow.BatchCreate` | Sender-side bulk stream creation |
 | `RenewRequest` | `CantonStreams.Workflow.RenewStream` | Per-period renewal for `RenewableTerm` vesting |
 
-Stream-admin templates expose the V2 `AllocationRequest` shape only. Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces alongside V1; this library integrates once the asset advertises the required V2 capabilities.
+Stream-admin templates expose the V2 `AllocationRequest` shape for the full
+feature set. Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces
+alongside V1; until then, registered V1 assets can route through the
+transitional allocation lane with the limitations documented in
+`docs/V1-LANE-TESTING.md`.
 
 ### `packages/sdk/` — TypeScript SDK
 
@@ -61,11 +65,12 @@ Browser-safe via `@canton-streams/sdk/browser` (excludes Node-only deps like gRP
 | Surface | Purpose |
 |---|---|
 | `CantonStreamsClient` | High-level API: create / accept / withdraw / cancel / renew / query (server-side) |
-| `buildAllocationRequest` | Construct a V2 `AllocationRequest` for dispatch via `dappSDK.prepareExecute` (browser-side) |
+| `createStream` / `createFlow` | High-level create entry points (prefunded `StreamAdmin` and rolling `StreamFlow`) on `CantonStreamsClient` |
+| `buildAllocationRequest` | Low-level builder for a V2 `AllocationRequest` (used internally by settlement; not the stream-create path) |
 | `GrpcTransport` / `JsonApiTransport` | Interchangeable transports |
 | `BalanceTicker` | Client-side accrual display |
 | Accrual functions | `linearAccrual`, `cliffLinearAccrual`, `steppedAccrual`, `renewableTermAccrual` |
-| `getAssetCapabilities(instrumentRef)` | Runtime CIP-0112 capability gate; library rejects assets that lack required V2 allocation support |
+| `getAssetCapabilities(...)` | Runtime capability gate; routes V2 when available and the transitional V1 lane only for registered V1 assets |
 | Asset registry loader | Reads `config/asset-registry.json` for per-asset admin / Scan / wallet-gateway routing |
 
 ### `packages/proxy/` — REST proxy
@@ -99,22 +104,39 @@ Dev fallback: JWT-paste in sessionStorage (intended for local proxy use only).
 
 Runs `DelegatedPolicy` execution against the on-ledger bounds (rate limit, expiry, scope, action allow-list, cooldown). Useful for trust-minimized recurring withdrawals on behalf of recipients.
 
-## Settlement: CIP-56 V2 + CIP-0112 Capability Gate
+## Settlement: CIP-56 V1/V2 + CIP-0112 Capability Gate
 
-There is one settlement path: **CIP-56 V2 Token Standard** via the CIP-0112 `AllocationRequest` pattern. The legacy V0/V1 paths from earlier releases (Utility holding, NumericLegacy, LocalAsset, hosted wallet-gateway settlement-reference) have been removed.
+The active settlement mode is `TokenStandardCustody`. Within that mode, the
+asset registry selects the token-standard lane:
+
+- **V2 lane (preferred):** CIP-56 V2 via the CIP-0112 `AllocationRequest`
+  pattern. This is required for iterated allocations, batch settlement, and
+  TransferEventsV2-driven automation.
+- **V1 lane (transitional):** `splice-api-token-allocation-v1` for registered
+  assets that are live on V1 but have not yet published V2 interfaces, such as
+  CC / Amulet and USDCx. V1 runs one allocation cycle per withdrawal and does
+  not support V2-only iterated or batch settlement.
+
+The legacy non-token settlement modes from earlier releases (`NumericLegacy`,
+`UtilityHoldingCustody`, `LocalAssetCustody`, hosted wallet-gateway
+settlement-reference) have been removed for new stream creation.
 
 ### Capability negotiation flow
 
-1. dApp picks the asset by `instrumentRef` (e.g. `{ instrumentId: 'CC', admin: 'CCAdmin::1220...' }`)
-2. SDK calls `getAssetCapabilities(instrumentRef)` against `config/asset-registry.json`
+1. dApp picks the asset by registry key or `InstrumentIdV2` (e.g. `{ id: 'CC', admin: 'CCAdmin::1220...' }`)
+2. SDK calls `getAssetCapabilities(...)` against `config/asset-registry.json`
 3. Registry entry advertises which interfaces the asset implements:
    ```jsonc
    {
-     "allocationsV2": true,     // required: V2 allocation support
+     "allocationsV2": true,     // preferred: V2 allocation support
+     "allocationsV1": false,    // transitional V1 support when needed
      "transferEventsV2": true   // preferred: V2 events stream available
    }
    ```
-4. Library accepts the asset only when `allocationsV2 = true`. If `transferEventsV2 = true`, the proxy uses the V2 event stream; otherwise the raw Ledger API V2 fallback provides compatibility coverage while assets adopt V2 event interfaces.
+4. Library routes V2 when `allocationsV2 = true`; otherwise it routes V1 only
+   when `allocationsV1 = true`. If `transferEventsV2 = true`, the proxy can use
+   the V2 event stream; otherwise it falls back to explicit ledger reads and
+   per-cycle settlement.
 
 When an asset is upgraded to advertise V2 interfaces (e.g. when CC or USDCx publish them), only the registry entry needs to change — application code keeps working and benefits from V2 features.
 
@@ -132,14 +154,14 @@ The same SDK call shape works for CC, USDCx, and any future CIP-56 asset. Adopte
 ## Data flow: create → accept → settle (StreamAdmin)
 
 ```
-1. Sender constructs an AllocationRequest
-   Dashboard -> @canton-streams/sdk: buildAllocationRequest({ ... })
-     -> returns { commands: [...], summary: {...} }
+1. Sender creates the stream request
+   Dashboard/host app -> CantonStreamsClient.createStream({ ... })
+     -> proxy submits; the underlying V2 allocation is built internally
+     <- CreateStreamRequest contract on-ledger, observable by recipient
 
-2. Sender's wallet signs + submits
-   Dashboard -> dappSDK.prepareExecute({ commands, actAs: [sender] })
-     -> wallet gateway prepares + signs + submits
-     <- AllocationRequest contract on-ledger, observable by recipient
+2. Sender's wallet signs + submits the allocation
+   Wallet provider prepares + signs + submits the V2 allocation
+     <- allocation on-ledger, funding committed
 
 3. Recipient sees the request in their wallet's inbox
    Dashboard -> dappSDK.listAccounts() -> filter for pending requests
@@ -187,6 +209,6 @@ Templates live next to the gitignored counterparts (`config/local.testnet.exampl
 
 ## Versioning
 
-- Workspace packages and the main Daml DAR share a release line (currently `0.2.8` for the DAR, `0.2.7` for the npm packages — alignment lands in the next release).
+- Workspace packages and the main Daml DAR ship as one release candidate line: npm packages use `1.0.0-rc.1`, and the Daml DAR uses numeric version `1.0.0`.
 - DAR filenames are `canton-streams-<version>.dar`.
 - See [RELEASING.md](../RELEASING.md) for the tag-driven npm release process.

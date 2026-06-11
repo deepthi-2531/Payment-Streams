@@ -245,6 +245,8 @@ export class JsonRpcTransport {
         method: 'POST',
         headers,
         body: JSON.stringify(body.length === 1 ? body[0] : body),
+        // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+        redirect: 'error',
         signal: controller.signal,
       });
     } catch (err) {

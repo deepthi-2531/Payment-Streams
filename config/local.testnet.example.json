@@ -1,4 +1,5 @@
 {
+  "_note": "EXAMPLE config. Every <...> below is a placeholder — fill in for your own environment. Do NOT commit real secrets (e.g. auth0.clientSecret): keep them in env vars / a vault and inject at runtime, not in this JSON.",
   "defaults": {
     "cantonJsonApiUrl": "http://validator-host:7575",
     "synchronizerId": "global-domain::<synchronizer-id>"

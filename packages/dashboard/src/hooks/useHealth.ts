@@ -7,7 +7,7 @@
  * Fetches proxy health for the dashboard.
  */
 import { useQuery } from '@tanstack/react-query';
-import { useConnectionStore } from '../store/connection.js';
+import { useConnectionStore, safeProxyUrl } from '../store/connection.js';
 import { walletClient } from '../store/wallet/index.js';
 import { useAuth } from '../store/auth.js';
 
@@ -81,7 +81,8 @@ export function useHealth() {
           },
         };
       }
-      const res = await fetch(`${proxyUrl}/api/health`);
+      const base = safeProxyUrl(proxyUrl);
+      const res = await fetch(`${base}/api/health`);
       if (!res.ok) throw new Error(`Proxy health endpoint returned HTTP ${res.status}`);
       return (await res.json()) as HealthResponse;
     },

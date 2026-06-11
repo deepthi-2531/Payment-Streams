@@ -49,6 +49,38 @@ import {
 } from '../templates.js';
 
 // ---------------------------------------------------------------------------
+// Input validation
+// ---------------------------------------------------------------------------
+
+// Party ids are `<hint>::<fingerprint>`; the fingerprint is hex and never
+// contains commas or newlines. Reject anything that could smuggle a second
+// party or break out of a settlement leg.
+const PARTY_ID_PATTERN = /^[^,\r\n]+::[0-9a-fA-F]{8,}$/;
+
+/** Parse a settlement amount, rejecting empty/NaN/Infinity/<= 0. */
+function requirePositiveAmount(value: Decimal | string | number, label: string): Decimal {
+  let amount: Decimal;
+  try {
+    amount = new Decimal(value);
+  } catch {
+    throw new Error(`Invalid ${label}: not a number`);
+  }
+  if (!amount.isFinite() || amount.lessThanOrEqualTo(0)) {
+    throw new Error(`Invalid ${label}: must be a finite amount greater than zero`);
+  }
+  return amount;
+}
+
+/** Reject a party id that is empty or not in `<hint>::<fingerprint>` form. */
+function requirePartyId(value: string, label: string): string {
+  const party = String(value ?? '').trim();
+  if (!party || !PARTY_ID_PATTERN.test(party)) {
+    throw new Error(`Invalid ${label}: not a well-formed party id`);
+  }
+  return party;
+}
+
+// ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
 
@@ -121,12 +153,15 @@ export class SettlementOrchestrator {
     }
 
     // Execute sender → escrow transfer
+    const fromParty = requirePartyId(sender, 'sender party');
+    const toEscrow = requirePartyId(escrowParty, 'escrow party');
+    const finalizeAmount = requirePositiveAmount(depositAmount, 'deposit amount');
     const adapter = await this.selectAdapter(registrar, instrumentId);
     const transferResult = await adapter.transfer(
       {
-        from: sender,
-        to: escrowParty,
-        amount: depositAmount,
+        from: fromParty,
+        to: toEscrow,
+        amount: finalizeAmount,
         registrar,
         instrumentId,
         reference: `finalize-${streamId}`,
@@ -246,12 +281,15 @@ export class SettlementOrchestrator {
     }
 
     // Execute escrow → recipient transfer
+    const fromEscrow = requirePartyId(escrowOperator, 'escrow operator');
+    const toRecipient = requirePartyId(recipient, 'recipient party');
+    const withdrawAmount = requirePositiveAmount(balances.withdrawable, 'withdraw amount');
     const adapter = await this.selectAdapter(registrar, instrumentId);
     const transferResult = await adapter.transfer(
       {
-        from: escrowOperator,
-        to: recipient,
-        amount: balances.withdrawable,
+        from: fromEscrow,
+        to: toRecipient,
+        amount: withdrawAmount,
         registrar,
         instrumentId,
         reference: `withdraw-${streamId}-${withdrawTime.getTime()}`,
@@ -360,7 +398,7 @@ export class SettlementOrchestrator {
     // Legacy TokenStandardEscrow workflow templates are not shipped.
     assertTokenStandardEscrowAvailable();
 
-    // [H1 fix] Single `now` for the entire cancel flow. Previously
+    // Single `now` for the entire cancel flow. Previously
     // `getBalances(stream)` defaulted to `new Date()` (T1) and
     // `cancelTimeMicros` was constructed from a second `new Date()` (T2);
     // the Daml `MutualCancel_Stream` choice's re-accrual at T2 would fail
@@ -378,6 +416,7 @@ export class SettlementOrchestrator {
       throw new Error(`Stream ${streamId} is missing escrow operator or instrument info`);
     }
 
+    const fromEscrow = requirePartyId(escrowOperator, 'escrow operator');
     const adapter = await this.selectAdapter(registrar, instrumentId);
 
     // Leg 1: escrow → recipient (vested but not yet withdrawn)
@@ -385,9 +424,9 @@ export class SettlementOrchestrator {
     if (balances.withdrawable.greaterThan(0)) {
       recipientResult = await adapter.transfer(
         {
-          from: escrowOperator,
-          to: recipient,
-          amount: balances.withdrawable,
+          from: fromEscrow,
+          to: requirePartyId(recipient, 'recipient party'),
+          amount: requirePositiveAmount(balances.withdrawable, 'recipient settlement amount'),
           registrar,
           instrumentId,
           reference: `cancel-recipient-${streamId}`,
@@ -403,9 +442,9 @@ export class SettlementOrchestrator {
     if (balances.refundable.greaterThan(0)) {
       senderResult = await adapter.transfer(
         {
-          from: escrowOperator,
-          to: sender,
-          amount: balances.refundable,
+          from: fromEscrow,
+          to: requirePartyId(sender, 'sender party'),
+          amount: requirePositiveAmount(balances.refundable, 'sender refund amount'),
           registrar,
           instrumentId,
           reference: `cancel-refund-${streamId}`,
@@ -488,14 +527,17 @@ export class SettlementOrchestrator {
       throw new Error(`Stream ${streamId} is missing escrow operator or instrument info`);
     }
 
+    const fromParty = requirePartyId(sender, 'sender party');
+    const toEscrow = requirePartyId(escrowOperator, 'escrow operator');
+    const topUpAmount = requirePositiveAmount(params.additionalAmount, 'additional deposit');
     const adapter = await this.selectAdapter(registrar, instrumentId);
 
     // Execute sender → escrow top-up
     const topUpResult = await adapter.transfer(
       {
-        from: sender,
-        to: escrowOperator,
-        amount: params.additionalAmount,
+        from: fromParty,
+        to: toEscrow,
+        amount: topUpAmount,
         registrar,
         instrumentId,
         reference: `renew-${streamId}-${Date.now()}`,
@@ -508,11 +550,11 @@ export class SettlementOrchestrator {
     const newEndTimeMicros = (BigInt(params.newEndTime.getTime()) * 1000n).toString();
 
     const choiceArgs = {
-      additionalDeposit: { numeric: params.additionalAmount.toFixed(10) },
+      additionalDeposit: { numeric: topUpAmount.toFixed(10) },
       newEndTime: { timestamp: newEndTimeMicros },
       fundingReference: { text: topUpResult.settlementReference },
       settlementReference: { text: topUpResult.settlementReference },
-      confirmedAdditionalAmount: { numeric: params.additionalAmount.toFixed(10) },
+      confirmedAdditionalAmount: { numeric: topUpAmount.toFixed(10) },
     };
 
     const result = await transport.exercise<any>(
@@ -533,7 +575,7 @@ export class SettlementOrchestrator {
     return {
       contractId,
       settlementReference: topUpResult.settlementReference,
-      confirmedAdditionalAmount: params.additionalAmount,
+      confirmedAdditionalAmount: topUpAmount,
     };
   }
 
@@ -1058,14 +1100,24 @@ async function requestInteractiveLedgerJson<T>(
     readonly body?: Record<string, unknown>;
   },
 ): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: options.method,
-    headers: {
-      'content-type': 'application/json',
-      authorization: `Bearer ${token}`,
-    },
-    ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-  });
+  // No-redirect + abort timeout: a 3xx must not replay the bearer token.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 30_000);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: options.method,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      redirect: 'error',
+      signal: ac.signal,
+      ...(options.body ? { body: JSON.stringify(options.body) } : {}),
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await response.text();
   let payload: unknown = null;

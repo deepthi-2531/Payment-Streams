@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Downloads Daml Finance library DAR files required by canton-streams-main.
-# These are data-dependencies referenced in packages/daml/main/daml.yaml.
+# Downloads Daml Finance library DAR files for the deferred Daml-Finance
+# escrow path (main/daml-finance-deferred/). These templates are not part
+# of the current build; this script is only needed when that path is
+# activated.
 #
-# The Daml Finance library provides the Holding, Fungible, Transferable,
-# and Settlement interfaces used by the production utility holding adapter.
+# NOTE: upstream daml-finance releases are tagged per package
+# (e.g. Daml.Finance.Holding.V4/4.0.0) — there is no repo-wide v3.0.0
+# DAR bundle, so the download URLs below will not resolve as-is. When
+# activating the deferred path: update DAML_FINANCE_VERSION/URLs to the
+# real per-package release scheme, run once with
+# DAML_FINANCE_ALLOW_UNPINNED=1, and commit the printed checksums into
+# EXPECTED_SHA256. Until then the script fails closed by design.
 #
 # Usage: ./get-dependencies.sh
 # Prerequisite: curl must be on PATH.
@@ -29,6 +36,51 @@ REQUIRED_DARS=(
   "daml-finance-holding"
 )
 
+# Expected SHA-256 of each downloaded DAR. A downloaded artifact is verified
+# against this map; a mismatch (upstream tamper, release re-cut, MITM) aborts
+# the build. Verification is enforced by default: an unpinned DAR fails closed
+# rather than silently trusting whatever was downloaded.
+#
+# To establish trust the first time (or after an intentional version bump),
+# run once with DAML_FINANCE_ALLOW_UNPINNED=1, copy the printed sha256 for
+# each DAR into EXPECTED_SHA256 below, and commit it.
+declare -A EXPECTED_SHA256=(
+  # ["daml-finance-interface-types-common"]="<sha256>"
+  # ["daml-finance-interface-holding"]="<sha256>"
+  # ["daml-finance-interface-util"]="<sha256>"
+  # ["daml-finance-holding"]="<sha256>"
+)
+ALLOW_UNPINNED="${DAML_FINANCE_ALLOW_UNPINNED:-0}"
+
+verify_sha() {
+  # $1 = dar name, $2 = file path
+  local name="$1" file="$2"
+  local actual
+  actual="$(shasum -a 256 "$file" 2>/dev/null | awk '{print $1}')"
+  [ -z "$actual" ] && actual="$(sha256sum "$file" 2>/dev/null | awk '{print $1}')"
+  local expected="${EXPECTED_SHA256[$name]:-}"
+  if [ -z "$expected" ]; then
+    if [ "$ALLOW_UNPINNED" = "1" ]; then
+      echo "  NOTE: $name sha256=$actual — add to EXPECTED_SHA256 and commit"
+      return 0
+    fi
+    echo "  FAILED: no pinned sha256 for $name (refusing trust-on-first-use)."
+    echo "    Establish trust explicitly: re-run with DAML_FINANCE_ALLOW_UNPINNED=1,"
+    echo "    record the printed sha256 in EXPECTED_SHA256, and commit it."
+    rm -f "$file"
+    return 1
+  fi
+  if [ "$actual" != "$expected" ]; then
+    echo "  FAILED: $name sha256 mismatch"
+    echo "    expected: $expected"
+    echo "    actual:   $actual"
+    rm -f "$file"
+    return 1
+  fi
+  echo "  OK: $name sha256 verified"
+  return 0
+}
+
 echo "Fetching Daml Finance library DARs (v${DAML_FINANCE_VERSION})..."
 echo "Target: $LIB_DIR"
 echo ""
@@ -40,6 +92,7 @@ for dar in "${REQUIRED_DARS[@]}"; do
 
   if [ -f "$TARGET_FILE" ]; then
     echo "  OK: $dar (already present)"
+    verify_sha "$dar" "$TARGET_FILE" || FAILED=1
     continue
   fi
 
@@ -48,12 +101,14 @@ for dar in "${REQUIRED_DARS[@]}"; do
   echo "  Downloading: $dar..."
 
   if curl -sSL --fail -o "$TARGET_FILE" "$URL" 2>/dev/null; then
-    echo "  OK: $dar"
+    echo "  OK: $dar (downloaded)"
+    verify_sha "$dar" "$TARGET_FILE" || FAILED=1
   else
     # Fallback: try without version suffix in filename
     URL2="${DAML_FINANCE_REPO}/v${DAML_FINANCE_VERSION}/${dar}.dar"
     if curl -sSL --fail -o "$TARGET_FILE" "$URL2" 2>/dev/null; then
-      echo "  OK: $dar"
+      echo "  OK: $dar (downloaded)"
+      verify_sha "$dar" "$TARGET_FILE" || FAILED=1
     else
       echo "  FAILED: $dar"
       echo "    Could not download from:"

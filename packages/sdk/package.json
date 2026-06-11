@@ -1,6 +1,6 @@
 {
   "name": "@canton-streams/sdk",
-  "version": "0.2.7",
+  "version": "1.0.0-rc.1",
   "description": "TypeScript SDK for Canton Payment Streams — gRPC-first continuous payment streaming",
   "license": "Apache-2.0",
   "type": "module",
@@ -40,6 +40,11 @@
       "types": "./dist/browser.d.ts",
       "import": "./dist/browser.js",
       "require": "./dist/browser.cjs"
+    },
+    "./helpers": {
+      "types": "./dist/helpers.d.ts",
+      "import": "./dist/helpers.js",
+      "require": "./dist/helpers.cjs"
     }
   },
   "files": [

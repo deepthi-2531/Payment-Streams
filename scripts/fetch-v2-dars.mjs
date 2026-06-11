@@ -86,11 +86,19 @@ export const SPLICE_PINNED_AS_OF = '2026-06-02';
 /**
  * V1 interface packages required as build-only data-dependencies by the
  * V2 utils and test infrastructure packages (which dual-implement V1+V2
- * per CIP-0112 §5 even though we, the streams library, are V2-only).
+ * per CIP-0112 §5). The Streams repo also carries an isolated transitional
+ * V1 allocation lane for live assets that have not yet published V2.
  *
  * `role: 'build-only'` means: build in the temp clone so subsequent
  * dependent builds find the `-current.dar` alias, but do NOT copy to our
  * `.lib/` directory. We don't import these in our own Daml code.
+ *
+ * Exception (transitional V1 lane): `splice-api-token-holding-v1`,
+ * `splice-api-token-allocation-v1`, and
+ * `splice-api-token-allocation-request-v1` ARE copied to `.lib/` because
+ * `packages/daml/v1-shim` implements the V1 AllocationRequest interface
+ * against them. Restore `role: 'build-only'` on those three when the V1
+ * lane is retired (see "V1 lane retirement" in CHANGELOG.md).
  */
 const V1_BUILD_ONLY_DARS = [
   {
@@ -98,7 +106,6 @@ const V1_BUILD_ONLY_DARS = [
     version: '1.0.0',
     filename: 'splice-api-token-holding-v1-1.0.0.dar',
     location: 'token-standard/splice-api-token-holding-v1',
-    role: 'build-only',
   },
   {
     name: 'splice-api-token-transfer-instruction-v1',
@@ -112,7 +119,6 @@ const V1_BUILD_ONLY_DARS = [
     version: '1.0.0',
     filename: 'splice-api-token-allocation-v1-1.0.0.dar',
     location: 'token-standard/splice-api-token-allocation-v1',
-    role: 'build-only',
   },
   {
     name: 'splice-api-token-allocation-instruction-v1',
@@ -126,7 +132,6 @@ const V1_BUILD_ONLY_DARS = [
     version: '1.0.0',
     filename: 'splice-api-token-allocation-request-v1-1.0.0.dar',
     location: 'token-standard/splice-api-token-allocation-request-v1',
-    role: 'build-only',
   },
 ];
 
@@ -278,8 +283,8 @@ const V2_TEST_INFRASTRUCTURE_DARS = [
 //
 //   1. metadata-v1 — depended on by everything else
 //   2. V1 build-only packages — depended on by utils + test infrastructure
-//      (which dual-implement V1+V2 per CIP-0112 §5 even though we
-//      ourselves are V2-only)
+//      (which dual-implement V1+V2 per CIP-0112 §5) and by the isolated
+//      transitional V1 allocation lane.
 //   3. V2 interface packages — depend on metadata-v1
 //   4. utils + test infrastructure packages — depend on V1 + V2
 //
@@ -302,22 +307,40 @@ const EXPECTED_WRITTEN_DAR_COUNT = DAR_SOURCES.filter((dar) => dar.role !== 'bui
 
 function parseArgs(argv) {
   const args = {
-    ref: 'main',
+    // Default to the pinned, vetted commit — NOT the moving `main`
+    // branch. A build that silently tracks upstream main can compile a
+    // compromised upstream into the production holding adapter.
+    ref: SPLICE_PINNED_COMMIT,
     mode: 'source-build',
     dryRun: false,
     spliceCheckout: null,
     keepClone: false,
+    // When set, regenerate the committed pin file instead of
+    // verifying against it. Required to intentionally accept new hashes.
+    updateHashes: false,
   };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--ref') args.ref = argv[++i];
+    // Accept `--splice-ref` as an alias so the CI workflow (daml.yml)
+    // and operators who use the documented flag name don't have their
+    // ref SILENTLY ignored and fall back to a default.
+    else if (a === '--splice-ref') args.ref = argv[++i];
     else if (a === '--mode') args.mode = argv[++i];
     else if (a === '--splice-checkout') args.spliceCheckout = argv[++i];
     else if (a === '--keep-clone') args.keepClone = true;
     else if (a === '--dry-run') args.dryRun = true;
+    else if (a === '--update-hashes') args.updateHashes = true;
     else if (a === '--help' || a === '-h') {
       printUsage();
       process.exit(0);
+    } else {
+      // Reject unknown flags instead of silently ignoring them — a
+      // typo'd or unrecognized flag must not change the build's posture
+      // without the operator noticing.
+      console.error(`Unknown argument: ${a}`);
+      printUsage();
+      process.exit(2);
     }
   }
   return args;
@@ -622,8 +645,71 @@ function writeDars(results, args) {
       ) + '\n',
     );
     log(`✓ wrote ${hashFile}`);
+
+    // Verify the freshly-fetched hashes against the COMMITTED pin
+    // file, which lives outside the gitignored .lib/ so it can't be
+    // overwritten by the same fetch run. The V2_DAR_HASHES.json written
+    // above is a record of THIS run; the pin file is the source of truth.
+    verifyAgainstPins(hashes, args);
   }
   return fetchedCount;
+}
+
+// Committed pin manifest — tracked in git, NOT under .lib/.
+const PIN_FILE = resolve(__dirname, 'v2-dar-pins.json');
+
+/**
+ * Compare freshly-fetched DAR SHA-256s against the committed pin file.
+ *
+ *  - `--update-hashes`: (re)write the pin file from the fetched hashes.
+ *    This is the only way to intentionally accept new upstream hashes;
+ *    the resulting diff to v2-dar-pins.json must be reviewed in a PR.
+ *  - No pin file yet, without `--update-hashes`: hard error (refuse to
+ *    establish trust silently — run once with --update-hashes and commit).
+ *  - Pin file present: every fetched DAR must match. A single mismatch or
+ *    a DAR missing from the pins aborts with a non-zero exit.
+ */
+function verifyAgainstPins(fetched, args) {
+  if (args.updateHashes) {
+    const pins = {};
+    for (const [name, meta] of Object.entries(fetched)) {
+      pins[name] = { sha256: meta.sha256, size: meta.size };
+    }
+    writeFileSync(
+      PIN_FILE,
+      JSON.stringify({ pinnedCommit: SPLICE_PINNED_COMMIT, dars: pins }, null, 2) + '\n',
+    );
+    log(`✓ updated pin file ${PIN_FILE} (review the diff before committing)`);
+    return;
+  }
+  if (!existsSync(PIN_FILE)) {
+    throw new Error(
+      `No pinned hash manifest at ${PIN_FILE}. Establish trust explicitly: ` +
+        `run once with --update-hashes, review the generated v2-dar-pins.json, ` +
+        `and commit it. Subsequent fetches then verify against it.`,
+    );
+  }
+  const pinned = JSON.parse(readFileSync(PIN_FILE, 'utf8'));
+  const mismatches = [];
+  for (const [name, meta] of Object.entries(fetched)) {
+    const pin = pinned.dars?.[name];
+    if (!pin) {
+      mismatches.push(`${name}: not present in pin file`);
+    } else if (pin.sha256 !== meta.sha256) {
+      mismatches.push(
+        `${name}: sha256 mismatch\n      pinned : ${pin.sha256}\n      fetched: ${meta.sha256}`,
+      );
+    }
+  }
+  if (mismatches.length > 0) {
+    throw new Error(
+      `DAR hash verification FAILED — fetched DARs do not match the ` +
+        `committed pins in ${PIN_FILE}:\n  - ${mismatches.join('\n  - ')}\n\n` +
+        `If this change is intentional (you bumped SPLICE_PINNED_COMMIT), ` +
+        `re-run with --update-hashes and commit the reviewed v2-dar-pins.json.`,
+    );
+  }
+  log(`✓ all ${Object.keys(fetched).length} DAR hashes match committed pins`);
 }
 
 // ---------------------------------------------------------------------------

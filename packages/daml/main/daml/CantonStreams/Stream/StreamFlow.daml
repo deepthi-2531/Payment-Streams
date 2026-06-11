@@ -256,6 +256,13 @@ template StreamFlow
           (status /= FlowStopped)
         Bridge.requireSettlementReference settlementReference
 
+        -- Bound withdrawTime to ledger time for consistency with the
+        -- escrow templates. The funded-balance cap already limits the blast
+        -- radius here, but a future withdrawTime would still over-state
+        -- accrual up to that cap.
+        now <- getTime
+        assertMsg "withdrawTime must be at or before ledger time" (withdrawTime <= now)
+
         let elapsedMicros = flowElapsedMicros startTime cumulativePausedDuration
                               status pausedAt withdrawTime
             accrued = flowAccrued flowRate elapsedMicros
@@ -283,6 +290,10 @@ template StreamFlow
       controller sender
       do
         assertMsg "Stream must be active to pause" (status == FlowActive)
+        -- Bound pauseTime; it feeds cumulativePausedDuration
+        -- and thus the accrual clock.
+        now <- getTime
+        assertMsg "pauseTime must be at or before ledger time" (pauseTime <= now)
         archive self
         create this with
           status = FlowPaused
@@ -298,6 +309,9 @@ template StreamFlow
       controller sender
       do
         assertMsg "Stream must be paused to resume" (status == FlowPaused)
+        -- Bound resumeTime; it feeds cumulativePausedDuration.
+        now <- getTime
+        assertMsg "resumeTime must be at or before ledger time" (resumeTime <= now)
         pauseStart <- case pausedAt of
           Some t -> pure t
           None -> abort "Invariant violation: FlowPaused but pausedAt is None"

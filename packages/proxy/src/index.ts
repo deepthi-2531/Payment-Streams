@@ -22,6 +22,11 @@
  *   POST   /api/streams/:sender/:streamId/mutual-cancel → mutualCancel
  *   POST   /api/streams/:sender/:streamId/renew       → renew
  *   POST   /api/streams/:sender/:streamId/finalize    → finalize (service-only)
+ *   GET    /api/flows                                 → listFlows
+ *   POST   /api/flows                                 → createFlow
+ *   POST   /api/flows/:sender/:flowId/top-up          → topUpFlow
+ *   POST   /api/flows/:sender/:flowId/withdraw        → withdrawFlow
+ *   POST   /api/flows/:sender/:flowId/stop            → stopFlow
  *   GET    /api/policies                              → listPolicies
  *   POST   /api/policies/:contractId/revoke           → revokePolicy
  *   GET    /api/execution-logs                        → listExecutionLogs
@@ -52,6 +57,8 @@ import type {
   StreamFilter,
   PendingStreamRequestFilter,
   CreateStreamParams,
+  CreateFlowParams,
+  FlowFilter,
   RenewParams,
 } from '@canton-streams/sdk';
 import { AssetType, VestingMode, SettlementMode } from '@canton-streams/sdk';
@@ -67,6 +74,7 @@ import {
   type AuthResult,
   AuthError,
   parseAuthConfig,
+  assertAuthConfigSafe,
   authorizeRequest,
   getRequiredRole,
   enforceRole,
@@ -82,6 +90,15 @@ import {
   runTokenStandardAutoWithdrawCycle,
   startTokenStandardAutoWithdrawWorker,
 } from './auto-withdraw.js';
+import {
+  requireAmount,
+  optionalAmount,
+  requireNonNegativeAmount,
+  requirePartyId,
+  optionalPartyId,
+  requireId,
+  optionalId,
+} from './validation.js';
 
 // ---------------------------------------------------------------------------
 // Configuration from environment
@@ -96,6 +113,9 @@ const autoWithdrawConfig = parseAutoWithdrawConfig(process.env);
 
 /** Auth configuration parsed from environment. */
 const authConfig: AuthConfig = parseAuthConfig();
+// Fail closed at boot: refuse to start with a spoofable dev-auth
+// posture unless it is explicitly acknowledged AND loopback-bound.
+assertAuthConfigSafe(authConfig);
 let startupReadiness: ReadinessReport | null = null;
 let stopAutoWithdrawWorker: (() => void) | null = null;
 
@@ -119,10 +139,15 @@ app.use(
       // because those flows authenticate via Tier-2 service token, not session.
       if (!origin) return cb(null, true);
       if (PROXY_ALLOWED_ORIGINS.length === 0) {
-        // Dev safety: when no allow-list is configured AND we're in dev mode,
-        // permit localhost only. Production must set ALLOWED_ORIGINS.
-        const mode = process.env['PROXY_AUTH_MODE'] ?? 'dev';
-        if (mode === 'dev' && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+        // Dev safety: when no allow-list is configured AND we're in the
+        // effective dev-auth posture, permit localhost only. Production
+        // (jwt mode) must set ALLOWED_ORIGINS. Use the resolved
+        // `authConfig.mode`, not the raw env, so a downgraded dev request
+        // doesn't accidentally widen CORS.
+        if (
+          authConfig.mode === 'dev' &&
+          /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)
+        ) {
           return cb(null, true);
         }
         return cb(new Error(`CORS: no ALLOWED_ORIGINS configured; origin ${origin} rejected`));
@@ -134,7 +159,48 @@ app.use(
   }),
 );
 
-app.use(express.json());
+// Cap request bodies. Stream-create / batch payloads are small JSON;
+// 64kb is generous and stops memory-exhaustion via oversized POSTs.
+app.use(express.json({ limit: process.env['PROXY_BODY_LIMIT'] ?? '64kb' }));
+
+// Lightweight in-process rate limiter (no external dependency). A
+// fixed-window per-IP counter — enough to blunt brute-force / credential-
+// exhaustion against this fund-moving surface. Operators fronting the proxy
+// with a real gateway (nginx, API gateway) can disable it via
+// PROXY_RATE_LIMIT_DISABLE=true. Tune with PROXY_RATE_LIMIT_MAX (requests)
+// and PROXY_RATE_LIMIT_WINDOW_MS (window).
+const RATE_LIMIT_DISABLED = process.env['PROXY_RATE_LIMIT_DISABLE'] === 'true';
+const RATE_LIMIT_MAX = parseInt(process.env['PROXY_RATE_LIMIT_MAX'] ?? '120', 10);
+const RATE_LIMIT_WINDOW_MS = parseInt(
+  process.env['PROXY_RATE_LIMIT_WINDOW_MS'] ?? '60000',
+  10,
+);
+const rateBuckets = new Map<string, { count: number; resetAt: number }>();
+if (!RATE_LIMIT_DISABLED) {
+  app.use((req, res, next) => {
+    // Health/readiness probes are exempt so monitors don't get throttled.
+    if (req.path === '/api/health' || req.path === '/api/readyz') return next();
+    const key = req.ip ?? req.socket.remoteAddress ?? 'unknown';
+    const now = Date.now();
+    const bucket = rateBuckets.get(key);
+    if (!bucket || now >= bucket.resetAt) {
+      rateBuckets.set(key, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
+      return next();
+    }
+    bucket.count += 1;
+    if (bucket.count > RATE_LIMIT_MAX) {
+      res.setHeader('Retry-After', Math.ceil((bucket.resetAt - now) / 1000));
+      return res.status(429).json({ error: 'rate_limit_exceeded' });
+    }
+    next();
+  });
+  // Evict stale buckets every window so the map can't grow without bound.
+  const sweep = setInterval(() => {
+    const now = Date.now();
+    for (const [k, b] of rateBuckets) if (now >= b.resetAt) rateBuckets.delete(k);
+  }, RATE_LIMIT_WINDOW_MS);
+  sweep.unref?.();
+}
 
 /**
  * Authorize the request for the given action and create a CantonStreamsClient.
@@ -190,6 +256,61 @@ async function createAuthorizedClientWithParty(
   };
 
   return { client: new CantonStreamsClient(config), party: auth.actAs[0] ?? '' };
+}
+
+/**
+ * Parties allowed to read across other parties' streams (operators,
+ * dashboards run by the dApp). Defaults to the service-party allow-list,
+ * extensible via PROXY_OPERATOR_READERS. When empty, NO party may read
+ * streams it does not participate in.
+ */
+const OPERATOR_READERS: Set<string> = new Set(
+  [
+    ...(process.env['PROXY_SERVICE_PARTIES']?.split(',') ?? []),
+    ...(process.env['PROXY_OPERATOR_READERS']?.split(',') ?? []),
+    process.env['PROXY_ESCROW_OPERATOR'] ?? '',
+  ]
+    .map((p) => p.trim())
+    .filter(Boolean),
+);
+
+/**
+ * Enforce that a read request is scoped to the caller's own party.
+ *
+ * The ledger's own visibility is NOT a sufficient authorization boundary
+ * for a multi-tenant proxy: if the proxy's actAs identity can see other
+ * parties' contracts (operator/escrow readAs, sub-party grants), a caller
+ * could pass `?sender=Victim` and read streams they don't participate in.
+ *
+ * Rule: any provided `sender`/`recipient` filter MUST equal the caller's
+ * party, UNLESS the caller is a configured operator-reader. When no filter
+ * is provided, we pin BOTH to the caller party so list results are scoped
+ * to streams the caller participates in.
+ *
+ * Returns the (possibly defaulted) filter to use.
+ */
+function scopeReadFilter(
+  caller: string,
+  provided: { sender?: string; recipient?: string },
+): { sender?: string; recipient?: string } {
+  if (OPERATOR_READERS.has(caller)) return provided; // operator: unrestricted
+  const offendsSender = provided.sender && provided.sender !== caller;
+  const offendsRecipient = provided.recipient && provided.recipient !== caller;
+  if (offendsSender || offendsRecipient) {
+    throw new AuthError(
+      403,
+      'read_scope_violation',
+      'You may only query streams where you are the sender or recipient.',
+    );
+  }
+  // No explicit filter → scope to the caller. We can't express "sender OR
+  // recipient = caller" in a single filter, so callers that want both
+  // directions should issue two queries; default to recipient-scoped
+  // (the inbox view) and let an explicit `?sender=<self>` cover outgoing.
+  if (!provided.sender && !provided.recipient) {
+    return { recipient: caller };
+  }
+  return provided;
 }
 
 /**
@@ -407,6 +528,19 @@ async function getStreamOrThrow(client: CantonStreamsClient, sender: string, str
   }
 }
 
+async function getFlowOrThrow(client: CantonStreamsClient, sender: string, flowId: string) {
+  const flows = await client.listFlows({ sender });
+  const flow = flows.find((f) => f.sender === sender && f.streamId === flowId);
+  if (!flow) {
+    throw new AuthError(
+      404,
+      'flow_not_found',
+      `Flow not found: sender=${sender}, flowId=${flowId}`,
+    );
+  }
+  return flow;
+}
+
 // ---------------------------------------------------------------------------
 // JSON serialization helpers for Decimal
 // ---------------------------------------------------------------------------
@@ -439,11 +573,15 @@ function parseCreateParams(
   const rawRef = body['instrumentRef'] as
     | { depository: string; issuer: string; instrumentId: string; instrumentVersion: string }
     | undefined;
+  // Validate before any Decimal/Date construction.
+  const sender = requirePartyId(body['sender'] ?? callerParty, 'sender');
+  const recipient = requirePartyId(body['recipient'], 'recipient');
+  const totalDeposited = requireAmount(body['totalDeposited'], 'totalDeposited');
   return {
     streamId: (body['streamId'] as string | undefined) ?? crypto.randomUUID(),
-    sender: (body['sender'] as string | undefined) ?? callerParty ?? '',
-    recipient: body['recipient'] as string,
-    totalDeposited: new Decimal(body['totalDeposited'] as string),
+    sender,
+    recipient,
+    totalDeposited,
     startTime: new Date(body['startTime'] as string),
     endTime: new Date(body['endTime'] as string),
     vestingMode: parseVestingMode(body['vestingMode'] as Record<string, unknown>),
@@ -477,7 +615,7 @@ function parseVestingMode(raw: Record<string, unknown>): CreateStreamParams['ves
       return {
         mode: VestingMode.Stepped,
         stepInterval: raw['stepInterval'] as number,
-        amountPerStep: new Decimal(raw['amountPerStep'] as string),
+        amountPerStep: requireAmount(raw['amountPerStep'], 'amountPerStep'),
       };
     case VestingMode.RenewableTerm:
       return { mode: VestingMode.RenewableTerm, termDuration: raw['termDuration'] as number };
@@ -489,17 +627,16 @@ function parseVestingMode(raw: Record<string, unknown>): CreateStreamParams['ves
 
 function parseRenewParams(body: Record<string, unknown>): RenewParams {
   return {
-    additionalAmount: new Decimal(body['additionalAmount'] as string),
+    additionalAmount: requireAmount(body['additionalAmount'], 'additionalAmount'),
     newEndTime: new Date(body['newEndTime'] as string),
     holdingCid: body['holdingCid'] as string,
     senderAccount: body['senderAccount'] as RenewParams['senderAccount'],
     fundingReference: body['fundingReference'] as string | undefined,
     settlementReference: body['settlementReference'] as string | undefined,
-    confirmedAdditionalAmount:
-      typeof body['confirmedAdditionalAmount'] === 'string' ||
-      typeof body['confirmedAdditionalAmount'] === 'number'
-        ? new Decimal(body['confirmedAdditionalAmount'] as string | number)
-        : undefined,
+    confirmedAdditionalAmount: optionalAmount(
+      body['confirmedAdditionalAmount'],
+      'confirmedAdditionalAmount',
+    ),
   };
 }
 
@@ -511,14 +648,20 @@ function parseRenewParams(body: Record<string, unknown>): RenewParams {
 app.get('/api/stream-requests', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // Scope the sender/recipient filter to the caller's own party.
+    const scoped = scopeReadFilter(authed.party, {
+      sender: req.query['sender'] as string | undefined,
+      recipient: req.query['recipient'] as string | undefined,
+    });
     const filter: {
       sender?: string;
       recipient?: string;
       assetType?: PendingStreamRequestFilter['assetType'];
     } = {};
-    if (req.query['sender']) filter.sender = req.query['sender'] as string;
-    if (req.query['recipient']) filter.recipient = req.query['recipient'] as string;
+    if (scoped.sender) filter.sender = scoped.sender;
+    if (scoped.recipient) filter.recipient = scoped.recipient;
     if (req.query['assetType'])
       filter.assetType = req.query['assetType'] as PendingStreamRequestFilter['assetType'];
 
@@ -537,7 +680,13 @@ app.get('/api/stream-requests', async (req, res) => {
 app.get('/api/streams', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // Scope the sender/recipient filter to the caller's own party.
+    const scoped = scopeReadFilter(authed.party, {
+      sender: req.query['sender'] as string | undefined,
+      recipient: req.query['recipient'] as string | undefined,
+    });
     const filter: {
       sender?: string;
       recipient?: string;
@@ -545,8 +694,8 @@ app.get('/api/streams', async (req, res) => {
       vestingMode?: StreamFilter['vestingMode'];
       settlementMode?: StreamFilter['settlementMode'];
     } = {};
-    if (req.query['sender']) filter.sender = req.query['sender'] as string;
-    if (req.query['recipient']) filter.recipient = req.query['recipient'] as string;
+    if (scoped.sender) filter.sender = scoped.sender;
+    if (scoped.recipient) filter.recipient = scoped.recipient;
     if (req.query['status']) filter.status = req.query['status'] as StreamFilter['status'];
     if (req.query['vestingMode'])
       filter.vestingMode = req.query['vestingMode'] as StreamFilter['vestingMode'];
@@ -568,8 +717,22 @@ app.get('/api/streams', async (req, res) => {
 app.get('/api/streams/:sender/:streamId', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
     const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
+    // A specific stream is only readable by its participants (or a
+    // configured operator-reader). The ledger may surface it more broadly
+    // through the proxy's actAs identity, so enforce participation here.
+    const isParticipant =
+      stream.config.sender === authed.party ||
+      stream.config.recipient === authed.party;
+    if (!isParticipant && !OPERATOR_READERS.has(authed.party)) {
+      throw new AuthError(
+        403,
+        'read_scope_violation',
+        'You may only read a stream where you are the sender or recipient.',
+      );
+    }
     res.json(serializeForJson(stream));
   } catch (err) {
     handleError(res, err, 'getStream');
@@ -582,7 +745,22 @@ app.get('/api/streams/:sender/:streamId', async (req, res) => {
 app.get('/api/streams/:sender/:streamId/history', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // History exposes the same stream data as the getter, so apply the
+    // same participation check: only the sender, recipient, or a
+    // configured operator-reader may read it.
+    const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
+    const isParticipant =
+      stream.config.sender === authed.party ||
+      stream.config.recipient === authed.party;
+    if (!isParticipant && !OPERATOR_READERS.has(authed.party)) {
+      throw new AuthError(
+        403,
+        'read_scope_violation',
+        'You may only read a stream where you are the sender or recipient.',
+      );
+    }
     const events = await client.getStreamHistory(req.params['sender']!, req.params['streamId']!);
     res.json(serializeForJson(events));
   } catch (err) {
@@ -599,7 +777,7 @@ app.post('/api/streams', async (req, res) => {
     const auth = await authorizeRequest(req, 'create', authConfig);
     // Enforce: caller must be the sender. If the body specifies a sender,
     // verify it matches the caller. Otherwise the caller IS the sender.
-    const bodySender = (req.body?.['sender'] as string | undefined) ?? auth.party;
+    const bodySender = requirePartyId(req.body?.['sender'] ?? auth.party, 'sender');
     enforceRole(auth.party, getRequiredRole('create'), bodySender);
 
     const params = parseCreateParams(req.body, auth.party);
@@ -619,16 +797,17 @@ app.post('/api/streams/:sender/:streamId/accept', async (req, res) => {
   let serviceClient: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'accept', authConfig);
-    const sender = req.params['sender']!;
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const streamId = requireId(req.params['streamId'], 'streamId');
     client = createClientForAuth(auth);
-    const request = await getPendingRequestOrThrow(client, sender, req.params['streamId']!);
+    const request = await getPendingRequestOrThrow(client, sender, streamId);
     enforceRole(
       auth.party,
       getRequiredRole('accept'),
       request.config.sender,
       request.config.recipient,
     );
-    const accepted = await client.acceptStream(sender, req.params['streamId']!);
+    const accepted = await client.acceptStream(sender, streamId);
 
     if (
       request.config.settlementMode === SettlementMode.UtilityHoldingCustody ||
@@ -647,7 +826,7 @@ app.post('/api/streams/:sender/:streamId/accept', async (req, res) => {
           : createInternalServiceClient(additionalParties);
       const finalized = await serviceClient.finalizeEscrow(
         sender,
-        req.params['streamId']!,
+        streamId,
         accepted.escrowContractId,
         request.config.settlementMode,
       );
@@ -671,8 +850,8 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
   let serviceClient: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'withdraw', authConfig);
-    const sender = req.params['sender']!;
-    const streamId = req.params['streamId']!;
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const streamId = requireId(req.params['streamId'], 'streamId');
     lookupClient = createClientForAuth(auth);
     const stream = await getStreamOrThrow(lookupClient, sender, streamId);
     enforceRole(
@@ -685,10 +864,7 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
 
     // TokenStandardCustody: auto-orchestrate if no settlement reference supplied
     if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
-      const manualRef =
-        typeof req.body?.['settlementReference'] === 'string'
-          ? req.body['settlementReference']
-          : undefined;
+      const manualRef = optionalId(req.body?.['settlementReference'], 'settlementReference');
       serviceClient = createTokenStandardExecutionClient(auth);
 
       if (manualRef) {
@@ -702,11 +878,9 @@ app.post('/api/streams/:sender/:streamId/withdraw', async (req, res) => {
         // threaded through to the SDK so Daml sees consistent values.
         const withdrawTime = new Date();
         let settledAmount: Decimal;
-        if (
-          typeof req.body?.['settledAmount'] === 'string' ||
-          typeof req.body?.['settledAmount'] === 'number'
-        ) {
-          settledAmount = new Decimal(req.body['settledAmount'] as string | number);
+        const suppliedSettledAmount = optionalAmount(req.body?.['settledAmount'], 'settledAmount');
+        if (suppliedSettledAmount) {
+          settledAmount = suppliedSettledAmount;
         } else {
           // Auto-compute: linearAccrual(totalDeposited, start, end, withdrawTime) − totalWithdrawn
           const nowMicros = BigInt(withdrawTime.getTime()) * 1000n;
@@ -782,28 +956,39 @@ app.post('/api/streams/:sender/:streamId/cancel', async (req, res) => {
   let lookupClient: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'cancel', authConfig);
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const streamId = requireId(req.params['streamId'], 'streamId');
     // Enforce: caller must be the sender (cancel is sender-only)
-    enforceRole(auth.party, getRequiredRole('cancel'), req.params['sender']!);
-    const sender = req.params['sender']!;
-    const streamId = req.params['streamId']!;
+    enforceRole(auth.party, getRequiredRole('cancel'), sender);
     lookupClient = createClientForAuth(auth);
     const stream = await getStreamOrThrow(lookupClient, sender, streamId);
     client = createClientForAuthWithParties(auth, utilityMutationParties(stream));
 
     if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
+      const recipientSettlementReference = optionalId(
+        req.body?.['recipientSettlementReference'],
+        'recipientSettlementReference',
+      );
+      const senderRefundReference = optionalId(
+        req.body?.['senderRefundReference'],
+        'senderRefundReference',
+      );
       const hasManualRefs =
-        typeof req.body?.['recipientSettlementReference'] === 'string' ||
-        typeof req.body?.['senderRefundReference'] === 'string';
+        recipientSettlementReference !== undefined || senderRefundReference !== undefined;
 
       if (hasManualRefs) {
         // Manual mode: caller supplies settlement refs for both legs
         const tokenStandardParams = {
-          recipientSettlementReference: req.body['recipientSettlementReference'] as
-            | string
-            | undefined,
-          senderRefundReference: req.body['senderRefundReference'] as string | undefined,
-          recipientAmountSettled: new Decimal(req.body?.['recipientAmountSettled'] as string),
-          senderRefundSettled: new Decimal(req.body?.['senderRefundSettled'] as string),
+          recipientSettlementReference,
+          senderRefundReference,
+          recipientAmountSettled: requireAmount(
+            req.body?.['recipientAmountSettled'],
+            'recipientAmountSettled',
+          ),
+          senderRefundSettled: requireAmount(
+            req.body?.['senderRefundSettled'],
+            'senderRefundSettled',
+          ),
         };
         const result = await client.cancel(sender, streamId, tokenStandardParams);
         res.json(serializeForJson(result));
@@ -839,8 +1024,8 @@ app.post('/api/streams/:sender/:streamId/mutual-cancel', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'mutual-cancel', authConfig);
-    const sender = req.params['sender']!;
-    const streamId = req.params['streamId']!;
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const streamId = requireId(req.params['streamId'], 'streamId');
     lookupClient = createClientForAuth(auth);
     const stream = await getStreamOrThrow(lookupClient, sender, streamId);
     enforceRole(
@@ -860,19 +1045,30 @@ app.post('/api/streams/:sender/:streamId/mutual-cancel', async (req, res) => {
     client = createClientForAuthWithParties(auth, mutualParties);
 
     if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
+      const recipientSettlementReference = optionalId(
+        req.body?.['recipientSettlementReference'],
+        'recipientSettlementReference',
+      );
+      const senderRefundReference = optionalId(
+        req.body?.['senderRefundReference'],
+        'senderRefundReference',
+      );
       const hasManualRefs =
-        typeof req.body?.['recipientSettlementReference'] === 'string' ||
-        typeof req.body?.['senderRefundReference'] === 'string';
+        recipientSettlementReference !== undefined || senderRefundReference !== undefined;
 
       if (hasManualRefs) {
         // Manual mode: caller supplies settlement refs for both legs
         const tokenStandardParams = {
-          recipientSettlementReference: req.body['recipientSettlementReference'] as
-            | string
-            | undefined,
-          senderRefundReference: req.body['senderRefundReference'] as string | undefined,
-          recipientAmountSettled: new Decimal(req.body?.['recipientAmountSettled'] as string),
-          senderRefundSettled: new Decimal(req.body?.['senderRefundSettled'] as string),
+          recipientSettlementReference,
+          senderRefundReference,
+          recipientAmountSettled: requireAmount(
+            req.body?.['recipientAmountSettled'],
+            'recipientAmountSettled',
+          ),
+          senderRefundSettled: requireAmount(
+            req.body?.['senderRefundSettled'],
+            'senderRefundSettled',
+          ),
         };
         const result = await client.mutualCancel(sender, streamId, tokenStandardParams);
         res.json(serializeForJson(result));
@@ -908,19 +1104,16 @@ app.post('/api/streams/:sender/:streamId/renew', async (req, res) => {
   let lookupClient: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'renew', authConfig);
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const streamId = requireId(req.params['streamId'], 'streamId');
     // Enforce: caller must be the sender (renew is sender-only)
-    enforceRole(auth.party, getRequiredRole('renew'), req.params['sender']!);
-    const sender = req.params['sender']!;
-    const streamId = req.params['streamId']!;
+    enforceRole(auth.party, getRequiredRole('renew'), sender);
     lookupClient = createClientForAuth(auth);
     const stream = await getStreamOrThrow(lookupClient, sender, streamId);
     client = createClientForAuthWithParties(auth, utilityMutationParties(stream));
 
     if (stream.config.settlementMode === SettlementMode.TokenStandardCustody) {
-      const manualRef =
-        typeof req.body?.['settlementReference'] === 'string'
-          ? req.body['settlementReference']
-          : undefined;
+      const manualRef = optionalId(req.body?.['settlementReference'], 'settlementReference');
 
       const params = parseRenewParams(req.body);
 
@@ -968,12 +1161,12 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
   let requestClient: CantonStreamsClient | undefined;
   let client: CantonStreamsClient | undefined;
   try {
-    const sender = req.params['sender']!;
-    const streamId = req.params['streamId']!;
-    const acceptedRequestContractId =
-      typeof req.body?.['acceptedRequestContractId'] === 'string'
-        ? req.body['acceptedRequestContractId']
-        : undefined;
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const streamId = requireId(req.params['streamId'], 'streamId');
+    const acceptedRequestContractId = optionalId(
+      req.body?.['acceptedRequestContractId'],
+      'acceptedRequestContractId',
+    );
     const settlementMode =
       typeof req.body?.['settlementMode'] === 'string'
         ? (req.body['settlementMode'] as SettlementMode)
@@ -1010,10 +1203,7 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
       const actAs = [escrowOperator];
       client = await createServiceClient(req, []);
 
-      const manualRef =
-        typeof req.body?.['settlementReference'] === 'string'
-          ? req.body['settlementReference']
-          : undefined;
+      const manualRef = optionalId(req.body?.['settlementReference'], 'settlementReference');
 
       if (!manualRef) {
         const result = await orchestrator.finalize(
@@ -1039,19 +1229,15 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
     const finalizeParams =
       settlementMode === SettlementMode.TokenStandardCustody
         ? {
-            escrowReference:
-              typeof req.body?.['escrowReference'] === 'string'
-                ? req.body['escrowReference']
-                : undefined,
-            settlementReference:
-              typeof req.body?.['settlementReference'] === 'string'
-                ? req.body['settlementReference']
-                : undefined,
-            confirmedEscrowAmount:
-              typeof req.body?.['confirmedEscrowAmount'] === 'string' ||
-              typeof req.body?.['confirmedEscrowAmount'] === 'number'
-                ? new Decimal(req.body['confirmedEscrowAmount'] as string | number)
-                : undefined,
+            escrowReference: optionalId(req.body?.['escrowReference'], 'escrowReference'),
+            settlementReference: optionalId(
+              req.body?.['settlementReference'],
+              'settlementReference',
+            ),
+            confirmedEscrowAmount: optionalAmount(
+              req.body?.['confirmedEscrowAmount'],
+              'confirmedEscrowAmount',
+            ),
           }
         : undefined;
     const result = await client.finalizeEscrow(
@@ -1066,6 +1252,195 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
     handleError(res, err, 'finalize');
   } finally {
     await requestClient?.close();
+    await client?.close();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Open-ended flow routes (StreamFlow — non-prefunded / rolling top-up)
+// ---------------------------------------------------------------------------
+
+/** GET /api/flows — list open-ended flows visible to the caller */
+app.get('/api/flows', async (req, res) => {
+  let client: CantonStreamsClient | undefined;
+  try {
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // Scope the sender/recipient filter to the caller's own party.
+    const scoped = scopeReadFilter(authed.party, {
+      sender: req.query['sender'] as string | undefined,
+      recipient: req.query['recipient'] as string | undefined,
+    });
+    const filter: { sender?: string; recipient?: string; status?: FlowFilter['status'] } = {};
+    if (scoped.sender) filter.sender = scoped.sender;
+    if (scoped.recipient) filter.recipient = scoped.recipient;
+    if (req.query['status']) filter.status = req.query['status'] as FlowFilter['status'];
+
+    const flows = await client.listFlows(
+      Object.keys(filter).length > 0 ? (filter as FlowFilter) : undefined,
+    );
+    res.json(serializeForJson(flows));
+  } catch (err) {
+    handleError(res, err, 'listFlows');
+  } finally {
+    await client?.close();
+  }
+});
+
+/** POST /api/flows — create an open-ended StreamFlow */
+app.post('/api/flows', async (req, res) => {
+  let client: CantonStreamsClient | undefined;
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    // Enforce: caller must be the sender.
+    const sender = requirePartyId(req.body?.['sender'] ?? auth.party, 'sender');
+    enforceRole(auth.party, getRequiredRole('create'), sender);
+
+    const recipient = requirePartyId(req.body?.['recipient'], 'recipient');
+    const escrowOperator = requirePartyId(
+      req.body?.['escrowOperator'] ?? authConfig.escrowOperator,
+      'escrowOperator',
+    );
+    const rawRef = req.body?.['instrumentRef'] as
+      | { depository?: unknown; issuer?: unknown; instrumentId?: unknown; instrumentVersion?: unknown }
+      | undefined;
+    if (!rawRef) {
+      throw new AuthError(400, 'invalid_input', 'Invalid instrumentRef: required');
+    }
+
+    const params: CreateFlowParams = {
+      streamId: optionalId(req.body?.['streamId'], 'streamId'),
+      sender,
+      recipient,
+      escrowOperator,
+      instrumentRef: {
+        depository: requirePartyId(rawRef.depository, 'instrumentRef.depository'),
+        issuer: requirePartyId(rawRef.issuer, 'instrumentRef.issuer'),
+        instrumentId: requireId(rawRef.instrumentId, 'instrumentRef.instrumentId'),
+        instrumentVersion: requireId(rawRef.instrumentVersion, 'instrumentRef.instrumentVersion'),
+      },
+      flowRate: requireAmount(req.body?.['flowRate'], 'flowRate'),
+      fundedAmount: requireNonNegativeAmount(req.body?.['fundedAmount'], 'fundedAmount'),
+      startTime: req.body?.['startTime'] ? new Date(req.body['startTime'] as string) : new Date(),
+    };
+
+    // StreamFlow is signed by sender + recipient + escrowOperator.
+    client = createClientForAuthWithParties(auth, [recipient, escrowOperator]);
+    const result = await client.createFlow(params);
+    res.status(201).json(result);
+  } catch (err) {
+    handleError(res, err, 'createFlow');
+  } finally {
+    await client?.close();
+  }
+});
+
+/** POST /api/flows/:sender/:flowId/top-up — sender adds to the funded balance */
+app.post('/api/flows/:sender/:flowId/top-up', async (req, res) => {
+  let lookupClient: CantonStreamsClient | undefined;
+  let client: CantonStreamsClient | undefined;
+  try {
+    const auth = await authorizeRequest(req, 'top-up', authConfig);
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const flowId = requireId(req.params['flowId'], 'flowId');
+    // Enforce: caller must be the sender (top-up is sender-only)
+    enforceRole(auth.party, getRequiredRole('top-up'), sender);
+    const topUpAmount = requireAmount(req.body?.['topUpAmount'], 'topUpAmount');
+    const settlementReference = requireId(
+      req.body?.['settlementReference'],
+      'settlementReference',
+    );
+
+    lookupClient = createClientForAuth(auth);
+    const flow = await getFlowOrThrow(lookupClient, sender, flowId);
+    // TopUp_Flow is controlled by sender + escrowOperator.
+    client = createClientForAuthWithParties(auth, [flow.escrowOperator]);
+    const result = await client.topUpFlow(sender, flowId, { topUpAmount, settlementReference });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'topUpFlow');
+  } finally {
+    await lookupClient?.close();
+    await client?.close();
+  }
+});
+
+/** POST /api/flows/:sender/:flowId/withdraw — recipient claims accrued + funded */
+app.post('/api/flows/:sender/:flowId/withdraw', async (req, res) => {
+  let lookupClient: CantonStreamsClient | undefined;
+  let client: CantonStreamsClient | undefined;
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const flowId = requireId(req.params['flowId'], 'flowId');
+    const settlementReference = requireId(
+      req.body?.['settlementReference'],
+      'settlementReference',
+    );
+
+    lookupClient = createClientForAuth(auth);
+    const flow = await getFlowOrThrow(lookupClient, sender, flowId);
+    enforceRole(auth.party, getRequiredRole('withdraw'), flow.sender, flow.recipient);
+    // Withdraw_Flow is controlled by recipient + escrowOperator.
+    client = createClientForAuthWithParties(auth, [flow.escrowOperator]);
+    const result = await client.withdrawFlow(sender, flowId, {
+      settlementReference,
+      ...(req.body?.['withdrawTime']
+        ? { withdrawTime: new Date(req.body['withdrawTime'] as string) }
+        : {}),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'withdrawFlow');
+  } finally {
+    await lookupClient?.close();
+    await client?.close();
+  }
+});
+
+/** POST /api/flows/:sender/:flowId/stop — mutual termination */
+app.post('/api/flows/:sender/:flowId/stop', async (req, res) => {
+  let lookupClient: CantonStreamsClient | undefined;
+  let client: CantonStreamsClient | undefined;
+  try {
+    const auth = await authorizeRequest(req, 'stop', authConfig);
+    const sender = requirePartyId(req.params['sender'], 'sender');
+    const flowId = requireId(req.params['flowId'], 'flowId');
+    const recipientSettlement = requireNonNegativeAmount(
+      req.body?.['recipientSettlement'],
+      'recipientSettlement',
+    );
+    const senderRefund = requireNonNegativeAmount(req.body?.['senderRefund'], 'senderRefund');
+    const recipientSettlementReference = optionalId(
+      req.body?.['recipientSettlementReference'],
+      'recipientSettlementReference',
+    );
+    const senderRefundReference = optionalId(
+      req.body?.['senderRefundReference'],
+      'senderRefundReference',
+    );
+
+    lookupClient = createClientForAuth(auth);
+    const flow = await getFlowOrThrow(lookupClient, sender, flowId);
+    enforceRole(auth.party, getRequiredRole('stop'), flow.sender, flow.recipient);
+    // Stop_Flow is controlled by sender + recipient + escrowOperator.
+    client = createClientForAuthWithParties(auth, [
+      flow.sender,
+      flow.recipient,
+      flow.escrowOperator,
+    ]);
+    const result = await client.stopFlow(sender, flowId, {
+      recipientSettlement,
+      senderRefund,
+      ...(recipientSettlementReference !== undefined ? { recipientSettlementReference } : {}),
+      ...(senderRefundReference !== undefined ? { senderRefundReference } : {}),
+      ...(req.body?.['stopTime'] ? { stopTime: new Date(req.body['stopTime'] as string) } : {}),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'stopFlow');
+  } finally {
+    await lookupClient?.close();
     await client?.close();
   }
 });
@@ -1097,7 +1472,7 @@ app.post('/api/policies/:contractId/revoke', async (req, res) => {
     const authorized = await createAuthorizedClientWithParty(req, 'cancel');
     client = authorized.client;
     const callerParty = authorized.party;
-    const contractId = req.params['contractId']!;
+    const contractId = requireId(req.params['contractId'], 'contractId');
 
     // Load the policy first, then assert the caller is the sender (only
     // party authorized to revoke
@@ -1160,10 +1535,23 @@ function handleError(res: express.Response, err: unknown, operation: string): vo
     return;
   }
   const status = (err as any)?.statusCode ?? 500;
-  console.error(`${operation} error:`, err);
+  // Always log the full error server-side with a correlation id.
+  const correlationId = `${operation}-${Date.now().toString(36)}`;
+  console.error(`[${correlationId}] ${operation} error:`, err);
+  // For 5xx, do NOT echo the raw upstream/ledger error message to the
+  // client — it can carry internal hostnames, gRPC endpoints, request
+  // payloads, or token-adjacent fields useful for reconnaissance. Return a
+  // generic message plus the correlation id so an operator can find the
+  // detail in the logs. Client errors (4xx) keep their actionable message.
+  const isServerError = status >= 500;
   res.status(status).json({
-    error: err instanceof Error ? err.message : 'Internal error',
-    reason: status === 403 ? 'forbidden' : 'internal_error',
+    error: isServerError
+      ? `Internal error (ref ${correlationId})`
+      : err instanceof Error
+        ? err.message
+        : 'Request error',
+    reason: status === 403 ? 'forbidden' : isServerError ? 'internal_error' : 'request_error',
+    correlationId,
   });
 }
 

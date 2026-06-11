@@ -87,8 +87,6 @@ export const HOSTED_TID_STREAM_ESCROW =
   `#${STREAMS_PACKAGE}:CantonStreams.Stream.Escrow:StreamEscrow`;
 export const HOSTED_TID_CREATE_REQUEST =
   `#${STREAMS_PACKAGE}:CantonStreams.Workflow.CreateStream:CreateStreamRequest`;
-export const HOSTED_TID_TOKEN_STANDARD_REQUEST =
-  `#${STREAMS_PACKAGE}:CantonStreams.Workflow.CreateTokenStandardStream:CreateTokenStandardStreamRequest`;
 export const HOSTED_TID_POLICY =
   `#${STREAMS_PACKAGE}:CantonStreams.Policy.DelegatedPolicy:DelegatedPolicy`;
 
@@ -233,7 +231,10 @@ export async function submitAndWait(
     throw new Error('Hosted wallet ledgerApi is not available on this session');
   }
   const wc = walletClient.ledgerApi!;
-  const commandId = options?.commandId ?? `dashboard-${party.slice(0, 8)}-${commands.length}`;
+  // Default must be unique per submission — a reused commandId is
+  // rejected by the participant as a duplicate command.
+  const commandId =
+    options?.commandId ?? `dashboard-${party.slice(0, 8)}-${Date.now()}`;
   const body = {
     commands,
     commandId,
@@ -373,10 +374,10 @@ function buildVestingConfig(
 }
 
 /**
- * Decode a `CreateStreamRequest` / `CreateTokenStandardStreamRequest`
- * create_arguments record into a `PendingStreamRequest`. Same
- * convention as `decodeStreamEscrow` — return null if the record
- * doesn't look like a request and let the caller filter it out.
+ * Decode a `CreateStreamRequest` create_arguments record into a
+ * `PendingStreamRequest`. Same convention as `decodeStreamEscrow` —
+ * return null if the record doesn't look like a request and let the
+ * caller filter it out.
  */
 export function decodeCreateStreamRequest(
   contractId: string,
