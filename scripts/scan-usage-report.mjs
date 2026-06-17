@@ -9,8 +9,13 @@
  *   cantonstreams.dev/ref  = "<streamId>:cycle-<n>"   (always stamped)
  *   cantonstreams.dev/app  = "<integrator app id>"    (per-app attribution)
  *
- * App attribution order: explicit app meta key → integrator registry
- * (party → app mapping file) → sender party's namespace prefix.
+ * App attribution: the sender party is the real on-chain payer, so the
+ * integrator registry (party → app) is AUTHORITATIVE. The operator-stamped
+ * cantonstreams.dev/app tag is only used when the payer party is not in the
+ * registry, and it is FLAGGED as a tag-mismatch whenever it disagrees with
+ * the registry — so an operator cannot relabel another project's real
+ * activity without it surfacing in report.tagMismatches. Fallback for
+ * unregistered payers is the sender party's namespace prefix.
  *
  * Stream contracts themselves are PRIVATE to their parties (Canton
  * privacy); only the asset legs are publicly visible — see
@@ -72,6 +77,26 @@ const integrators = env('INTEGRATORS')
 const partyToApp = new Map();
 for (const [appId, info] of Object.entries(integrators.apps ?? {})) {
   for (const p of info.parties ?? []) partyToApp.set(p, appId);
+}
+
+/**
+ * Attribute a settlement to a project. The sender party is the real on-chain
+ * payer whose funds moved, so the registry (payer party → app) is
+ * authoritative. The operator-stamped cantonstreams.dev/app tag is only a
+ * hint: used when the payer is unregistered, and flagged as a mismatch when it
+ * disagrees with the registry, so a relabelled tag cannot silently re-credit
+ * another project's real activity.
+ */
+function attribute(found, registry) {
+  const registryApp = registry.get(found.sender);
+  const tagApp = found.appMeta;
+  if (registryApp) {
+    return { app: registryApp, source: 'registry', tagApp, tagMismatch: Boolean(tagApp && tagApp !== registryApp) };
+  }
+  if (tagApp) {
+    return { app: tagApp, source: 'tag', tagApp, tagMismatch: false };
+  }
+  return { app: (found.sender ?? 'unknown').split('::')[0], source: 'namespace', tagApp, tagMismatch: false };
 }
 
 if (!SCAN || !SINCE) {
@@ -170,10 +195,7 @@ outer: while (pages < MAX_PAGES) {
     for (const ev of Object.values(tx.events_by_id ?? {})) {
       const found = attributionOf(ev);
       if (!found) continue;
-      const a = {
-        ...found,
-        app: found.appMeta ?? partyToApp.get(found.sender) ?? (found.sender ?? 'unknown').split('::')[0],
-      };
+      const a = { ...found, ...attribute(found, partyToApp) };
       if (excludeParties.has(a.sender) && excludeParties.has(a.receiver)) {
         state.evidence.push({ ...a, recordTime: tx.record_time, updateId: tx.update_id, excluded: true });
       } else {
@@ -199,6 +221,7 @@ for (const e of state.evidence) {
     name: integrators.apps?.[e.app]?.name ?? e.app,
     settlements: 0, totalAmount: 0,
     streams: new Set(), senders: new Set(), receivers: new Set(),
+    bySource: { registry: 0, tag: 0, namespace: 0 }, tagMismatches: 0,
     firstSeen: e.recordTime, lastSeen: e.recordTime,
   };
   a.settlements += 1;
@@ -206,6 +229,8 @@ for (const e of state.evidence) {
   a.streams.add(e.ref.replace(/:cycle-\d+$/, ''));
   if (e.sender) a.senders.add(e.sender);
   if (e.receiver) a.receivers.add(e.receiver);
+  a.bySource[e.source ?? 'namespace'] += 1;
+  if (e.tagMismatch) a.tagMismatches += 1;
   if (e.recordTime < a.firstSeen) a.firstSeen = e.recordTime;
   if (e.recordTime > a.lastSeen) a.lastSeen = e.recordTime;
   apps.set(e.app, a);
@@ -222,6 +247,8 @@ const perApp = [...apps.values()]
       distinctStreams: a.streams.size,
       distinctSenders: a.senders.size,
       distinctReceivers: a.receivers.size,
+      attributedBy: a.bySource,
+      tagMismatches: a.tagMismatches,
       imputedTrafficBytes: trafficBytes,
       imputedTrafficUsd: Number(trafficUsd.toFixed(4)),
       ...(CC_PRICE_USD ? { imputedBurnCc: Number((trafficUsd / CC_PRICE_USD).toFixed(4)) } : {}),
@@ -260,6 +287,16 @@ const perAgreement = [...agreements.values()]
   .sort((x, y) => y.settlements - x.settlements);
 
 const included = state.evidence.filter((e) => !e.excluded);
+// Settlements whose operator-stamped cantonstreams.dev/app tag disagrees with
+// the payer party's registered owner — the attributions a reviewer should
+// scrutinise: real on-chain activity credited to a project the payer party
+// does not belong to. Attribution itself used the registry, not the tag.
+const tagMismatches = included
+  .filter((e) => e.tagMismatch)
+  .map((e) => ({
+    updateId: e.updateId, recordTime: e.recordTime, sender: e.sender,
+    registryApp: e.app, tagApp: e.tagApp, ref: e.ref,
+  }));
 const report = {
   generatedAt: new Date().toISOString(),
   scanUrl: SCAN,
@@ -267,6 +304,7 @@ const report = {
   method: {
     metaKey: META_KEY, appMetaKey: APP_META_KEY, refPattern: REF_PATTERN.source,
     excludedParties: excludeParties.size, incremental: Boolean(STATE_FILE),
+    attribution: 'registry-first: payer party authoritative; cantonstreams.dev/app tag is a flagged hint',
   },
   networkTransactionsScanned: state.scanned,
   totals: {
@@ -275,9 +313,11 @@ const report = {
     amountSettled: Number(included.reduce((s, e) => s + e.amount, 0).toFixed(10)),
     distinctApps: perApp.length,
     distinctStreams: new Set(included.map((e) => e.ref.replace(/:cycle-\d+$/, ''))).size,
+    tagMismatches: tagMismatches.length,
   },
   perApp,
   perAgreement,
+  tagMismatches,
   evidence: STATE_FILE ? `see ${STATE_FILE}` : state.evidence,
 };
 console.log(JSON.stringify(report, null, 2));
@@ -288,5 +328,10 @@ for (const a of perApp) {
     `amount=${String(a.totalAmountSettled).padStart(14)}  streams=${a.distinctStreams}  ` +
     `receivers=${a.distinctReceivers}  traffic≈${(a.imputedTrafficBytes / 1000).toFixed(1)}KB/$${a.imputedTrafficUsd}` +
     `${a.imputedBurnCc !== undefined ? `/${a.imputedBurnCc}CC` : ''}  active ${a.firstSeen.slice(0, 10)}→${a.lastSeen.slice(0, 10)}`);
+}
+if (tagMismatches.length) {
+  console.error(`\nWARNING: ${tagMismatches.length} settlement(s) where the cantonstreams.dev/app tag ` +
+    `disagrees with the payer party's registered owner. Attribution used the registry (payer party), ` +
+    `not the tag — see report.tagMismatches.`);
 }
 console.error(`\nReproduce with the same env — no privileged access required.`);
