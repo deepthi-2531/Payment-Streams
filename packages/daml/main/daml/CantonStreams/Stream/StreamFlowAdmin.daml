@@ -56,6 +56,14 @@ import CantonStreams.Interface.Types
   )
 
 -- | A V2-only rolling top-up stream's admin/observability contract.
+--
+-- Trust boundary: the sync/top-up/pause/cancel choices are operator-controlled
+-- bookkeeping, so a faulty or malicious operator can desync this record from
+-- real settlement. The underlying V2 `Allocation` (see `currentAllocationCid`)
+-- is the authoritative settlement + cancellation state — who may cancel and
+-- which funds are released is enforced there, not here. Consumers must
+-- reconcile against the Allocation and treat this contract as a non-binding
+-- index over it.
 template StreamFlowAdmin
   with
     streamId : StreamId

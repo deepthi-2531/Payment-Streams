@@ -44,6 +44,7 @@ import DA.List (sort)
 import DA.Optional (isNone)
 
 import CantonStreams.Interface.Types
+import CantonStreams.Stream.Time (assertNotExpired)
 
 -- | Operator entry on the request. Each operator independently accepts
 -- via `OperatorAccept`; the request transitions to fully-accepted only
@@ -137,8 +138,7 @@ template UnifiedStreamRequest
     choice AcceptRecipient : ContractId AcceptedStreamRequest
       controller roles.recipient
       do
-        now <- getTime
-        assertMsg "Request has expired" (now < expiresAt)
+        assertNotExpired "Request" expiresAt
         create AcceptedStreamRequest with
           config
           roles
@@ -223,8 +223,7 @@ template AcceptedStreamRequest
       controller operator
       do
         let requiredOperators = sort [op.operator | op <- roles.operators]
-        now <- getTime
-        assertMsg "Request has expired" (now < expiresAt)
+        assertNotExpired "Request" expiresAt
         assertMsg "Party is not in the required operator set"
           (operator `elem` requiredOperators)
         assertMsg "Operator has already accepted"
@@ -249,8 +248,7 @@ template AcceptedStreamRequest
     choice TriggerPartyAccept : ContractId AcceptedStreamRequest
       controller (optional roles.sender (\p -> p) roles.triggerParty)
       do
-        now <- getTime
-        assertMsg "Request has expired" (now < expiresAt)
+        assertNotExpired "Request" expiresAt
         assertMsg "Trigger party already accepted (or not required)"
           (not triggerPartyAccepted)
         create this with triggerPartyAccepted = True
