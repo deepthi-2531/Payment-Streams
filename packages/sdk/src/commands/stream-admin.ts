@@ -55,6 +55,10 @@ function optionalText(value: string | undefined): { optional: { text: string } |
   return value !== undefined ? { optional: { text: value } } : { optional: null };
 }
 
+function optionalInt(value: number | undefined): { optional: { int64: string } | null } {
+  return value !== undefined ? { optional: { int64: value.toString() } } : { optional: null };
+}
+
 function damlVariant(
   variantConstructor: string,
   value: Record<string, unknown> = { unit: {} },
@@ -186,6 +190,7 @@ export interface SyncIterationParams {
   readonly operator: string;
   readonly iterationAmount: Decimal;
   readonly newAllocationCid?: string | undefined;
+  readonly expectedIteration?: number;
 }
 
 /**
@@ -216,6 +221,7 @@ export async function buildSyncIteration(
     {
       iterationAmount: damlNumeric(params.iterationAmount),
       newAllocationCid: optionalText(params.newAllocationCid),
+      expectedIteration: optionalInt(params.expectedIteration),
     },
     [params.operator],
   )) as { contractId?: string };
