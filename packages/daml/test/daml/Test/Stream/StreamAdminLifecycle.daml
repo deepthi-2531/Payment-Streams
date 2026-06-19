@@ -41,12 +41,10 @@ setupStreamAdmin = do
   carol <- allocateParty "Carol-Op"
   let start = time (date 2026 Jan 1) 0 0 0
       end = time (date 2026 Jul 1) 0 0 0  -- 181 days
-      ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "TEST-COIN"
-        instrumentVersion = "1.0"
-      payload = mkStreamAdmin "admin-001" alice bob carol ref 1000.0 Linear start end True []
+      iid = InstrumentIdV2 with
+        admin = alice
+        id = "TEST-COIN"
+      payload = mkStreamAdmin "admin-001" alice bob carol iid 1000.0 Linear start end True []
   setTime start
   adminCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
   pure (alice, bob, carol, adminCid)

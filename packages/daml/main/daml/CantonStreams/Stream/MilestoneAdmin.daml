@@ -56,7 +56,7 @@ module CantonStreams.Stream.MilestoneAdmin where
 import CantonStreams.Interface.Types
   ( StreamId
   , StreamStatus(..)
-  , InstrumentRef
+  , InstrumentIdV2
   )
 import CantonStreams.Stream.Time (assertNotInFuture)
 
@@ -85,7 +85,8 @@ template MilestoneAdmin
     sender : Party
     recipient : Party
     operator : Party
-    instrumentRef : InstrumentRef
+    instrumentId : InstrumentIdV2
+      -- ^ V2 asset identity `{ admin, id }` (per the CIP-56 V2 token standard).
     milestones : [Milestone]
       -- ^ Full list of milestones. Each entry's `confirmed` flag is
       -- flipped from False → True via `Confirm_Milestone` /
@@ -257,16 +258,16 @@ mkMilestoneAdmin :
   -> Party
   -> Party
   -> Party
-  -> InstrumentRef
+  -> InstrumentIdV2
   -> [Milestone]
   -> [Party]
   -> MilestoneAdmin
-mkMilestoneAdmin sid s r op ref ms obs = MilestoneAdmin with
+mkMilestoneAdmin sid s r op iid ms obs = MilestoneAdmin with
   streamId = sid
   sender = s
   recipient = r
   operator = op
-  instrumentRef = ref
+  instrumentId = iid
   milestones = ms
   totalDeposited = sum (map (.amount) ms)
   totalReleased = 0.0

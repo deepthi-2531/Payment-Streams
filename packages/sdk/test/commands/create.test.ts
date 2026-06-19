@@ -60,10 +60,14 @@ describe('createStream', () => {
         sender: { party: 'alice' },
         recipient: { party: 'bob' },
         operator: { party: 'escrow-operator' },
-        instrumentRef: expect.objectContaining({
-          issuer: { party: 'AmuletAdmin::1' },
-          instrumentId: { text: 'Amulet' },
-        }),
+        // V2 asset identity `{ admin, id }` — the builder converts the
+        // public `instrumentRef` input internally (admin = issuer, id =
+        // instrumentId); the V1 depository/instrumentVersion fields are
+        // dropped (no V2 equivalent).
+        instrumentId: {
+          admin: { party: 'AmuletAdmin::1' },
+          id: { text: 'Amulet' },
+        },
         totalDeposited: { numeric: '100.0000000000' },
         currentAllocationCid: { optional: null },
       }),

@@ -15,17 +15,15 @@ setupMilestoneAdmin = do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
   carol <- allocateParty "Carol-Op"
-  let ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "TEST-COIN"
-        instrumentVersion = "1.0"
+  let iid = InstrumentIdV2 with
+        admin = alice
+        id = "TEST-COIN"
       ms = [ mkPendingMilestone "m1" "milestone 1" 100.0
            , mkPendingMilestone "m2" "milestone 2" 200.0
            , mkPendingMilestone "m3" "milestone 3" 300.0
            , mkPendingMilestone "m4" "milestone 4" 400.0
            ]
-      payload = mkMilestoneAdmin "milestone-001" alice bob carol ref ms []
+      payload = mkMilestoneAdmin "milestone-001" alice bob carol iid ms []
   -- Pin ledger time AFTER the milestone confirm timestamps used below
   -- (2026 Feb 1) so the opt-in `assertNotInFuture "confirmedAt"` guard in
   -- Confirm_Milestone / Confirm_Milestone_Batch sees a past confirmation.
