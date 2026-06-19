@@ -82,17 +82,17 @@ testWalletOnlyStreamAdmin_SixIterations = script do
   -- atomically creates the next iteration's allocation. Final
   -- iteration's newAllocationCid = None (nextIterationFunding=None).
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-1"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-1"; expectedIteration = None; settledAt = None
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-2"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-2"; expectedIteration = None; settledAt = None
   c3 <- submit carol $ exerciseCmd c2 Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-3"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-3"; expectedIteration = None; settledAt = None
   c4 <- submit carol $ exerciseCmd c3 Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-4"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-4"; expectedIteration = None; settledAt = None
   c5 <- submit carol $ exerciseCmd c4 Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-5"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-iter-5"; expectedIteration = None; settledAt = None
   c6 <- submit carol $ exerciseCmd c5 Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = None; expectedIteration = None  -- final iteration
+    iterationAmount = 200.0; newAllocationCid = None; expectedIteration = None; settledAt = None  -- final iteration
 
   Some admin <- queryContractId carol c6
   assertMsg "6 iterations recorded" (admin.numIterations == 6)
@@ -128,7 +128,7 @@ testWalletOnlyStreamFlow_TopUpPauseResume = script do
   -- Wallet exercised AllocationFactory_Allocate for initial 100 USDCx.
   -- Operator records iteration 1: settle 30 USDCx.
   c1 <- submit carol $ exerciseCmd flowCid Sync_Iteration_Flow with
-    iterationAmount = 30.0; newAllocationCid = Some "flow-alloc-iter-1"; expectedIteration = None
+    iterationAmount = 30.0; newAllocationCid = Some "flow-alloc-iter-1"; expectedIteration = None; settledAt = None
   -- Operator pauses (e.g. customer dispute).
   c2 <- submit carol $ exerciseCmd c1 Pause_Flow_Admin
   -- Wallet exercises AllocationFactory_Allocate for 50 USDCx top-up.
@@ -140,7 +140,7 @@ testWalletOnlyStreamFlow_TopUpPauseResume = script do
   c4 <- submit carol $ exerciseCmd c3 Resume_Flow_Admin
   -- Settle 80 more USDCx (cumulative recipient draw = 110, funded = 150).
   c5 <- submit carol $ exerciseCmd c4 Sync_Iteration_Flow with
-    iterationAmount = 80.0; newAllocationCid = Some "flow-alloc-iter-2"; expectedIteration = None
+    iterationAmount = 80.0; newAllocationCid = Some "flow-alloc-iter-2"; expectedIteration = None; settledAt = None
 
   Some flow <- queryContractId carol c5
   assertMsg "currentFundedAmount = 150 after topup"
@@ -177,7 +177,10 @@ testWalletOnlyMilestoneAdmin_FourMilestonesOutOfOrder = script do
            , mkPendingMilestone "ga"     "GA launch" 250.0
            ]
       payload = mkMilestoneAdmin "v2-milestone-001" alice bob carol ref ms []
-  setTime (time (date 2026 Jan 1) 0 0 0)
+  -- Pin ledger time AFTER the latest milestone confirm timestamp used
+  -- below (t3 = 2026 Feb 1 + 60 days ≈ Apr 2) so the opt-in
+  -- `assertNotInFuture "confirmedAt"` guard sees past confirmations.
+  setTime (time (date 2026 May 1) 0 0 0)
   mileCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
 
   -- Wallet exercised AllocationFactory_Allocate ONCE with 4
@@ -231,15 +234,16 @@ testWalletOnlyStreamAdmin_Cancel = script do
 
   -- Operator settles 2 iterations (400 CC).
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-i1"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-i1"; expectedIteration = None; settledAt = None
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
-    iterationAmount = 200.0; newAllocationCid = Some "alloc-i2"; expectedIteration = None
+    iterationAmount = 200.0; newAllocationCid = Some "alloc-i2"; expectedIteration = None; settledAt = None
 
   -- Wallet exercised V2 Allocation_Cancel on alloc-i2 (or alice/bob
   -- co-sign for mutual cancel). Operator records via Mark_Cancelled.
   c3 <- submit carol $ exerciseCmd c2 Mark_Cancelled with
     cancelTime = time (date 2026 Apr 1) 0 0 0
     finalWithdrawn = 400.0
+    releasedAllocationCid = None
 
   Some admin <- queryContractId carol c3
   assertMsg "status = Cancelled" (admin.status == Cancelled)

@@ -12,3 +12,9 @@ assertNotExpired : Text -> Time -> Update ()
 assertNotExpired label deadline = do
   now <- getTime
   assertMsg (label <> " has expired") (now < deadline)
+
+-- | Assert that `t` is not in the future relative to ledger time.
+assertNotInFuture : Text -> Time -> Update ()
+assertNotInFuture label t = do
+  now <- getTime
+  assertMsg (label <> " must not be in the future") (t <= now)

@@ -32,6 +32,7 @@ testFlowSyncIterationFirst = script do
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-002"
     expectedIteration = None
+    settledAt = None
   Some a <- queryContractId carol c1
   assertMsg "totalWithdrawn" (a.totalWithdrawn == 10.0)
   assertMsg "numIterations" (a.numIterations == 1)
@@ -61,6 +62,7 @@ testFlowPauseResume = script do
     iterationAmount = 10.0
     newAllocationCid = Some "x"
     expectedIteration = None
+    settledAt = None
   -- Resume
   c2 <- submit carol $ exerciseCmd c1 Resume_Flow_Admin
   Some a2 <- queryContractId carol c2
@@ -70,6 +72,7 @@ testFlowPauseResume = script do
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-002"
     expectedIteration = None
+    settledAt = None
   pure ()
 
 testFlowPauseRejectsDoublePause : Script ()
@@ -91,6 +94,7 @@ testFlowOvershootRejects = script do
     iterationAmount = 150.0
     newAllocationCid = Some "x"
     expectedIteration = None
+    settledAt = None
 
 testFlowTopUpThenWithdrawBeyondInitial : Script ()
 testFlowTopUpThenWithdrawBeyondInitial = script do
@@ -104,6 +108,7 @@ testFlowTopUpThenWithdrawBeyondInitial = script do
     iterationAmount = 130.0
     newAllocationCid = Some "f3"
     expectedIteration = None
+    settledAt = None
   Some a <- queryContractId carol c2
   assertMsg "totalWithdrawn = 130" (a.totalWithdrawn == 130.0)
   assertMsg "fundedAmount still 150" (a.currentFundedAmount == 150.0)
@@ -112,6 +117,7 @@ testFlowTopUpThenWithdrawBeyondInitial = script do
     iterationAmount = 30.0
     newAllocationCid = Some "f4"
     expectedIteration = None
+    settledAt = None
 
 testFlowMarkCancelled : Script ()
 testFlowMarkCancelled = script do
@@ -120,9 +126,11 @@ testFlowMarkCancelled = script do
     iterationAmount = 50.0
     newAllocationCid = Some "f2"
     expectedIteration = None
+    settledAt = None
   c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled_Flow_Admin with
     cancelTime = time (date 2026 Feb 1) 0 0 0
     finalWithdrawn = 50.0
+    releasedAllocationCid = None
   Some a <- queryContractId carol c2
   assertMsg "status Cancelled" (a.status == Cancelled)
   assertMsg "currentAllocationCid cleared" (a.currentAllocationCid == None)
@@ -134,6 +142,7 @@ testFlowGetInfo = script do
     iterationAmount = 25.0
     newAllocationCid = Some "f2"
     expectedIteration = None
+    settledAt = None
   -- Need to query latest cid because Sync archives
   [(latestCid, _)] <- query @StreamFlowAdmin bob
   info <- submit bob $ exerciseCmd latestCid GetStreamFlowAdminInfo with viewer = bob
@@ -152,6 +161,7 @@ testFlowSyncIterationReplayGuard = script do
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-002"
     expectedIteration = Some 1
+    settledAt = None
   Some a1 <- queryContractId carol c1
   assertMsg "first flow iteration advanced to 1" (a1.numIterations == 1)
   -- Replay: same expectedIteration = Some 1 on the advanced contract MUST fail.
@@ -159,11 +169,13 @@ testFlowSyncIterationReplayGuard = script do
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-003"
     expectedIteration = Some 1
+    settledAt = None
   -- Correct next index = Some 2 succeeds: numIterations 1 -> 2.
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration_Flow with
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-003"
     expectedIteration = Some 2
+    settledAt = None
   Some a2 <- queryContractId carol c2
   assertMsg "second flow iteration advanced to 2" (a2.numIterations == 2)
   assertMsg "flow totalWithdrawn = 20" (a2.totalWithdrawn == 20.0)

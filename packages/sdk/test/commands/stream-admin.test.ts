@@ -182,6 +182,8 @@ describe('buildSyncIteration', () => {
     expect(arg).toEqual({
       iterationAmount: { numeric: '100.0000000000' },
       newAllocationCid: { optional: { text: 'alloc-002' } },
+      expectedIteration: { optional: null },
+      settledAt: { optional: null },
     });
     expect(actAs).toEqual(['carol']);
   });
@@ -238,6 +240,7 @@ describe('buildMarkCancelled', () => {
     expect(arg).toEqual({
       cancelTime: { timestamp: (BigInt(cancelAt.getTime()) * 1000n).toString() },
       finalWithdrawn: { numeric: '300.0000000000' },
+      releasedAllocationCid: { optional: null },
     });
     expect(actAs).toEqual(['carol']);
   });

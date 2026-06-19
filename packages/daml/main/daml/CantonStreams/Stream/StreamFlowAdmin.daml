@@ -54,6 +54,7 @@ import CantonStreams.Interface.Types
   , StreamStatus(..)
   , InstrumentRef
   )
+import CantonStreams.Stream.Time (assertNotInFuture)
 
 -- | A V2-only rolling top-up stream's admin/observability contract.
 --
@@ -116,6 +117,11 @@ template StreamFlowAdmin
           -- exactly the next iteration (k == numIterations + 1), mirroring the
           -- authoritative V2 `AllocationView.numIterations`, so a replayed or
           -- out-of-order settle is rejected. `None` keeps legacy behaviour.
+        settledAt : Optional Time
+          -- ^ Opt-in settle-time bound. When `Some t`, asserts the claimed
+          -- settlement time `t` is not in the future relative to ledger time,
+          -- so a settle can't be recorded with a future timestamp. `None`
+          -- keeps legacy behaviour.
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
@@ -127,6 +133,7 @@ template StreamFlowAdmin
         case expectedIteration of
           None -> pure ()
           Some k -> assertMsg "Iteration out of order or replayed" (k == numIterations + 1)
+        optional (pure ()) (assertNotInFuture "settledAt") settledAt
         let newOriginal = case originalAllocationId of
               Some _ -> originalAllocationId
               None -> newAllocationCid
@@ -177,6 +184,8 @@ template StreamFlowAdmin
       with
         cancelTime : Time
         finalWithdrawn : Decimal
+        releasedAllocationCid : Optional Text
+          -- ^ cid of the V2 Allocation whose Allocation_Cancel released the funds, recorded for audit linkage
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
@@ -185,6 +194,7 @@ template StreamFlowAdmin
         assertMsg "Final withdrawn must be >= current totalWithdrawn"
           (finalWithdrawn >= totalWithdrawn)
         let _ = cancelTime
+        let _ = releasedAllocationCid  -- captured in the exercise event for audit linkage; not stored on-ledger here
         archive self
         create this with
           totalWithdrawn = finalWithdrawn
