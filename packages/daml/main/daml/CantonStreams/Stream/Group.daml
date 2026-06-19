@@ -7,6 +7,12 @@ module CantonStreams.Stream.Group where
 
 import DA.List (delete)
 
+-- | Result of `GetGroupInfo`.
+data StreamGroupInfo = StreamGroupInfo with
+    label : Text
+    streamIds : [Text]
+  deriving (Eq, Show)
+
 -- | A group of related streams owned by a single party.
 -- Note: No contract key — groups are looked up via query by owner.
 template StreamGroupContract
@@ -40,10 +46,10 @@ template StreamGroupContract
         create this with streamIds = delete streamId streamIds
 
     -- | Get group info (non-consuming).
-    nonconsuming choice GetGroupInfo : (Text, [Text])
+    nonconsuming choice GetGroupInfo : StreamGroupInfo
       with
         viewer : Party
       controller viewer
       do
         assertMsg "Not authorized" (viewer == owner || viewer `elem` observers)
-        pure (label, streamIds)
+        pure StreamGroupInfo with label, streamIds

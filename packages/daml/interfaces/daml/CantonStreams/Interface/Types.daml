@@ -230,14 +230,17 @@ data EscrowOperatorRef = EscrowOperatorRef with
       -- ^ Human-readable label for display.
   deriving (Eq, Show)
 
--- | Rounding policy: all accrual calculations truncate toward zero.
--- This ensures we never overpay — dust stays with the sender on cancellation.
+-- | Marker for the accrual rounding contract (documentation only — no
+-- on-ledger field stores this value).
 --
--- Invariant (with dust tolerance):
+-- Daml Decimal division rounds to scale 10 using HALF_EVEN (banker's
+-- rounding), NOT truncation; Stepped vesting floors via integer division of
+-- elapsed / interval. The "never overpay — dust stays with the sender"
+-- property is enforced by the min/max accrual clamps (see `Stream.Accrual`)
+-- and the dust-tolerant invariant below, not by truncate-toward-zero:
+--
 --   refundable(now) + withdrawable(now) + totalWithdrawn <= totalDeposited
---
--- The strict equality version:
---   refundable(now) + withdrawable(now) + totalWithdrawn + dust == totalDeposited
--- where dust >= 0 and dust <= 1 minimum unit.
-data RoundingPolicy = TruncateTowardZero
+--   where dust = totalDeposited - (refundable + withdrawable + totalWithdrawn),
+--         0 <= dust <= 1 minimum unit.
+data RoundingPolicy = HalfEvenScale10
   deriving (Eq, Show)

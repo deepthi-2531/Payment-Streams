@@ -71,6 +71,14 @@ import CantonStreams.Interface.Types
 -- custody authorization live in the V2 AllocationRequest/Allocation
 -- contracts; recipient + operator observe this admin surface so both
 -- can query state and the operator can drive settlement choices.
+--
+-- Trust boundary: `Sync_Iteration` / `Mark_Cancelled` are operator-controlled
+-- bookkeeping, so a faulty or malicious operator can desync this record from
+-- real settlement. The underlying V2 `Allocation` (see `currentAllocationCid`)
+-- is the authoritative settlement + cancellation state — who may cancel and
+-- which funds are released is enforced there, not here. Consumers must
+-- reconcile against the Allocation and treat this contract as a non-binding
+-- index over it.
 template StreamAdmin
   with
     streamId : StreamId
