@@ -65,15 +65,13 @@ testWalletOnlyStreamAdmin_SixIterations = script do
   carol <- allocateParty "Carol-Operator" -- Executor
   let start = time (date 2026 Jan 1) 0 0 0
       end = time (date 2026 Jul 1) 0 0 0
-      ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "CC"   -- canonical Canton Coin
-        instrumentVersion = "1.0"
+      iid = InstrumentIdV2 with
+        admin = alice
+        id = "CC"   -- canonical Canton Coin
       -- Sender wallet conceptually signed AllocationFactory_Allocate
       -- for 1200 CC with nextIterationFunding=Some(1200). The
       -- resulting V2 Allocation has cid "alloc-iter-1".
-      adminPayload = mkStreamAdmin "v2-stream-001" alice bob carol ref 1200.0 Linear start end True []
+      adminPayload = mkStreamAdmin "v2-stream-001" alice bob carol iid 1200.0 Linear start end True []
   setTime start
   adminCid <- submitMulti [alice, bob, carol] [] $ createCmd adminPayload
 
@@ -116,12 +114,10 @@ testWalletOnlyStreamFlow_TopUpPauseResume = script do
   bob <- allocateParty "Bob"
   carol <- allocateParty "Carol-Op"
   let start = time (date 2026 Jan 1) 0 0 0
-      ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "USDCx"
-        instrumentVersion = "1.0"
-      payload = mkStreamFlowAdmin "v2-flow-001" alice bob carol ref 0.001 start 100.0 []
+      iid = InstrumentIdV2 with
+        admin = alice
+        id = "USDCx"
+      payload = mkStreamFlowAdmin "v2-flow-001" alice bob carol iid 0.001 start 100.0 []
   setTime start
   flowCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
 
@@ -166,17 +162,15 @@ testWalletOnlyMilestoneAdmin_FourMilestonesOutOfOrder = script do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
   carol <- allocateParty "Carol-Op"
-  let ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "CC"
-        instrumentVersion = "1.0"
+  let iid = InstrumentIdV2 with
+        admin = alice
+        id = "CC"
       ms = [ mkPendingMilestone "design" "Design phase" 100.0
            , mkPendingMilestone "alpha"  "Alpha build" 250.0
            , mkPendingMilestone "beta"   "Beta release" 400.0
            , mkPendingMilestone "ga"     "GA launch" 250.0
            ]
-      payload = mkMilestoneAdmin "v2-milestone-001" alice bob carol ref ms []
+      payload = mkMilestoneAdmin "v2-milestone-001" alice bob carol iid ms []
   -- Pin ledger time AFTER the latest milestone confirm timestamp used
   -- below (t3 = 2026 Feb 1 + 60 days ≈ Apr 2) so the opt-in
   -- `assertNotInFuture "confirmedAt"` guard sees past confirmations.
@@ -223,12 +217,10 @@ testWalletOnlyStreamAdmin_Cancel = script do
   carol <- allocateParty "Carol-Op"
   let start = time (date 2026 Jan 1) 0 0 0
       end = time (date 2026 Jul 1) 0 0 0
-      ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "CC"
-        instrumentVersion = "1.0"
-      payload = mkStreamAdmin "v2-cancel-001" alice bob carol ref 1000.0 Linear start end True []
+      iid = InstrumentIdV2 with
+        admin = alice
+        id = "CC"
+      payload = mkStreamAdmin "v2-cancel-001" alice bob carol iid 1000.0 Linear start end True []
   setTime start
   adminCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
 

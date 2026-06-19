@@ -15,12 +15,10 @@ setupFlowAdmin = do
   bob <- allocateParty "Bob"
   carol <- allocateParty "Carol-Op"
   let start = time (date 2026 Jan 1) 0 0 0
-      ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "TEST-COIN"
-        instrumentVersion = "1.0"
-      payload = mkStreamFlowAdmin "flow-001" alice bob carol ref 0.001 start 100.0 []
+      iid = InstrumentIdV2 with
+        admin = alice
+        id = "TEST-COIN"
+      payload = mkStreamFlowAdmin "flow-001" alice bob carol iid 0.001 start 100.0 []
   setTime start
   cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
   pure (alice, bob, carol, cid)

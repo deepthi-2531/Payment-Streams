@@ -52,7 +52,7 @@ module CantonStreams.Stream.StreamFlowAdmin where
 import CantonStreams.Interface.Types
   ( StreamId
   , StreamStatus(..)
-  , InstrumentRef
+  , InstrumentIdV2
   )
 import CantonStreams.Stream.Time (assertNotInFuture)
 
@@ -72,7 +72,8 @@ template StreamFlowAdmin
     recipient : Party
     operator : Party
       -- ^ Escrow operator / executor.
-    instrumentRef : InstrumentRef
+    instrumentId : InstrumentIdV2
+      -- ^ V2 asset identity `{ admin, id }` (per the CIP-56 V2 token standard).
     flowRate : Decimal
       -- ^ Tokens-per-microsecond rate (for off-chain accrual
       -- computation; operator pumps `Allocation_Settle` according to
@@ -244,18 +245,18 @@ mkStreamFlowAdmin :
   -> Party         -- sender
   -> Party         -- recipient
   -> Party         -- operator
-  -> InstrumentRef
+  -> InstrumentIdV2
   -> Decimal       -- flowRate (tokens/microsecond)
   -> Time          -- startTime
   -> Decimal       -- initialFundedAmount
   -> [Party]       -- observers
   -> StreamFlowAdmin
-mkStreamFlowAdmin sid s r op ref rate st initialFund obs = StreamFlowAdmin with
+mkStreamFlowAdmin sid s r op iid rate st initialFund obs = StreamFlowAdmin with
   streamId = sid
   sender = s
   recipient = r
   operator = op
-  instrumentRef = ref
+  instrumentId = iid
   flowRate = rate
   startTime = st
   currentFundedAmount = initialFund

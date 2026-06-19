@@ -62,7 +62,7 @@ import CantonStreams.Interface.Types
   ( StreamId
   , VestingMode
   , StreamStatus(..)
-  , InstrumentRef
+  , InstrumentIdV2
   )
 import CantonStreams.Stream.Time (assertNotInFuture)
 
@@ -89,10 +89,10 @@ template StreamAdmin
       -- ^ Escrow operator / executor. Responsible for driving
       -- `Allocation_Settle` per accrual period and calling
       -- `Sync_Iteration` to advance admin state.
-    instrumentRef : InstrumentRef
-      -- ^ Asset reference (admin + instrumentId + version). The
-      -- corresponding V2 `Allocation` carries the same instrument id
-      -- on its `transferLegSides`.
+    instrumentId : InstrumentIdV2
+      -- ^ V2 asset identity `{ admin, id }` (per the CIP-56 V2 token
+      -- standard). The corresponding V2 `Allocation` carries the same
+      -- instrument id on its `transferLegSides`.
     totalDeposited : Decimal
       -- ^ Total committed at create time (the sender's
       -- `AllocationFactory_Allocate` prompt covered this much).
@@ -293,7 +293,7 @@ mkStreamAdmin :
   -> Party        -- sender
   -> Party        -- recipient
   -> Party        -- operator
-  -> InstrumentRef
+  -> InstrumentIdV2
   -> Decimal      -- totalDeposited
   -> VestingMode
   -> Time         -- startTime
@@ -301,12 +301,12 @@ mkStreamAdmin :
   -> Bool         -- cancellable
   -> [Party]      -- observers
   -> StreamAdmin
-mkStreamAdmin sid s r op ref dep vm st et cancellable obs = StreamAdmin with
+mkStreamAdmin sid s r op iid dep vm st et cancellable obs = StreamAdmin with
   streamId = sid
   sender = s
   recipient = r
   operator = op
-  instrumentRef = ref
+  instrumentId = iid
   totalDeposited = dep
   vestingMode = vm
   startTime = st
