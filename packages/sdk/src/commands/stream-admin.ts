@@ -59,6 +59,12 @@ function optionalInt(value: number | undefined): { optional: { int64: string } |
   return value !== undefined ? { optional: { int64: value.toString() } } : { optional: null };
 }
 
+function optionalTimestamp(
+  value: Date | undefined,
+): { optional: { timestamp: string } | null } {
+  return value !== undefined ? { optional: damlTimestamp(value) } : { optional: null };
+}
+
 function damlVariant(
   variantConstructor: string,
   value: Record<string, unknown> = { unit: {} },
@@ -191,6 +197,7 @@ export interface SyncIterationParams {
   readonly iterationAmount: Decimal;
   readonly newAllocationCid?: string | undefined;
   readonly expectedIteration?: number;
+  readonly settledAt?: Date;
 }
 
 /**
@@ -222,6 +229,7 @@ export async function buildSyncIteration(
       iterationAmount: damlNumeric(params.iterationAmount),
       newAllocationCid: optionalText(params.newAllocationCid),
       expectedIteration: optionalInt(params.expectedIteration),
+      settledAt: optionalTimestamp(params.settledAt),
     },
     [params.operator],
   )) as { contractId?: string };
@@ -241,6 +249,7 @@ export interface MarkCancelledParams {
   readonly operator: string;
   readonly cancelTime: Date;
   readonly finalWithdrawn: Decimal;
+  readonly releasedAllocationCid?: string;
 }
 
 /**
@@ -268,6 +277,7 @@ export async function buildMarkCancelled(
     {
       cancelTime: damlTimestamp(params.cancelTime),
       finalWithdrawn: damlNumeric(params.finalWithdrawn),
+      releasedAllocationCid: optionalText(params.releasedAllocationCid),
     },
     [params.operator],
   )) as { contractId?: string };

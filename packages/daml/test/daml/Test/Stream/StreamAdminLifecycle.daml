@@ -21,7 +21,7 @@
 module Test.Stream.StreamAdminLifecycle where
 
 import Daml.Script
-import DA.Time (time)
+import DA.Time (time, addRelTime, days)
 import DA.Date (date, Month(..))
 import DA.Optional (fromSome)
 
@@ -59,6 +59,7 @@ testSyncIterationFirst = script do
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   Some admin <- queryContractId carol newCid
   assertMsg "totalWithdrawn advanced" (admin.totalWithdrawn == 100.0)
   assertMsg "numIterations incremented" (admin.numIterations == 1)
@@ -78,23 +79,28 @@ testSyncIterationChain = script do
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   -- iterations 2..5
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-003"
     expectedIteration = None
+    settledAt = None
   c3 <- submit carol $ exerciseCmd c2 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-004"
     expectedIteration = None
+    settledAt = None
   c4 <- submit carol $ exerciseCmd c3 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-005"
     expectedIteration = None
+    settledAt = None
   c5 <- submit carol $ exerciseCmd c4 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-006"
     expectedIteration = None
+    settledAt = None
   Some admin <- queryContractId carol c5
   assertMsg "totalWithdrawn = 500" (admin.totalWithdrawn == 500.0)
   assertMsg "numIterations = 5" (admin.numIterations == 5)
@@ -116,6 +122,7 @@ testSyncIterationCompletesStream = script do
     iterationAmount = 1000.0
     newAllocationCid = None  -- final iteration, no next allocation
     expectedIteration = None
+    settledAt = None
   Some admin <- queryContractId carol newCid
   assertMsg "totalWithdrawn = 1000" (admin.totalWithdrawn == 1000.0)
   assertMsg "status auto-transitioned to Completed" (admin.status == Completed)
@@ -131,11 +138,13 @@ testSyncIterationOvershootRejects = script do
     iterationAmount = 800.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   -- Try to settle 300 more → overshoots 1000 by 100.
   submitMustFail carol $ exerciseCmd c1 Sync_Iteration with
     iterationAmount = 300.0
     newAllocationCid = Some "alloc-003"
     expectedIteration = None
+    settledAt = None
 
 -- | Negative / zero amounts rejected.
 testSyncIterationRejectsZero : Script ()
@@ -145,6 +154,7 @@ testSyncIterationRejectsZero = script do
     iterationAmount = 0.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
 
 -- | Mark_Cancelled records terminal state with finalWithdrawn.
 testMarkCancelled : Script ()
@@ -155,10 +165,13 @@ testMarkCancelled = script do
     iterationAmount = 300.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   let cancelAt = time (date 2026 Mar 1) 0 0 0
   c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled with
     cancelTime = cancelAt
     finalWithdrawn = 300.0
+    -- opt-in audit linkage: cid of the V2 Allocation whose cancel released funds
+    releasedAllocationCid = Some "alloc-002"
   Some admin <- queryContractId carol c2
   assertMsg "status = Cancelled" (admin.status == Cancelled)
   assertMsg "currentAllocationCid cleared on cancel"
@@ -173,10 +186,12 @@ testMarkCancelledRejectsRegress = script do
     iterationAmount = 500.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   -- Can't claim recipient received LESS than they already withdrew.
   submitMustFail carol $ exerciseCmd c1 Mark_Cancelled with
     cancelTime = time (date 2026 Mar 1) 0 0 0
     finalWithdrawn = 400.0
+    releasedAllocationCid = None
 
 -- | Mark_Completed requires fully drawn balance.
 testMarkCompletedRequiresFullDraw : Script ()
@@ -186,6 +201,7 @@ testMarkCompletedRequiresFullDraw = script do
     iterationAmount = 500.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   -- Only 500/1000 drawn — Mark_Completed must fail.
   submitMustFail carol $ exerciseCmd c1 Mark_Completed
 
@@ -197,6 +213,7 @@ testMarkCompletedIdempotent = script do
     iterationAmount = 1000.0
     newAllocationCid = None
     expectedIteration = None
+    settledAt = None
   -- Already Completed via Sync_Iteration auto-transition.
   -- Mark_Completed should succeed and return the same cid.
   c2 <- submit carol $ exerciseCmd c1 Mark_Completed
@@ -212,6 +229,7 @@ testGetStreamAdminInfo = script do
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = None
+    settledAt = None
   info <- submit bob $ exerciseCmd c1 GetStreamAdminInfo with viewer = bob
   assertMsg "info.streamId" (info.streamId == "admin-001")
   assertMsg "info.totalWithdrawn" (info.totalWithdrawn == 100.0)
@@ -234,6 +252,7 @@ testOriginalAllocationIdNoneOnSingleShot = script do
     iterationAmount = 1000.0
     newAllocationCid = None
     expectedIteration = None
+    settledAt = None
   Some admin <- queryContractId carol c1
   -- For a single-shot, the original cid IS None (caller didn't pass
   -- one because the chain is done after this one iteration). Consumers
@@ -253,6 +272,7 @@ testSyncIterationReplayGuard = script do
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
     expectedIteration = Some 1
+    settledAt = None
   Some a1 <- queryContractId carol c1
   assertMsg "first iteration advanced to 1" (a1.numIterations == 1)
   -- Replay: same expectedIteration = Some 1 on the advanced contract
@@ -261,14 +281,41 @@ testSyncIterationReplayGuard = script do
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-003"
     expectedIteration = Some 1
+    settledAt = None
   -- Correct next index = Some 2 succeeds: numIterations 1 -> 2.
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-003"
     expectedIteration = Some 2
+    settledAt = None
   Some a2 <- queryContractId carol c2
   assertMsg "second iteration advanced to 2" (a2.numIterations == 2)
   assertMsg "totalWithdrawn = 200" (a2.totalWithdrawn == 200.0)
+
+-- | Opt-in settle-time bound: `settledAt = Some t` asserts `t` is not in
+-- the future relative to ledger time. A settle claimed for a future
+-- timestamp is rejected; one claimed at-or-before ledger time succeeds.
+testSyncIterationRejectsFutureSettle : Script ()
+testSyncIterationRejectsFutureSettle = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  -- setupStreamAdmin pins ledger time to 2026 Jan 1 via setTime.
+  now <- getTime
+  let future = addRelTime now (days 1)
+  -- A settle claimed for a future timestamp MUST fail.
+  submitMustFail carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-002"
+    expectedIteration = None
+    settledAt = Some future
+  -- A settle claimed at ledger time (or earlier) succeeds.
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-002"
+    expectedIteration = None
+    settledAt = Some now
+  Some a1 <- queryContractId carol c1
+  assertMsg "settle at ledger time advanced iteration" (a1.numIterations == 1)
+  assertMsg "totalWithdrawn advanced" (a1.totalWithdrawn == 100.0)
 
 -- Suppress unused-import warning when fromSome isn't referenced.
 _unusedHelpers : Int
