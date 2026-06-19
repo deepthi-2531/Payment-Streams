@@ -153,6 +153,11 @@ template StreamAdmin
           -- ^ Amount transferred in this iteration's settle.
         newAllocationCid : Optional Text
           -- ^ Next iteration's allocation cid (None for final).
+        expectedIteration : Optional Int
+          -- ^ Opt-in replay guard. When `Some k`, asserts this call records
+          -- exactly the next iteration (k == numIterations + 1), mirroring the
+          -- authoritative V2 `AllocationView.numIterations`, so a replayed or
+          -- out-of-order settle is rejected. `None` keeps legacy behaviour.
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
@@ -160,6 +165,10 @@ template StreamAdmin
         let newTotalWithdrawn = totalWithdrawn + iterationAmount
         assertMsg "Iteration overshoots committed balance"
           (newTotalWithdrawn <= totalDeposited)
+
+        case expectedIteration of
+          None -> pure ()
+          Some k -> assertMsg "Iteration out of order or replayed" (k == numIterations + 1)
 
         let newStatus =
               if newTotalWithdrawn == totalDeposited

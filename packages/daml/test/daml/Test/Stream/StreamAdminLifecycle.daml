@@ -58,6 +58,7 @@ testSyncIterationFirst = script do
   newCid <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   Some admin <- queryContractId carol newCid
   assertMsg "totalWithdrawn advanced" (admin.totalWithdrawn == 100.0)
   assertMsg "numIterations incremented" (admin.numIterations == 1)
@@ -76,19 +77,24 @@ testSyncIterationChain = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   -- iterations 2..5
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-003"
+    expectedIteration = None
   c3 <- submit carol $ exerciseCmd c2 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-004"
+    expectedIteration = None
   c4 <- submit carol $ exerciseCmd c3 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-005"
+    expectedIteration = None
   c5 <- submit carol $ exerciseCmd c4 Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-006"
+    expectedIteration = None
   Some admin <- queryContractId carol c5
   assertMsg "totalWithdrawn = 500" (admin.totalWithdrawn == 500.0)
   assertMsg "numIterations = 5" (admin.numIterations == 5)
@@ -109,6 +115,7 @@ testSyncIterationCompletesStream = script do
   newCid <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 1000.0
     newAllocationCid = None  -- final iteration, no next allocation
+    expectedIteration = None
   Some admin <- queryContractId carol newCid
   assertMsg "totalWithdrawn = 1000" (admin.totalWithdrawn == 1000.0)
   assertMsg "status auto-transitioned to Completed" (admin.status == Completed)
@@ -123,10 +130,12 @@ testSyncIterationOvershootRejects = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 800.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   -- Try to settle 300 more → overshoots 1000 by 100.
   submitMustFail carol $ exerciseCmd c1 Sync_Iteration with
     iterationAmount = 300.0
     newAllocationCid = Some "alloc-003"
+    expectedIteration = None
 
 -- | Negative / zero amounts rejected.
 testSyncIterationRejectsZero : Script ()
@@ -135,6 +144,7 @@ testSyncIterationRejectsZero = script do
   submitMustFail carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 0.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
 
 -- | Mark_Cancelled records terminal state with finalWithdrawn.
 testMarkCancelled : Script ()
@@ -144,6 +154,7 @@ testMarkCancelled = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 300.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   let cancelAt = time (date 2026 Mar 1) 0 0 0
   c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled with
     cancelTime = cancelAt
@@ -161,6 +172,7 @@ testMarkCancelledRejectsRegress = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 500.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   -- Can't claim recipient received LESS than they already withdrew.
   submitMustFail carol $ exerciseCmd c1 Mark_Cancelled with
     cancelTime = time (date 2026 Mar 1) 0 0 0
@@ -173,6 +185,7 @@ testMarkCompletedRequiresFullDraw = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 500.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   -- Only 500/1000 drawn — Mark_Completed must fail.
   submitMustFail carol $ exerciseCmd c1 Mark_Completed
 
@@ -183,6 +196,7 @@ testMarkCompletedIdempotent = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 1000.0
     newAllocationCid = None
+    expectedIteration = None
   -- Already Completed via Sync_Iteration auto-transition.
   -- Mark_Completed should succeed and return the same cid.
   c2 <- submit carol $ exerciseCmd c1 Mark_Completed
@@ -197,6 +211,7 @@ testGetStreamAdminInfo = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 100.0
     newAllocationCid = Some "alloc-002"
+    expectedIteration = None
   info <- submit bob $ exerciseCmd c1 GetStreamAdminInfo with viewer = bob
   assertMsg "info.streamId" (info.streamId == "admin-001")
   assertMsg "info.totalWithdrawn" (info.totalWithdrawn == 100.0)
@@ -218,6 +233,7 @@ testOriginalAllocationIdNoneOnSingleShot = script do
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
     iterationAmount = 1000.0
     newAllocationCid = None
+    expectedIteration = None
   Some admin <- queryContractId carol c1
   -- For a single-shot, the original cid IS None (caller didn't pass
   -- one because the chain is done after this one iteration). Consumers
@@ -225,6 +241,34 @@ testOriginalAllocationIdNoneOnSingleShot = script do
   assertMsg "originalAllocationId stays None when single-shot"
     (admin.originalAllocationId == None)
   assertMsg "status = Completed" (admin.status == Completed)
+
+-- | Opt-in replay guard: `expectedIteration = Some k` asserts the call
+-- records exactly the next iteration (k == numIterations + 1). A replayed
+-- value is rejected; the correct next index succeeds.
+testSyncIterationReplayGuard : Script ()
+testSyncIterationReplayGuard = script do
+  (_, _, carol, adminCid) <- setupStreamAdmin
+  -- First iteration: numIterations 0 -> 1, expectedIteration = Some 1 OK.
+  c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-002"
+    expectedIteration = Some 1
+  Some a1 <- queryContractId carol c1
+  assertMsg "first iteration advanced to 1" (a1.numIterations == 1)
+  -- Replay: same expectedIteration = Some 1 on the advanced contract
+  -- (next index is now 2) MUST be rejected by the guard.
+  submitMustFail carol $ exerciseCmd c1 Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-003"
+    expectedIteration = Some 1
+  -- Correct next index = Some 2 succeeds: numIterations 1 -> 2.
+  c2 <- submit carol $ exerciseCmd c1 Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "alloc-003"
+    expectedIteration = Some 2
+  Some a2 <- queryContractId carol c2
+  assertMsg "second iteration advanced to 2" (a2.numIterations == 2)
+  assertMsg "totalWithdrawn = 200" (a2.totalWithdrawn == 200.0)
 
 -- Suppress unused-import warning when fromSome isn't referenced.
 _unusedHelpers : Int
