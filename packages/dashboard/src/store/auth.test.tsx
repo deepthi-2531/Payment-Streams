@@ -8,17 +8,49 @@
  *   • dev-mode setDevCredentials works when no wallet is connected
  */
 
-import type { vi } from 'vitest';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import {
-  dappSDK,
-  type Wallet,
-  type ConnectResult,
-  type StatusEvent,
-} from '@canton-network/dapp-sdk';
 import { AuthProvider, useAuth } from './auth.js';
+import type {
+  StreamsWalletAccount,
+  StreamsWalletConnectResult,
+  StreamsWalletStatus,
+} from './wallet/types.js';
+
+const mockWalletClient = vi.hoisted(() => ({
+  layer: 'dapp-sdk',
+  name: 'Mock wallet',
+  supportsHostedMultiWallet: false,
+  capabilities: {
+    ledgerApi: true,
+    prepareExecuteAndWait: true,
+    v2AllocationRequestUx: true,
+    hostedMultiWallet: false,
+    openSurfacesWalletUi: true,
+  },
+  init: vi.fn(),
+  status: vi.fn(),
+  connect: vi.fn(),
+  disconnect: vi.fn(),
+  listAccounts: vi.fn(),
+  open: vi.fn(),
+  ledgerApi: vi.fn(),
+  prepareExecuteAndWait: vi.fn(),
+  describeConnectError: vi.fn(),
+  onStatusChanged: vi.fn(),
+  onAccountsChanged: vi.fn(),
+  onConnected: vi.fn(),
+  onTxChanged: vi.fn(),
+  removeOnStatusChanged: vi.fn(),
+  removeOnAccountsChanged: vi.fn(),
+  removeOnConnected: vi.fn(),
+  removeOnTxChanged: vi.fn(),
+}));
+
+vi.mock('./wallet/index.js', () => ({
+  walletClient: mockWalletClient,
+}));
 
 // Restore each mock to a clean default before every test so previous
 // `mockResolvedValue(...)` overrides don't leak into the next case.
@@ -28,23 +60,22 @@ beforeEach(() => {
   } catch {
     /* incognito */
   }
-  (dappSDK.init as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue(
-    undefined,
-  );
-  (dappSDK.status as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+  mockWalletClient.init.mockReset().mockResolvedValue(undefined);
+  mockWalletClient.status.mockReset().mockResolvedValue({
     provider: { id: 'mock-provider' },
     connection: { isConnected: false, isNetworkConnected: false },
   });
-  (dappSDK.connect as ReturnType<typeof vi.fn>).mockReset().mockResolvedValue({
+  mockWalletClient.connect.mockReset().mockResolvedValue({
     isConnected: false,
     isNetworkConnected: false,
   });
-  (dappSDK.disconnect as ReturnType<typeof vi.fn>)
+  mockWalletClient.disconnect.mockReset().mockResolvedValue(undefined);
+  mockWalletClient.listAccounts.mockReset().mockResolvedValue([]);
+  mockWalletClient.describeConnectError
     .mockReset()
-    .mockResolvedValue(null);
-  (dappSDK.listAccounts as ReturnType<typeof vi.fn>)
-    .mockReset()
-    .mockResolvedValue([]);
+    .mockImplementation(async (err: unknown) =>
+      err instanceof Error ? err.message : String(err),
+    );
   for (const name of [
     'onStatusChanged',
     'onAccountsChanged',
@@ -55,9 +86,7 @@ beforeEach(() => {
     'removeOnConnected',
     'removeOnTxChanged',
   ] as const) {
-    (dappSDK[name] as ReturnType<typeof vi.fn>)
-      .mockReset()
-      .mockResolvedValue(undefined);
+    mockWalletClient[name].mockReset().mockResolvedValue(undefined);
   }
 });
 
@@ -97,23 +126,18 @@ describe('AuthProvider', () => {
     // Use unknown-cast so the test fixture doesn't have to mirror the
     // entire SDK WalletStatus enum shape — we only exercise the fields
     // auth.tsx reads (`primary`, `partyId`, `signingProviderId`).
-    const wallets: Wallet[] = [
-      ({
+    const wallets: StreamsWalletAccount[] = [
+      {
         primary: true,
         partyId: 'alice::1220',
-        status: 'connected',
-        hint: 'alice',
-        publicKey: 'pk',
-        namespace: '1220',
-        networkId: 'canton:test',
         signingProviderId: 'wallet-gateway-internal',
-      } as unknown) as Wallet,
+      },
     ];
-    const connectResult: ConnectResult = {
+    const connectResult: StreamsWalletConnectResult = {
       isConnected: true,
       isNetworkConnected: true,
     };
-    const statusEvent: StatusEvent = {
+    const statusEvent: StreamsWalletStatus = {
       provider: { id: 'mock-provider' },
       connection: connectResult,
       network: {
@@ -125,15 +149,9 @@ describe('AuthProvider', () => {
     // Use plain `mockResolvedValue` (not `Once`) — AuthProvider's cold-start
     // effect calls `status()` before the click, and the click calls it
     // again. Both calls need to return the connected snapshot.
-    (dappSDK.connect as ReturnType<typeof vi.fn>).mockResolvedValue(
-      connectResult,
-    );
-    (dappSDK.status as ReturnType<typeof vi.fn>).mockResolvedValue(
-      statusEvent,
-    );
-    (dappSDK.listAccounts as ReturnType<typeof vi.fn>).mockResolvedValue(
-      wallets,
-    );
+    mockWalletClient.connect.mockResolvedValue(connectResult);
+    mockWalletClient.status.mockResolvedValue(statusEvent);
+    mockWalletClient.listAccounts.mockResolvedValue(wallets);
 
     render(
       <AuthProvider>

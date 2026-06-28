@@ -1,7 +1,7 @@
-/** Hosted multi-wallet picker for wallet layers that expose a wallet list. */
+/** Hosted multi-wallet picker — a dropdown defaulting to the available wallet. */
 
-import { useEffect, useState, type CSSProperties } from 'react';
-import { ChevronRight, Wallet, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { ChevronDown, Wallet, AlertCircle, Loader2 } from 'lucide-react';
 import { useAuth } from '../../store/auth.js';
 import { walletClient, type StreamsWalletEntry } from '../../store/wallet/index.js';
 
@@ -11,30 +11,35 @@ interface WalletPickerProps {
 
 type LoadState = 'loading' | 'ready' | 'error';
 
+/** Sort key: installed/available first, unknown next, not-installed last —
+ * so the available wallet (e.g. FiveNorth/Loop) is the default selection and
+ * the not-installed ones are tucked at the bottom of the dropdown instead of
+ * cluttering the screen as greyed-out rows. */
+function rank(w: StreamsWalletEntry): number {
+  if (w.installed === true) return 0;
+  if (w.installed === undefined) return 1;
+  return 2;
+}
+
 export function WalletPicker({ onError }: WalletPickerProps) {
   const auth = useAuth();
   const [entries, setEntries] = useState<readonly StreamsWalletEntry[]>([]);
   const [state, setState] = useState<LoadState>('loading');
-  const [connecting, setConnecting] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string>('');
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        // walletClient.listWallets is optional on the contract —
-        // if the active layer doesn't define it (dapp-sdk single-
-        // wallet path), this component should not have been
-        // mounted in the first place. Defend defensively anyway.
-        const list = walletClient.listWallets
-          ? await walletClient.listWallets()
-          : [];
+        const list = walletClient.listWallets ? await walletClient.listWallets() : [];
         if (cancelled) return;
-        setEntries(list);
+        const sorted = [...list].sort((a, b) => rank(a) - rank(b));
+        setEntries(sorted);
+        setSelected(sorted[0]?.id ?? '');
         setState('ready');
       } catch (err) {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : String(err);
-        onError?.(msg);
+        onError?.(err instanceof Error ? err.message : String(err));
         setState('error');
       }
     })();
@@ -43,23 +48,22 @@ export function WalletPicker({ onError }: WalletPickerProps) {
     };
   }, [onError]);
 
-  const onPick = async (walletId: string) => {
-    setConnecting(walletId);
+  const current = useMemo(
+    () => entries.find((w) => w.id === selected),
+    [entries, selected],
+  );
+
+  const onConnect = async () => {
+    if (!selected) return;
     try {
-      await auth.connect(walletId);
-    } finally {
-      setConnecting(null);
+      await auth.connect(selected);
+    } catch {
+      /* surfaced via auth.error / onError */
     }
   };
 
   if (state === 'loading') {
-    return (
-      <div style={listStyle}>
-        {[0, 1, 2].map((i) => (
-          <div key={i} style={skeletonRowStyle} />
-        ))}
-      </div>
-    );
+    return <div style={skeletonStyle} />;
   }
 
   if (state === 'error' || entries.length === 0) {
@@ -71,92 +75,98 @@ export function WalletPicker({ onError }: WalletPickerProps) {
     );
   }
 
+  const busy = auth.isConnecting;
+  const notInstalled = current?.installed === false;
+
   return (
-    <div style={listStyle}>
-      {entries.map((w) => (
-        <button
-          key={w.id}
-          type="button"
-          onClick={() => void onPick(w.id)}
-          disabled={auth.isConnecting || connecting !== null}
-          style={rowStyle(w.installed === false)}
-          title={w.installed === false && w.installUrl ? `Install at ${w.installUrl}` : undefined}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={selectWrapStyle}>
+        <Wallet size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        <select
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          disabled={busy}
+          aria-label="Select wallet"
+          style={selectStyle}
         >
-          <div style={leftCellStyle}>
-            <div style={iconCellStyle}>
-              <Wallet size={14} />
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>{w.name}</span>
-                {w.cip0103Native && <CipBadge />}
-              </div>
-              <InstallStateBadge installed={w.installed} installUrl={w.installUrl} />
-            </div>
-          </div>
-          {connecting === w.id ? (
-            <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />
-          ) : (
-            <ChevronRight size={14} style={{ color: 'var(--fg-4)' }} />
+          {entries.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+              {w.installed === false ? ' — not installed' : ''}
+            </option>
+          ))}
+        </select>
+        <ChevronDown size={15} style={{ color: 'var(--fg-4)', flexShrink: 0 }} />
+      </div>
+
+      {notInstalled && (
+        <div style={hintStyle}>
+          This wallet isn’t detected.
+          {current?.installUrl && (
+            <a
+              href={current.installUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ marginLeft: 4, color: 'var(--accent)' }}
+            >
+              Install ↗
+            </a>
           )}
-        </button>
-      ))}
+        </div>
+      )}
+
+      <button
+        type="button"
+        className="btn btn-primary"
+        onClick={() => void onConnect()}
+        disabled={busy || !selected}
+        style={{ width: '100%', padding: '10px 14px', fontSize: 14, justifyContent: 'center' }}
+      >
+        {busy ? (
+          <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />
+        ) : (
+          <>
+            <Wallet size={14} /> Connect {current?.name ?? 'wallet'}
+          </>
+        )}
+      </button>
     </div>
   );
 }
 
-function CipBadge() {
-  return (
-    <span
-      className="mono"
-      style={{
-        fontSize: 9.5,
-        fontWeight: 600,
-        padding: '1px 6px',
-        borderRadius: 999,
-        background: 'var(--accent-soft)',
-        color: 'var(--accent)',
-      }}
-      title="CIP-0103 native wallet"
-    >
-      CIP-103
-    </span>
-  );
-}
-
-function InstallStateBadge({
-  installed,
-  installUrl,
-}: {
-  readonly installed?: boolean;
-  readonly installUrl?: string;
-}) {
-  if (installed === true) {
-    return (
-      <span style={installedStyle}>
-        <CheckCircle2 size={10} /> Installed
-      </span>
-    );
-  }
-  if (installed === false) {
-    return (
-      <span style={notInstalledStyle}>
-        Not installed
-        {installUrl && <span style={{ marginLeft: 4, color: 'var(--accent)' }}>· install</span>}
-      </span>
-    );
-  }
-  return null;
-}
-
-const listStyle: CSSProperties = {
+const selectWrapStyle: CSSProperties = {
   display: 'flex',
-  flexDirection: 'column',
+  alignItems: 'center',
   gap: 8,
+  padding: '0 12px',
+  background: 'var(--bg-elev)',
+  border: '1px solid var(--line-2)',
+  borderRadius: 'var(--r-md)',
 };
 
-const skeletonRowStyle: CSSProperties = {
-  height: 52,
+const selectStyle: CSSProperties = {
+  flex: 1,
+  appearance: 'none',
+  WebkitAppearance: 'none',
+  MozAppearance: 'none',
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+  color: 'var(--fg)',
+  font: 'inherit',
+  fontSize: 13,
+  fontWeight: 500,
+  padding: '11px 4px',
+  cursor: 'pointer',
+};
+
+const hintStyle: CSSProperties = {
+  fontSize: 11,
+  color: 'var(--fg-4)',
+};
+
+const skeletonStyle: CSSProperties = {
+  height: 46,
   borderRadius: 'var(--r-md)',
   background: 'var(--bg-elev)',
   border: '1px solid var(--line)',
@@ -173,56 +183,4 @@ const emptyStyle: CSSProperties = {
   borderRadius: 'var(--r-md)',
   fontSize: 12.5,
   color: 'var(--fg-3)',
-};
-
-function rowStyle(notInstalled: boolean): CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    padding: '10px 12px',
-    background: 'var(--bg-elev)',
-    border: '1px solid var(--line-2)',
-    borderRadius: 'var(--r-md)',
-    cursor: 'pointer',
-    transition: 'border 120ms, background 120ms',
-    opacity: notInstalled ? 0.7 : 1,
-    width: '100%',
-    textAlign: 'left',
-    color: 'inherit',
-    font: 'inherit',
-  };
-}
-
-const leftCellStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-};
-
-const iconCellStyle: CSSProperties = {
-  width: 28,
-  height: 28,
-  borderRadius: 8,
-  background: 'var(--accent-soft)',
-  color: 'var(--accent)',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-};
-
-const installedStyle: CSSProperties = {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  fontSize: 10.5,
-  color: 'var(--accent)',
-  marginTop: 2,
-};
-
-const notInstalledStyle: CSSProperties = {
-  fontSize: 10.5,
-  color: 'var(--fg-4)',
-  marginTop: 2,
 };

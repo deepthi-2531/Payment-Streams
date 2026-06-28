@@ -2,7 +2,7 @@
 
 import { Link } from 'react-router';
 import { Plus, Inbox, ArrowUpRight, TrendingUp, Wallet } from 'lucide-react';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useStreams } from '../hooks/useStreams.js';
 import { useWalletHoldings } from '../hooks/useWalletHoldings.js';
 import { useAuth } from '../store/auth.js';
@@ -15,6 +15,7 @@ import {
   StatusBadge,
 } from '../components/common/index.js';
 import type { WalletHolding } from '../lib/walletHoldings.js';
+import { AssetGlyph } from '../components/primitives/AssetGlyph.js';
 
 export function DashboardPage() {
   const { party } = useAuth();
@@ -27,7 +28,24 @@ export function DashboardPage() {
   const holdingsQ = useWalletHoldings();
   const holdingsResult = holdingsQ.data;
   const holdings: readonly WalletHolding[] = holdingsResult?.holdings ?? [];
-  const hasHoldings = holdings.length > 0;
+  const [showSmall, setShowSmall] = useState(false);
+  // Hide dust/zero balances by default (keep CC always — it's the primary asset),
+  // CC first then by descending value. A "small balance" is one whose total value
+  // (unlocked + locked) is below SMALL_BALANCE; the toggle reveals them.
+  const SMALL_BALANCE = 0.01;
+  const num = (raw: string, decimals: number): number =>
+    Number(formatWalletBalance(raw, decimals).replace(/,/g, '')) || 0;
+  const totalValueOf = (h: WalletHolding): number =>
+    num(h.unlockedBalance, h.decimals) + num(h.lockedBalance, h.decimals);
+  const isSmall = (h: WalletHolding): boolean =>
+    !h.isCantonCoin && totalValueOf(h) < SMALL_BALANCE;
+  const sortedHoldings = [...holdings].sort((a, b) => {
+    if (a.isCantonCoin !== b.isCantonCoin) return a.isCantonCoin ? -1 : 1;
+    return totalValueOf(b) - totalValueOf(a);
+  });
+  const smallCount = sortedHoldings.filter(isSmall).length;
+  const displayHoldings = showSmall ? sortedHoldings : sortedHoldings.filter((h) => !isSmall(h));
+  const hasHoldings = sortedHoldings.length > 0;
   const unsupportedReason =
     holdingsResult?.strategy === 'unsupported' ? holdingsResult.reason : null;
 
@@ -121,11 +139,11 @@ export function DashboardPage() {
           <span style={{ fontSize: 12 }}>{unsupportedReason}</span>
         </div>
       )}
-      {hasHoldings && holdings && (
+      {hasHoldings && (
         <div style={{ marginTop: 8, marginBottom: 32 }}>
           <SectionHeader
             title="Your wallet"
-            count={holdings.length}
+            count={displayHoldings.length}
             action={
               <Link to="/create" className="btn btn-ghost btn-sm">
                 Stream an asset <ArrowUpRight size={12} />
@@ -139,10 +157,30 @@ export function DashboardPage() {
               gap: 12,
             }}
           >
-            {holdings.map((h) => (
+            {displayHoldings.map((h) => (
               <WalletAssetCard key={`${h.instrumentAdmin}:${h.instrumentId}`} holding={h} />
             ))}
           </div>
+          {smallCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowSmall((s) => !s)}
+              style={{
+                marginTop: 10,
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                fontSize: 12,
+                color: 'var(--accent)',
+                font: 'inherit',
+              }}
+            >
+              {showSmall
+                ? 'Hide small balances'
+                : `Show ${smallCount} small balance${smallCount === 1 ? '' : 's'}`}
+            </button>
+          )}
         </div>
       )}
       {holdingsQ.isError && (
@@ -468,11 +506,28 @@ function partyShort(p: string): string {
  */
 function formatWalletBalance(raw: string, decimals: number): string {
   if (!raw) return '0';
-  if (decimals === 0) return raw;
-  const padded = raw.padStart(decimals + 1, '0');
+  const neg = raw.startsWith('-');
+  const body = neg ? raw.slice(1) : raw;
+  // Group the integer part with thousands separators so a large balance reads
+  // as "9,535,143,306,033" rather than a bare digit run.
+  const group = (s: string): string => {
+    try {
+      return BigInt(s || '0').toLocaleString('en-US');
+    } catch {
+      return s;
+    }
+  };
+  // Already a decimal string (wallet handed us major units) — don't shift again.
+  if (body.includes('.')) {
+    const [i = '', f = ''] = body.split('.');
+    const ft = f.replace(/0+$/, '');
+    return `${neg ? '-' : ''}${ft ? `${group(i)}.${ft}` : group(i)}`;
+  }
+  if (decimals === 0) return `${neg ? '-' : ''}${group(body)}`;
+  const padded = body.padStart(decimals + 1, '0');
   const intPart = padded.slice(0, padded.length - decimals);
   const fracPart = padded.slice(padded.length - decimals).replace(/0+$/, '');
-  return fracPart ? `${intPart}.${fracPart}` : intPart;
+  return `${neg ? '-' : ''}${fracPart ? `${group(intPart)}.${fracPart}` : group(intPart)}`;
 }
 
 function WalletAssetCard({ holding }: { holding: WalletHolding }) {
@@ -492,7 +547,7 @@ function WalletAssetCard({ holding }: { holding: WalletHolding }) {
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Wallet size={14} style={{ color: 'var(--accent)' }} />
+        <AssetGlyph asset={holding.symbol} size={22} />
         <strong style={{ fontSize: 14 }}>{holding.symbol}</strong>
         {holding.isCantonCoin && (
           <span

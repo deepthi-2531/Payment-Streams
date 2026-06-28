@@ -8,6 +8,7 @@
 
 import { PageHeader } from '../components/common/index.js';
 import { CreateStreamWizard } from '../components/streams/CreateStreamWizard.js';
+import { LaneSwitch } from '../components/streams/LaneSwitch.js';
 
 export function CreateStreamPage() {
   return (
@@ -15,6 +16,7 @@ export function CreateStreamPage() {
       <PageHeader
         title="Create a stream"
         subtitle="Configure the schedule and custody. The stream goes live on submit; recipient funding approval happens in the Amulet wallet."
+        actions={<LaneSwitch lane="v2" kind="create" />}
       />
       <CreateStreamWizard />
     </div>

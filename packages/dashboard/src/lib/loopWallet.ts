@@ -252,6 +252,39 @@ export async function getLoopHoldingLogoUrl(
 }
 
 /**
+ * The connected Loop wallet's native Canton Coin (Amulet) holding row, or
+ * null when the wallet holds no CC. Prefers the `is_cc` flag Loop sets, then
+ * falls back to symbol / instrument-id heuristics. This is the SAME proven
+ * REST reader the dashboard's wallet panel uses, so the balance it reports is
+ * authoritative for the connected party.
+ */
+export async function getLoopCantonCoinHolding(): Promise<LoopHolding | null> {
+  const holdings = await getLoopHoldings();
+  return (
+    holdings.find((h) => h.isCantonCoin) ??
+    holdings.find((h) => h.symbol?.toUpperCase() === 'CC') ??
+    holdings.find((h) => /amulet/i.test(h.instrumentId)) ??
+    null
+  );
+}
+
+/**
+ * Convert a minor-unit integer string (Loop's wire balance) plus a decimals
+ * count into a JS number. Used where a numeric amount is needed (e.g. the
+ * settle pre-flight sum check); display paths should prefer `formatLoopBalance`
+ * which keeps full string precision.
+ */
+export function loopMinorToDecimal(minor: string, decimals: number): number {
+  if (!minor) return 0;
+  if (!decimals) return Number(minor);
+  const neg = minor.startsWith('-');
+  const digits = (neg ? minor.slice(1) : minor).padStart(decimals + 1, '0');
+  const intPart = digits.slice(0, digits.length - decimals);
+  const fracPart = digits.slice(digits.length - decimals);
+  return Number(`${neg ? '-' : ''}${intPart}.${fracPart}`);
+}
+
+/**
  * Format a Loop holding's balance for display. The wire balance
  * is a string-encoded big integer in minor units; we shift by
  * `decimals` and trim trailing zeros for the symbol-side display.

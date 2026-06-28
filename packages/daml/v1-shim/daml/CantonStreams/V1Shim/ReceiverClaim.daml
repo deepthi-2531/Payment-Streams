@@ -1,0 +1,77 @@
+-- | Receiver-claim coordinator for the transitional CIP-56 V1 lane.
+--
+-- V1 `Allocation_ExecuteTransfer` is jointly controlled by executor, sender,
+-- and receiver. This template captures the sender's consent once, at stream
+-- setup, then lets the receiver and executor settle the bound allocation later
+-- without asking the sender to co-sign each claim.
+--
+-- This lives in the V1 shim package because it is intentionally tied to the
+-- V1 allocation interfaces. Retire it with the V1 lane once target assets
+-- publish the V2 allocation surface.
+module CantonStreams.V1Shim.ReceiverClaim where
+
+import Splice.Api.Token.MetadataV1
+import qualified Splice.Api.Token.AllocationV1 as A1
+
+-- | A claimable V1 allocation for one stream cycle.
+template ReceiverClaimV1
+  with
+    streamId : Text
+    cycle : Int
+    sender : Party
+    recipient : Party
+    executor : Party
+    allocationCid : ContractId A1.Allocation
+    expectedSettlementRef : Text
+    amount : Decimal
+    unlockAt : Time
+    expiresAt : Time
+    meta : Metadata
+  where
+    signatory sender
+    observer recipient, executor
+
+    ensure cycle > 0
+        && amount > 0.0
+        && unlockAt < expiresAt
+        && expectedSettlementRef /= ""
+
+    -- | Receiver pulls the already-funded allocation after the unlock time.
+    --
+    -- The executor co-signs because it is the token-standard settlement
+    -- executor and the operational gate for time-based claims. The sender does
+    -- not co-sign this choice; their consent was captured by signing this
+    -- contract at setup. The recipient and executor are observers so the
+    -- incoming claim is visible before it is exercised.
+    choice Claim : A1.Allocation_ExecuteTransferResult
+      with
+        extraArgs : ExtraArgs
+      controller recipient, executor
+      do
+        now <- getTime
+        assertMsg "claim not unlocked yet" (unlockAt <= now)
+        assertMsg "claim expired" (now < expiresAt)
+
+        allocation <- fetch allocationCid
+        let allocationView : A1.AllocationView = view allocation
+        let spec : A1.AllocationSpecification = allocationView.allocation
+        assertMsg "allocation settlement ref mismatch"
+          (spec.settlement.settlementRef.id == expectedSettlementRef)
+        assertMsg "allocation executor mismatch" (spec.settlement.executor == executor)
+        assertMsg "allocation sender mismatch" (spec.transferLeg.sender == sender)
+        assertMsg "allocation recipient mismatch" (spec.transferLeg.receiver == recipient)
+        assertMsg "allocation amount mismatch" (spec.transferLeg.amount == amount)
+
+        exercise allocationCid A1.Allocation_ExecuteTransfer with
+          extraArgs
+
+    -- | Sender can reclaim an unclaimed allocation. V1 cancel requires
+    -- sender + receiver + executor, so the sender reclaim path must use
+    -- `Allocation_Withdraw`, whose controller is the sender.
+    choice SenderWithdraw : A1.Allocation_WithdrawResult
+      with
+        extraArgs : ExtraArgs
+      controller sender
+      do
+        exercise allocationCid A1.Allocation_Withdraw with
+          extraArgs
