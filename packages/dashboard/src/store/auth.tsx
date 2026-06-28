@@ -55,10 +55,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Dev-mode fallback — populated only when no wallet is connected.
-  // Held in React memory only; never written to web storage.
-  const [devToken, setDevToken] = useState<string | null>(null);
-  const [devParty, setDevParty] = useState<string | null>(null);
+  // Dev-mode fallback — populated only when no wallet is connected. Persisted to
+  // localStorage so a page refresh doesn't silently log the dev session out (the
+  // dev JWT only names a public party id; it is not a credential to anything
+  // sensitive). A real wallet connection always takes precedence over this.
+  const [devToken, setDevToken] = useState<string | null>(() => {
+    try { return localStorage.getItem('cs.devToken'); } catch { return null; }
+  });
+  const [devParty, setDevParty] = useState<string | null>(() => {
+    try { return localStorage.getItem('cs.devParty'); } catch { return null; }
+  });
 
   // Let StrictMode remount this effect naturally. The cleanup detaches the
   // wallet listeners from the previous run.
@@ -100,6 +106,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             /* ignore */
           }
         } else if (walletClient.capabilities.hostedMultiWallet) {
+          // Hosted wallets (Loop) persist their session in localStorage but
+          // don't always re-establish it on a page load, stranding the user on
+          // the connect screen. If a prior session exists, attempt a silent
+          // reconnect — connect() on an already-paired wallet restores it
+          // without a popup. The delayed re-check below remains as a fallback.
+          let hadPersistedSession = false;
+          try {
+            hadPersistedSession = !!localStorage.getItem('loop_connect');
+          } catch {
+            /* localStorage unavailable (incognito) */
+          }
+          if (hadPersistedSession) {
+            try {
+              const reconnected = await walletClient.connect();
+              if (!cancelled && reconnected.isConnected) {
+                const latest = await walletClient.status();
+                if (!cancelled) setStatus(latest);
+                const list = await walletClient.listAccounts().catch(() => []);
+                if (!cancelled) setAccounts(list ?? []);
+              }
+            } catch {
+              /* fall through to the delayed re-check below */
+            }
+          }
           // Some hosted wallets finish restoring shortly after initial load.
           // A single delayed check keeps refreshes from stranding users on
           // the connect screen.
@@ -178,6 +208,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setDevCredentials = useCallback((token: string, party: string) => {
     setDevToken(token);
     setDevParty(party);
+    try {
+      localStorage.setItem('cs.devToken', token);
+      localStorage.setItem('cs.devParty', party);
+    } catch {
+      /* web storage unavailable — fall back to in-memory only */
+    }
   }, []);
 
   const primaryAccount = useMemo<StreamsWalletAccount | null>(() => {

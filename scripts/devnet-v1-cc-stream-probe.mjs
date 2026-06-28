@@ -34,6 +34,11 @@
  * three is also fine). For production topologies, compose the exercise
  * inside a choice on a contract signed by those parties.
  *
+ * To empirically test a live deployment's effective execute authority, run
+ * with EXECUTE_AUTH_MATRIX=true and distinct sender / receiver / executor
+ * parties. The probe will try no-sender actAs sets first, then sender-including
+ * fallbacks, and report the first set that actually settles.
+ *
  * Usage:
  *
  *   CANTON_JSON_API_URL=http://<participant>:7575 \
@@ -99,6 +104,14 @@ const config = {
     'V1_ALLOCATION_FACTORY_INTERFACE_ID',
     '#splice-api-token-allocation-instruction-v1:Splice.Api.Token.AllocationInstructionV1:AllocationFactory',
   ),
+  /**
+   * Default keeps the historical proven path: all controllers in actAs.
+   * EXECUTE_AUTH_MATRIX=true tries smaller actAs sets first, answering whether
+   * a receiver-claim UX can settle without sender authority.
+   * EXECUTE_ACT_AS="party1,party2" forces one exact actAs set for debugging.
+   */
+  executeAuthMatrix: env('EXECUTE_AUTH_MATRIX', 'false') === 'true',
+  executeActAsOverride: env('EXECUTE_ACT_AS'),
   allocateBeforeSeconds: Number(env('ALLOCATE_BEFORE_SECONDS', '1200')),
   settleBeforeSeconds: Number(env('SETTLE_BEFORE_SECONDS', '1800')),
   dryRun: env('DRY_RUN', 'false') === 'true',
@@ -187,6 +200,48 @@ let commandCounter = 0;
 function commandId(tag) {
   commandCounter += 1;
   return `v1-probe-${tag}-${Date.now()}-${commandCounter}`;
+}
+
+function uniqueParties(parties) {
+  return [...new Set(parties.filter(Boolean))];
+}
+
+function describeActAs(parties) {
+  const labels = [];
+  if (parties.includes(config.executorParty)) labels.push('executor');
+  if (parties.includes(config.senderParty)) labels.push('sender');
+  if (parties.includes(config.recipientParty)) labels.push('receiver');
+  return `${labels.join('+') || 'custom'} [${parties.join(', ')}]`;
+}
+
+function executeActAsCandidates() {
+  if (config.executeActAsOverride) {
+    return [
+      {
+        label: 'override',
+        actAs: uniqueParties(config.executeActAsOverride.split(',').map((p) => p.trim())),
+      },
+    ];
+  }
+  const all = uniqueParties([config.executorParty, config.senderParty, config.recipientParty]);
+  if (!config.executeAuthMatrix) {
+    return [{ label: 'all-controllers', actAs: all }];
+  }
+
+  return [
+    { label: 'executor-only', actAs: uniqueParties([config.executorParty]) },
+    { label: 'receiver-only', actAs: uniqueParties([config.recipientParty]) },
+    { label: 'executor+receiver', actAs: uniqueParties([config.executorParty, config.recipientParty]) },
+    { label: 'sender-only', actAs: uniqueParties([config.senderParty]) },
+    { label: 'sender+receiver', actAs: uniqueParties([config.senderParty, config.recipientParty]) },
+    { label: 'sender+executor', actAs: uniqueParties([config.senderParty, config.executorParty]) },
+    { label: 'all-controllers', actAs: all },
+  ];
+}
+
+function shortError(err) {
+  const msg = err?.message ?? String(err);
+  return msg.length > 900 ? `${msg.slice(0, 450)} … ${msg.slice(-350)}` : msg;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,8 +464,7 @@ async function executeTransfer(allocationCid) {
   const disclosed = mapDisclosed(ctx);
   log(`execute-transfer choice context fetched (${disclosed.length} disclosed contracts)`);
 
-  const actAs = [...new Set([config.executorParty, config.senderParty, config.recipientParty])];
-  const res = await submitAndWait('execute', actAs, [{
+  const command = {
     ExerciseCommand: {
       templateId: config.allocationInterfaceId,
       contractId: allocationCid,
@@ -419,8 +473,40 @@ async function executeTransfer(allocationCid) {
         extraArgs: { context: contextValues(ctx), meta: emptyMeta },
       },
     },
-  }], disclosed);
-  return res;
+  };
+
+  const parties = uniqueParties([config.executorParty, config.senderParty, config.recipientParty]);
+  if (config.executeAuthMatrix && parties.length < 3) {
+    log(
+      'AUTH MATRIX WARNING — sender, receiver, and executor are not three distinct parties; ' +
+      'a success can prove this co-hosted/same-party setup works, but not that a split hosted-wallet topology works.',
+    );
+  }
+
+  const failures = [];
+  for (const candidate of executeActAsCandidates()) {
+    log(`AUTH MATRIX TRY ${candidate.label}: ${describeActAs(candidate.actAs)}`);
+    try {
+      const res = await submitAndWait(
+        `execute-${candidate.label}`,
+        candidate.actAs,
+        [command],
+        disclosed,
+      );
+      log(
+        `AUTH MATRIX OK ${candidate.label}: updateId=${res.updateId ?? 'n/a'} ` +
+        `actAs=${describeActAs(candidate.actAs)}`,
+      );
+      return { ...res, executeActAs: candidate.actAs, executeActAsLabel: candidate.label, failures };
+    } catch (err) {
+      const detail = shortError(err);
+      failures.push({ label: candidate.label, actAs: candidate.actAs, error: detail });
+      log(`AUTH MATRIX FAIL ${candidate.label}: ${detail}`);
+    }
+  }
+
+  const summary = failures.map((f) => `${f.label}: ${f.error}`).join('\n');
+  throw new Error(`Allocation_ExecuteTransfer failed for every actAs candidate:\n${summary}`);
 }
 
 async function archiveShimRequest(requestCid) {
@@ -447,6 +533,10 @@ async function main() {
   log(`  leg:      ${config.senderParty} → ${config.recipientParty}, ${config.amount} ${config.instrumentId}`);
   log(`  executor: ${config.executorParty}`);
   log(`  ref:      ${settlementRefId()}`);
+  log(
+    `  execute:  ${config.executeActAsOverride ? `override ${config.executeActAsOverride}` :
+      config.executeAuthMatrix ? 'authority matrix' : 'all controllers'}`,
+  );
 
   if (config.dryRun) {
     log('DRY_RUN=true — printing plan only:');
@@ -455,6 +545,9 @@ async function main() {
     log(`  3. ${config.autoAllocate ? 'auto-allocate via registry AllocationFactory' : 'wait for wallet allocation'}`);
     log('  4. fetch execute-transfer choice context from registry');
     log('  5. exercise Allocation_ExecuteTransfer with disclosed contracts');
+    for (const c of executeActAsCandidates()) {
+      log(`     - candidate ${c.label}: ${describeActAs(c.actAs)}`);
+    }
     log('  6. archive the shim request');
     return;
   }
@@ -485,6 +578,14 @@ async function main() {
 
   const res = await executeTransfer(allocationCid);
   log(`STEP 4 OK — Allocation_ExecuteTransfer executed (updateId ${res.updateId ?? 'n/a'})`);
+  if (res.executeActAsLabel) {
+    log(`STEP 4 AUTHORITY — first successful actAs candidate: ${res.executeActAsLabel}`);
+    log(`STEP 4 AUTHORITY — parties: ${describeActAs(res.executeActAs ?? [])}`);
+    if ((res.failures ?? []).length > 0) {
+      log('STEP 4 AUTHORITY — failed candidates before success:');
+      for (const f of res.failures) log(`  - ${f.label}: ${f.error}`);
+    }
+  }
 
   if (requestCid) {
     await archiveShimRequest(requestCid);
@@ -494,6 +595,9 @@ async function main() {
   }
   log('PROBE PASSED — one full V1 cycle settled.');
   log(`Evidence: settlementRef=${settlementRefId()}, executeUpdateId=${res.updateId ?? 'n/a'}`);
+  if (res.executeActAsLabel) {
+    log(`Authority evidence: executeActAs=${res.executeActAsLabel} (${describeActAs(res.executeActAs ?? [])})`);
+  }
 }
 
 main().catch((err) => {

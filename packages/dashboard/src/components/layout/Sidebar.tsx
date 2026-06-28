@@ -10,7 +10,7 @@ import { Icons } from '../primitives/Icons.js';
 import { Avatar } from '../primitives/Avatar.js';
 import { partyShort } from '../primitives/PartyChip.js';
 import { useAuth } from '../../store/auth.js';
-import { useStreams } from '../../hooks/useStreams.js';
+import { useStreamsV1 } from '../../hooks/useStreams.js';
 
 interface NavItem {
   readonly route: string;
@@ -32,6 +32,8 @@ const NAV: ReadonlyArray<NavEntry> = [
   { route: '/batch', label: 'Batch', icon: 'Layers' },
   { route: '/inbox', label: 'Inbox', icon: 'Inbox', badgeKey: 'inbox' },
   { divider: true },
+  // V1 (direct-delivery) lives under the same Streams/Create tabs via the
+  // in-page lane dropdown; the routes stay registered for deep-links.
   { route: '/policies', label: 'Policies', icon: 'Shield' },
   { route: '/executor', label: 'Executor', icon: 'Pulse' },
   { route: '/execution-logs', label: 'Execution Logs', icon: 'Logs' },
@@ -44,10 +46,16 @@ export function Sidebar() {
   const auth = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Inbox badges active incoming streams; wallet funding approval is a
-  // separate wallet-side step.
-  const incoming = useStreams(auth.party ? { recipient: auth.party } : undefined);
-  const pendingCount = incoming.data?.length ?? 0;
+  // Inbox badge = number of INCOMING streams where this party is the recipient
+  // (active, i.e. not stopped) — so a notification shows whenever there's an
+  // incoming stream, matching what the Inbox lists. Open offers awaiting
+  // acceptance are highlighted inside the Inbox.
+  const v1 = useStreamsV1();
+  const pendingCount = auth.party
+    ? (v1.data ?? []).filter(
+        (s) => s.agreement.recipientParty === auth.party && s.agreement.status !== 'stopped',
+      ).length
+    : 0;
 
   return (
     <>
@@ -106,7 +114,13 @@ export function Sidebar() {
             const Icon = Icons[navItem.icon];
             const isActive =
               location.pathname === navItem.route ||
-              (navItem.route === '/streams' && location.pathname.startsWith('/streams/'));
+              // "Streams" stays active across its detail routes AND the V1 lane
+              // (which is now reached via the in-page lane dropdown, not a tab).
+              (navItem.route === '/streams' &&
+                (location.pathname.startsWith('/streams/') ||
+                  location.pathname.startsWith('/v1/streams'))) ||
+              // "Create" stays active on the V1 create route too.
+              (navItem.route === '/create' && location.pathname.startsWith('/v1/create'));
             const badge =
               navItem.badgeKey === 'inbox' && pendingCount > 0 ? pendingCount : null;
             return (

@@ -57,9 +57,45 @@ type CipProviderLike = {
 let clientPromise: Promise<PartyLayerClientLike> | null = null;
 let providerPromise: Promise<CipProviderLike> | null = null;
 
+/**
+ * Drop a persisted Loop session that targets a DIFFERENT Canton network than
+ * the one this deployment is configured for. The Loop SDK restores its last
+ * session (and its network) from `localStorage["loop_connect"]` on autoConnect,
+ * so a leftover devnet session would otherwise hijack a testnet/mainnet deploy
+ * and reconnect to the wrong `*.cantonloop.com`. We key off the configured
+ * network (`VITE_PARTYLAYER_NETWORK`) so this stays fully env-driven.
+ */
+function clearStaleLoopSession(): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    const raw = localStorage.getItem('loop_connect');
+    if (!raw) return;
+    // Drop the session only if it explicitly references a DIFFERENT network
+    // than the configured one (e.g. a devnet session — host "devnet.cantonloop
+    // .com" — on a testnet deploy). Keeping the check to "mentions another
+    // network" avoids ever clearing a valid same-network session that simply
+    // doesn't spell the network out.
+    const others = (['devnet', 'testnet', 'mainnet'] as const).filter(
+      (n) => n !== PARTYLAYER_NETWORK,
+    );
+    if (others.some((n) => raw.includes(n))) {
+      // Wrong-network session: wipe EVERY Loop SDK key (loop_connect,
+      // loop-wallet, loop-sdk-connect-overlay, …) so autoConnect cannot
+      // restore a stale pairing/ticket from any of them.
+      for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+        const k = localStorage.key(i);
+        if (k && /^loop[_-]/i.test(k)) localStorage.removeItem(k);
+      }
+    }
+  } catch {
+    // localStorage unavailable (incognito / SSR) — nothing to clear.
+  }
+}
+
 async function ensureClient(): Promise<PartyLayerClientLike> {
   if (!clientPromise) {
     clientPromise = (async () => {
+      clearStaleLoopSession();
       const mod = await import('@partylayer/sdk');
       // The default adapter set includes Console, Loop, Cantor8, Nightly,
       // and Send. Bron requires app-specific OAuth configuration.

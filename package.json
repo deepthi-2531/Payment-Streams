@@ -36,5 +36,10 @@
     "typescript-eslint": "8.59.4",
     "prettier": "3.5.0",
     "@types/node": "22.14.0"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "@partylayer/adapter-loop@0.3.7": "patches/@partylayer__adapter-loop@0.3.7.patch"
+    }
   }
 }

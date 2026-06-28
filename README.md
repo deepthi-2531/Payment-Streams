@@ -125,9 +125,13 @@ The important V2 commands are:
 The project intentionally fails closed for unsupported legacy settlement paths
 when creating new streams.
 
-For V1-lane assets, settlement uses the token-standard V1 allocation choices
-for one allocation cycle per withdrawal. V1 does not support V2-only features
-such as iterated allocations or `SettlementFactory_SettleBatch`.
+For V1-lane assets, the public no-DAR path is direct delivery: the payer's
+wallet signs one token-standard transfer per withdrawal and the recipient
+receives through their wallet preapproval. A true receiver-claim flow on V1
+requires the optional `canton-streams-v1-shim` package to be vetted on the
+participant that creates the claim contract, so it is suitable for controlled
+validators, not arbitrary hosted wallet participants. V1 does not support
+V2-only features such as iterated allocations or `SettlementFactory_SettleBatch`.
 
 ## Quick Start
 

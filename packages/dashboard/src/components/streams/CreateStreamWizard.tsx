@@ -18,6 +18,7 @@ import {
   type LedgerRecord,
   type LedgerRecordValue,
 } from '@canton-streams/sdk/browser';
+import { useNavigate } from 'react-router';
 import { useCreateStream } from '../../hooks/useStreams.js';
 import { useAuth } from '../../store/auth.js';
 import { FormField } from '../forms/FormField.js';
@@ -637,7 +638,9 @@ const SETTLEMENT_OPTIONS = [
 
 function StepSettlement() {
   const { watch, setValue, register } = useFormContext<CreateStreamSchemaValues>();
+  const navigate = useNavigate();
   const settlementMode = watch('settlementMode');
+  const recipient = watch('recipient');
 
   return (
     <>
@@ -706,6 +709,51 @@ function StepSettlement() {
 
       {/* hidden register so RHF tracks the field even though we set it via setValue */}
       <input type="hidden" {...register('settlementMode')} />
+
+      {/*
+        Bridge to the proven V1 direct-delivery lane. The escrow mode above
+        creates on-ledger custody metadata; "Direct delivery (V1)" instead routes
+        into the settleable TransferFactory_Transfer lane (proxy /api/v1/streams),
+        where each settle draws one cycle straight from the payer's wallet.
+        Kept as a route-out (not a SettlementMode value) because the V1 request
+        shape is structurally different from the V2 custody form.
+      */}
+      <button
+        type="button"
+        onClick={() =>
+          navigate('/v1/create', {
+            state: recipient ? { recipient } : undefined,
+          })
+        }
+        style={{
+          marginTop: 18,
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '12px 14px',
+          background: 'var(--bg-elev)',
+          border: '1px dashed var(--line-2)',
+          borderRadius: 'var(--r-sm)',
+          cursor: 'pointer',
+          textAlign: 'left',
+        }}
+      >
+        <span style={{ flex: 1 }}>
+          <span
+            style={{ display: 'block', fontSize: 13.5, fontWeight: 500, color: 'var(--fg)' }}
+          >
+            Direct delivery (V1) — settles immediately
+          </span>
+          <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>
+            No funding lock. Each settle draws one cycle from your wallet via the
+            registry transfer factory. Opens the V1 create form.
+          </span>
+        </span>
+        <span className="badge accent" style={{ fontSize: 10.5 }}>
+          V1 →
+        </span>
+      </button>
 
       {settlementMode === SettlementMode.TokenStandardCustody && (
         <div

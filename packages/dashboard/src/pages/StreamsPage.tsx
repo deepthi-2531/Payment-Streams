@@ -14,6 +14,7 @@ import { usePendingStreamRequests, useStreams } from '../hooks/useStreams.js';
 import { useAuth } from '../store/auth.js';
 import { StreamsTable } from '../components/streams/StreamsTable.js';
 import { PendingRequestsPanel } from '../components/streams/PendingRequestsPanel.js';
+import { LaneSwitch } from '../components/streams/LaneSwitch.js';
 import {
   Skeleton,
   ErrorState,
@@ -55,9 +56,12 @@ export function StreamsPage() {
         title="Streams"
         subtitle="Browse and manage all payment streams"
         actions={
-          <Link to="/create" className="btn btn-primary">
-            <Plus size={14} /> New stream
-          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <LaneSwitch lane="v2" kind="streams" />
+            <Link to="/create" className="btn btn-primary">
+              <Plus size={14} /> New stream
+            </Link>
+          </div>
         }
       />
 

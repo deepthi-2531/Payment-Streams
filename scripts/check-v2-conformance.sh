@@ -45,6 +45,8 @@ ALLOWED_FILES=(
   'packages/sdk/src/settlement/choice-context.ts'
   'packages/daml/v1-shim/daml/CantonStreams/V1Shim/AllocationRequestShim.daml'
   'packages/daml/v1-shim/test/daml/Test/V1Shim/AllocationRequestShimTest.daml'
+  'packages/daml/v1-shim/daml/CantonStreams/V1Shim/ReceiverClaim.daml'
+  'packages/daml/v1-shim/test/daml/Test/V1Shim/ReceiverClaimTest.daml'
   'scripts/devnet-v1-cc-stream-probe.mjs'
   'docs/V1-LANE-TESTING.md'
   'docs/reports/first-dapp-integration-testnet.md'

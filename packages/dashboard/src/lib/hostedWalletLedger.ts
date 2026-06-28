@@ -153,10 +153,10 @@ export function formatHostedTemplateId(
  * v2 Ledger API accepts this subset too (it's a strict subset of
  * the canonical `cumulative + identifierFilter` shape).
  */
-export async function queryActiveContracts(
+export async function queryActiveContractsRaw(
   templateIds: readonly string[],
   party: string,
-): Promise<ReadonlyArray<{ contractId: string; templateId: string; createArguments: Record<string, unknown> }>> {
+): Promise<ReadonlyArray<Record<string, unknown>>> {
   if (!isHostedLedgerAvailable()) {
     throw new Error('Hosted wallet ledgerApi is not available on this session');
   }
@@ -192,14 +192,40 @@ export async function queryActiveContracts(
     }
     return (raw as AcsActiveContractsResponse) ?? {};
   })();
-  const items = parsed.activeContracts ?? parsed.active_contracts ?? [];
+  return (parsed.activeContracts ??
+    parsed.active_contracts ??
+    []) as ReadonlyArray<Record<string, unknown>>;
+}
+
+export async function queryActiveContracts(
+  templateIds: readonly string[],
+  party: string,
+): Promise<ReadonlyArray<{ contractId: string; templateId: string; createArguments: Record<string, unknown> }>> {
+  const items = await queryActiveContractsRaw(templateIds, party);
   return items
-    .map((entry) => {
-      const ev = entry.created_event ?? entry.createdEvent;
+    .map((raw) => {
+      // The JSON Ledger API wraps the created event as
+      // `{ workflowId, contractEntry: { JsActiveContract: { createdEvent } } }`;
+      // other adapters return a flat `created_event`/`createdEvent`. Handle both.
+      const entry = raw as AcsActiveContractEntry & {
+        readonly contractEntry?: {
+          readonly JsActiveContract?: AcsActiveContractEntry;
+        } & AcsActiveContractEntry;
+      };
+      const inner = entry.contractEntry?.JsActiveContract ?? entry.contractEntry;
+      const ev =
+        entry.created_event ??
+        entry.createdEvent ??
+        inner?.created_event ??
+        inner?.createdEvent;
       if (!ev) return null;
       const cid = ev.contract_id ?? ev.contractId;
       const tid = ev.template_id ?? ev.templateId;
-      const args = ev.create_arguments ?? ev.createArguments;
+      // Amulet uses `createArgument` (singular) on the JSON Ledger API.
+      const args =
+        ev.create_arguments ??
+        ev.createArguments ??
+        (ev as { createArgument?: Record<string, unknown> }).createArgument;
       if (!cid || !tid || !args) return null;
       return { contractId: cid, templateId: tid, createArguments: args };
     })
@@ -225,7 +251,14 @@ export async function queryActiveContracts(
 export async function submitAndWait(
   commands: ReadonlyArray<Record<string, unknown>>,
   party: string,
-  options?: { readonly commandId?: string; readonly applicationId?: string },
+  options?: {
+    readonly commandId?: string;
+    readonly applicationId?: string;
+    /** Disclosed contracts for choices that reference contracts the payer's
+     * participant doesn't host (e.g. a token-standard transfer factory + its
+     * registry context). Required for the V1 `TransferFactory_Transfer`. */
+    readonly disclosedContracts?: ReadonlyArray<Record<string, unknown>>;
+  },
 ): Promise<unknown> {
   if (!isHostedLedgerAvailable()) {
     throw new Error('Hosted wallet ledgerApi is not available on this session');
@@ -241,6 +274,9 @@ export async function submitAndWait(
     actAs: [party],
     readAs: [party],
     applicationId: options?.applicationId ?? 'canton-streams-dashboard',
+    ...(options?.disclosedContracts && options.disclosedContracts.length > 0
+      ? { disclosedContracts: options.disclosedContracts }
+      : {}),
   };
   const raw = await wc({
     requestMethod: 'post',

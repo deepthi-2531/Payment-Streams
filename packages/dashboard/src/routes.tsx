@@ -4,6 +4,9 @@ import { DashboardPage } from './pages/DashboardPage.js';
 import { StreamsPage } from './pages/StreamsPage.js';
 import { StreamDetailPage } from './pages/StreamDetailPage.js';
 import { CreateStreamPage } from './pages/CreateStreamPage.js';
+import { CreateStreamV1Page } from './pages/CreateStreamV1Page.js';
+import { V1StreamsPage } from './pages/V1StreamsPage.js';
+import { V1StreamDetailPage } from './pages/V1StreamDetailPage.js';
 import { FlowsPage } from './pages/FlowsPage.js';
 import { BatchPage } from './pages/BatchPage.js';
 import { InboxPage } from './pages/InboxPage.js';
@@ -21,6 +24,9 @@ export function AppRoutes() {
         <Route path="/streams" element={<StreamsPage />} />
         <Route path="/streams/:sender/:streamId" element={<StreamDetailPage />} />
         <Route path="/create" element={<CreateStreamPage />} />
+        <Route path="/v1/streams" element={<V1StreamsPage />} />
+        <Route path="/v1/streams/:id" element={<V1StreamDetailPage />} />
+        <Route path="/v1/create" element={<CreateStreamV1Page />} />
         <Route path="/flows" element={<FlowsPage />} />
         <Route path="/batch" element={<BatchPage />} />
         <Route path="/inbox" element={<InboxPage />} />

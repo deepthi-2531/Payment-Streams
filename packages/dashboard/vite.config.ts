@@ -28,6 +28,8 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    // Accept proxied Host headers (e.g. a tunnel/ngrok public URL) for live demos.
+    allowedHosts: true,
     // Proxy /api requests to the Canton Streams REST proxy in development.
     // The proxy server wraps the Node gRPC SDK (which cannot run in the browser).
     proxy: {

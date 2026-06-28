@@ -1,0 +1,28 @@
+diff --git a/dist/index.js b/dist/index.js
+index fe91ab9872fe8c659e6ee24fc6eead8d456ef245..dfe78a8170a69931ca2c226d699e9a2899e5fb1d 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -483,7 +483,8 @@ var LoopAdapter = class {
+    */
+   mapNetworkToLoop(network) {
+     if (network === "local") return "local";
+-    if (network === "devnet" || network === "testnet") return "devnet";
++    if (network === "devnet") return "devnet";
++    if (network === "testnet") return "testnet";
+     return "mainnet";
+   }
+ };
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 1615d74ba2f3ce00700d8b8df3705bd964a1877b..510543d76f88d39b22efd06bad6a986f2334c4f5 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -481,7 +481,8 @@ var LoopAdapter = class {
+    */
+   mapNetworkToLoop(network) {
+     if (network === "local") return "local";
+-    if (network === "devnet" || network === "testnet") return "devnet";
++    if (network === "devnet") return "devnet";
++    if (network === "testnet") return "testnet";
+     return "mainnet";
+   }
+ };
