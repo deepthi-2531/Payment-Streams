@@ -75,14 +75,32 @@ export class CantonStreamsApi {
   constructor(
     private readonly baseUrl: string,
     private readonly getToken: () => string | null,
-
-    _getParty?: () => string | null,
+    private readonly getParty?: () => string | null,
   ) {}
 
   private headers(): HeadersInit {
     const h: Record<string, string> = { 'Content-Type': 'application/json' };
     const token = this.getToken();
-    if (token) h['Authorization'] = `Bearer ${token}`;
+    if (token) {
+      h['Authorization'] = `Bearer ${token}`;
+    } else {
+      // Hosted-wallet sessions (Loop / PartyLayer) have no JWT. The proxy's dev
+      // auth mode conveys the caller identity via X-Canton-Party, which it
+      // trusts for read-scoping + role checks. (Proxy routes that the wallet
+      // signs itself — e.g. V1 settle — still go through Loop's own ledger API.)
+      const party = this.getParty?.();
+      if (party) h['X-Canton-Party'] = party;
+    }
+    // When this dashboard is served through an ngrok tunnel for a live demo,
+    // the ngrok-free interstitial otherwise intercepts /api XHR. The skip
+    // header bypasses it; only sent when actually on an ngrok host, so it's a
+    // no-op for normal deployments.
+    if (
+      typeof window !== 'undefined' &&
+      /\.ngrok(-free)?\.(app|dev|io)$/.test(window.location.hostname)
+    ) {
+      h['ngrok-skip-browser-warning'] = 'true';
+    }
     return h;
   }
 
@@ -306,8 +324,27 @@ export class CantonStreamsApi {
     if (filter?.status) params.set('status', filter.status);
     if (filter?.vestingMode) params.set('vestingMode', filter.vestingMode);
     const qs = params.toString();
-    const raw = await this.request<RawStream[]>('GET', `/api/streams${qs ? `?${qs}` : ''}`);
-    return raw.map(deserializeStream);
+    try {
+      const raw = await this.request<RawStream[]>('GET', `/api/streams${qs ? `?${qs}` : ''}`);
+      return raw.map(deserializeStream);
+    } catch (err) {
+      // Non-wallet (dev-mode / hosted-party) sessions read V2 streams through the
+      // proxy's gRPC client, which isn't wired on every deployment (e.g. its proto
+      // files are absent → the proxy returns a sanitized 500). V2 is not the V1
+      // lane the demo runs on, and such a party has no V2 streams here, so degrade
+      // to an empty list rather than blocking the whole app — the V1 lane has its
+      // own REST path and loads fine.
+      if (this.isDarNotDeployedError(err) || this.isProxyInternalError(err)) return [];
+      throw err;
+    }
+  }
+
+  /** True when the proxy returned its sanitized server-side failure (e.g. the
+   * V2 gRPC client is not available on this deployment). Distinct from 4xx
+   * business errors, which carry specific reasons. */
+  private isProxyInternalError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err ?? '');
+    return /internal error|HTTP 5\d\d|no such file or directory|\.proto/i.test(msg);
   }
 
   async listPendingStreamRequests(
@@ -345,11 +382,18 @@ export class CantonStreamsApi {
     if (filter?.recipient) params.set('recipient', filter.recipient);
     if (filter?.assetType) params.set('assetType', filter.assetType);
     const qs = params.toString();
-    const raw = await this.request<RawPendingStreamRequest[]>(
-      'GET',
-      `/api/stream-requests${qs ? `?${qs}` : ''}`,
-    );
-    return raw.map(deserializePendingStreamRequest);
+    try {
+      const raw = await this.request<RawPendingStreamRequest[]>(
+        'GET',
+        `/api/stream-requests${qs ? `?${qs}` : ''}`,
+      );
+      return raw.map(deserializePendingStreamRequest);
+    } catch (err) {
+      // Same rationale as listStreams: the V2 read goes through the proxy gRPC
+      // client which isn't wired here for dev-mode sessions — degrade to empty.
+      if (this.isDarNotDeployedError(err) || this.isProxyInternalError(err)) return [];
+      throw err;
+    }
   }
 
   async getStream(sender: string, streamId: string): Promise<Stream> {
@@ -369,10 +413,15 @@ export class CantonStreamsApi {
     if (this.isHostedWalletSession()) {
       return [];
     }
-    return this.request<StreamEvent[]>(
-      'GET',
-      `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/history`,
-    );
+    try {
+      return await this.request<StreamEvent[]>(
+        'GET',
+        `/api/streams/${encodeURIComponent(sender)}/${encodeURIComponent(streamId)}/history`,
+      );
+    } catch (err) {
+      if (this.isDarNotDeployedError(err) || this.isProxyInternalError(err)) return [];
+      throw err;
+    }
   }
 
   // --- Mutations ---
@@ -677,7 +726,12 @@ export class CantonStreamsApi {
         throw err;
       }
     }
-    return this.request<RawPolicy[]>('GET', '/api/policies');
+    try {
+      return await this.request<RawPolicy[]>('GET', '/api/policies');
+    } catch (err) {
+      if (this.isDarNotDeployedError(err) || this.isProxyInternalError(err)) return [];
+      throw err;
+    }
   }
 
   async revokePolicy(contractId: string): Promise<{ newContractId: string }> {
@@ -705,7 +759,12 @@ export class CantonStreamsApi {
       return [];
     }
     const qs = policyId ? `?policyId=${encodeURIComponent(policyId)}` : '';
-    return this.request<RawExecutionLog[]>('GET', `/api/execution-logs${qs}`);
+    try {
+      return await this.request<RawExecutionLog[]>('GET', `/api/execution-logs${qs}`);
+    } catch (err) {
+      if (this.isDarNotDeployedError(err) || this.isProxyInternalError(err)) return [];
+      throw err;
+    }
   }
 
   // --- Open-ended Flows (StreamFlow, non-prefunded / rolling top-up) ---
@@ -720,7 +779,12 @@ export class CantonStreamsApi {
     if (filter?.sender) params.set('sender', filter.sender);
     if (filter?.recipient) params.set('recipient', filter.recipient);
     const qs = params.toString();
-    return this.request<RawFlow[]>('GET', `/api/flows${qs ? `?${qs}` : ''}`);
+    try {
+      return await this.request<RawFlow[]>('GET', `/api/flows${qs ? `?${qs}` : ''}`);
+    } catch (err) {
+      if (this.isDarNotDeployedError(err) || this.isProxyInternalError(err)) return [];
+      throw err;
+    }
   }
 
   async createFlow(params: CreateFlowRequest): Promise<{ contractId: string; streamId: string }> {
@@ -779,6 +843,479 @@ export class CantonStreamsApi {
       args,
     );
   }
+
+  // --- V1 streams (proxy /api/v1/streams group) ---
+  //
+  // The V1 lane supports two token-standard paths. Direct delivery draws each
+  // cycle from the payer wallet via TransferFactory_Transfer. Receiver-claim
+  // first creates a funded V1 Allocation plus ReceiverClaimV1, then lets the
+  // recipient claim after unlockAt. Receiver-claim requires the V1 shim DAR on
+  // the participant creating ReceiverClaimV1; public hosted-wallet demos should
+  // use direct delivery.
+
+  async createStreamV1(params: V1CreateStreamParams): Promise<V1StreamView> {
+    return this.request<V1StreamView>('POST', '/api/v1/streams', params);
+  }
+
+  async listStreamsV1(): Promise<V1StreamView[]> {
+    return this.request<V1StreamView[]>('GET', '/api/v1/streams');
+  }
+
+  async getStreamV1(id: string): Promise<V1StreamView> {
+    return this.request<V1StreamView>('GET', `/api/v1/streams/${encodeURIComponent(id)}`);
+  }
+
+  async settleStreamV1(id: string, body?: V1SettleParams): Promise<V1SettleResult> {
+    return this.request<V1SettleResult>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/settle`,
+      body ?? {},
+    );
+  }
+
+  /** Stop a V1 stream (payer only) — halts accrual + settlement. */
+  async stopStreamV1(id: string): Promise<V1StreamView> {
+    return this.request<V1StreamView>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/stop`,
+      {},
+    );
+  }
+
+  /** Model 2 phase 1: form (no submit) the next cycle's transfer so the payer's
+   * wallet can submit it through its own participant. */
+  async prepareSettleV1(id: string, body: V1PrepareSettleParams): Promise<V1PreparedSettle> {
+    return this.request<V1PreparedSettle>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/prepare-settle`,
+      body,
+    );
+  }
+
+  /** Self-heal: record any offer that committed on-ledger but whose record was
+   * lost (e.g. the wallet threw a false rejection after the transfer landed). */
+  async recoverPendingV1(id: string): Promise<{ recovered: V1PendingTransferRecord[] }> {
+    return this.request<{ recovered: V1PendingTransferRecord[] }>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/recover-pending`,
+      {},
+    );
+  }
+
+  /** Model 2 phase 2: record a cycle the wallet already committed on-ledger. */
+  async recordSettleV1(id: string, body: V1RecordSettleParams): Promise<V1SettleResult> {
+    return this.request<V1SettleResult>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/record-settle`,
+      body,
+    );
+  }
+
+  /** Receiver-claim phase 1: form Alice's AllocationFactory_Allocate command. */
+  async prepareAllocationV1(
+    id: string,
+    body: V1PrepareAllocationParams,
+  ): Promise<V1PreparedAllocation> {
+    return this.request<V1PreparedAllocation>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/prepare-allocation`,
+      body,
+    );
+  }
+
+  /** Receiver-claim phase 2: record the allocation cid Alice's wallet created. */
+  async recordAllocationV1(id: string, body: V1RecordAllocationParams): Promise<V1ReceiverClaimRecord> {
+    return this.request<V1ReceiverClaimRecord>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/record-allocation`,
+      body,
+    );
+  }
+
+  /** Receiver-claim phase 3: form Alice's ReceiverClaimV1 create command. */
+  async prepareReceiverClaimV1(
+    id: string,
+    body: V1PrepareReceiverClaimParams,
+  ): Promise<V1PreparedReceiverClaim> {
+    return this.request<V1PreparedReceiverClaim>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/prepare-receiver-claim`,
+      body,
+    );
+  }
+
+  /** Receiver-claim phase 4: record the ReceiverClaimV1 cid Alice created. */
+  async recordReceiverClaimV1(id: string, body: V1RecordReceiverClaimParams): Promise<V1ReceiverClaimRecord> {
+    return this.request<V1ReceiverClaimRecord>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/record-receiver-claim`,
+      body,
+    );
+  }
+
+  /** Receiver-claim phase 5: form Bob's Claim command with registry context. */
+  async prepareClaimV1(id: string, body: V1PrepareClaimParams): Promise<V1PreparedClaim> {
+    return this.request<V1PreparedClaim>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/prepare-claim`,
+      body,
+    );
+  }
+
+  /** Receiver-claim phase 6: record Bob's wallet-submitted claim. */
+  async recordClaimV1(id: string, body: V1RecordClaimParams): Promise<V1SettleResult> {
+    return this.request<V1SettleResult>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/record-claim`,
+      body,
+    );
+  }
+
+  // --- Pending-offer lane (TransferInstruction Accept / Withdraw) ---
+  //
+  // recordSettleV1 already classifies the on-chain outcome: when a settle lands
+  // as a pending offer it returns `{ settled: false, pending }`. The recipient
+  // then accepts via prepare/record-accept; the sender retries via withdraw.
+
+  /** Recipient: form the TransferInstruction_Accept command for a pending offer. */
+  async prepareAcceptTransferV1(
+    id: string,
+    body: V1PendingSelector,
+  ): Promise<V1PreparedInstructionAction> {
+    return this.request<V1PreparedInstructionAction>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/prepare-accept`,
+      body,
+    );
+  }
+
+  /** Recipient: record the accepted transfer once the wallet committed it. */
+  async recordAcceptTransferV1(
+    id: string,
+    body: V1RecordInstructionParams,
+  ): Promise<V1SettleResult> {
+    return this.request<V1SettleResult>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/record-accept`,
+      body,
+    );
+  }
+
+  /** Recipient (hosted / dev-mode, no browser wallet): the proxy forms, submits
+   * AND records the accept on behalf of a recipient hosted on its participant. */
+  async acceptTransferV1(id: string, body: V1PendingSelector): Promise<V1SettleResult> {
+    return this.request<V1SettleResult>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/accept`,
+      body,
+    );
+  }
+
+  /** Sender: form the TransferInstruction_Withdraw command to reclaim an offer. */
+  async prepareWithdrawTransferV1(
+    id: string,
+    body: V1PendingSelector,
+  ): Promise<V1PreparedInstructionAction> {
+    return this.request<V1PreparedInstructionAction>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/prepare-withdraw`,
+      body,
+    );
+  }
+
+  /** Sender: record the withdrawal once the wallet committed it. */
+  async recordWithdrawTransferV1(
+    id: string,
+    body: V1RecordInstructionParams,
+  ): Promise<V1WithdrawResult> {
+    return this.request<V1WithdrawResult>(
+      'POST',
+      `/api/v1/streams/${encodeURIComponent(id)}/record-withdraw`,
+      body,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// V1 wire types (proxy /api/v1/streams — V1StreamView et al.)
+//
+// Mirrors the proxy V1 API contract. All decimals are strings on the wire
+// and stay strings in the UI (the V1 views are display-only — we never do
+// Decimal math on them client-side, so no reconstruction is needed).
+// ---------------------------------------------------------------------------
+
+export type V1Cadence = 'second' | 'minute' | 'hourly' | 'daily';
+export type V1ArrearsPolicy = 'catch-up' | 'skip-missed';
+
+export interface V1CreateStreamParams {
+  readonly streamId?: string;
+  readonly appId?: string;
+  /** REQUIRED on-chain payer; must equal the caller party. */
+  readonly payerParty: string;
+  /** REQUIRED recipient; must hold a TransferPreapproval. */
+  readonly recipientParty: string;
+  /** REQUIRED decimal-as-string accrued per cadence period. */
+  readonly ratePerCycle: string;
+  readonly cadence?: V1Cadence;
+  readonly effectiveFrom?: string;
+  readonly termEnd?: string;
+  readonly arrearsPolicy?: V1ArrearsPolicy;
+  readonly totalDeposited?: string;
+  readonly createAdminRecord?: boolean;
+  readonly cancellable?: boolean;
+  readonly observers?: readonly string[];
+}
+
+export interface V1Agreement {
+  readonly agreementId: string;
+  readonly appId?: string;
+  readonly payerParty: string;
+  readonly recipientParty: string;
+  readonly ratePerPeriod: string;
+  readonly cadence: V1Cadence;
+  readonly effectiveFrom: string;
+  readonly termEnd?: string;
+  readonly arrearsPolicy: V1ArrearsPolicy;
+  readonly streamAdminCid?: string;
+  readonly totalDeposited: string;
+  readonly createdAt: string;
+  /** Lifecycle: 'stopped' means the stream was halted (no more accrual/settle). */
+  readonly status?: 'active' | 'stopped';
+}
+
+export interface V1HistoryEntry {
+  readonly at: string;
+  readonly amount: string;
+  readonly ref: string;
+  readonly updateId: string;
+}
+
+export type V1ReceiverClaimStatus = 'allocated' | 'claim_ready' | 'claimed' | 'withdrawn';
+
+export interface V1ReceiverClaimRecord {
+  readonly cycle: number;
+  readonly amount: string;
+  readonly ref: string;
+  readonly executor: string;
+  readonly allocationCid: string;
+  readonly receiverClaimCid?: string;
+  readonly allocationUpdateId?: string;
+  readonly claimUpdateId?: string;
+  readonly unlockAt: string;
+  readonly expiresAt: string;
+  readonly createdAt: string;
+  readonly status: V1ReceiverClaimStatus;
+}
+
+export type V1PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn';
+
+/** A pending transfer offer — a cycle whose transfer landed as a
+ * TransferInstruction (recipient had no pre-approval) and awaits the
+ * recipient's acceptance. Money moves only when `status` becomes `accepted`. */
+export interface V1PendingTransferRecord {
+  readonly cycle: number;
+  readonly amount: string;
+  readonly ref: string;
+  readonly transferInstructionCid: string;
+  readonly createUpdateId?: string;
+  readonly finalUpdateId?: string;
+  readonly executeBefore: string;
+  readonly createdAt: string;
+  readonly status: V1PendingTransferStatus;
+}
+
+export interface V1State {
+  readonly settled: number;
+  readonly cycles: number;
+  readonly history: readonly V1HistoryEntry[];
+  readonly receiverClaims?: readonly V1ReceiverClaimRecord[];
+  readonly pendingTransfers?: readonly V1PendingTransferRecord[];
+}
+
+export interface V1OnLedger {
+  readonly contractId: string;
+  readonly totalWithdrawn: string;
+  readonly numIterations: number;
+  readonly status: string;
+  readonly currentAllocationCid: string;
+}
+
+export interface V1StreamView {
+  readonly agreement: V1Agreement;
+  readonly state: V1State;
+  /** Decimal(10) accrued to now. */
+  readonly accrued: string;
+  /** Decimal(10) due this cycle per arrears policy. */
+  readonly due: string;
+  /** Best-effort on-ledger StreamAdmin projection (detail route only). */
+  readonly onLedger?: V1OnLedger;
+}
+
+export interface V1SettleParams {
+  readonly force?: boolean;
+  readonly amount?: string;
+}
+
+export interface V1SettleResult {
+  readonly settled: boolean;
+  readonly cycle?: number;
+  readonly amount?: string;
+  readonly ref?: string;
+  readonly updateId?: string;
+  readonly adminSynced?: boolean;
+  readonly reason?: string;
+  /** Present when a settle landed as a pending offer (recipient has no
+   * pre-approval). `settled` is false in that case — the recipient must accept. */
+  readonly pending?: V1PendingTransferRecord;
+}
+
+/** Model 2 — prepare-settle request. `holdings` are the payer's spendable
+ * Amulet holdings (read from the wallet's own participant). */
+export interface V1PrepareSettleParams {
+  readonly force?: boolean;
+  readonly amount?: string;
+  readonly holdings?: ReadonlyArray<{ readonly cid: string; readonly amount: number }>;
+}
+
+/** Model 2 — the ready-to-submit transfer the wallet signs. */
+export interface V1PreparedSettle {
+  readonly prepared: boolean;
+  readonly reason?: string;
+  readonly ref?: string;
+  readonly cycle?: number;
+  readonly amount?: string;
+  /** transfer.executeBefore — the offer expiry if it lands as a pending instruction. */
+  readonly executeBefore?: string;
+  readonly actAs?: string;
+  readonly command?: Record<string, unknown>;
+  readonly disclosedContracts?: ReadonlyArray<Record<string, unknown>>;
+}
+
+/** Model 2 — record a cycle the wallet already committed. */
+export interface V1RecordSettleParams {
+  readonly updateId: string;
+  readonly amount: string;
+  readonly ref?: string;
+  /** transfer.executeBefore — passed through so a pending offer carries its expiry. */
+  readonly executeBefore?: string;
+}
+
+export interface V1PrepareAllocationParams extends V1PrepareSettleParams {
+  /** Optional override. Omit for hosted UX: executor defaults to recipient. */
+  readonly executor?: string;
+  /** On-ledger claim unlock time; defaults to the next cycle boundary. */
+  readonly unlockAt?: string;
+  /** Allocation settleBefore + ReceiverClaim expiry. */
+  readonly expiresAt?: string;
+}
+
+export interface V1PreparedAllocation {
+  readonly prepared: boolean;
+  readonly reason?: string;
+  readonly ref?: string;
+  readonly cycle?: number;
+  readonly amount?: string;
+  readonly executor?: string;
+  readonly unlockAt?: string;
+  readonly expiresAt?: string;
+  readonly actAs?: string;
+  readonly command?: Record<string, unknown>;
+  readonly disclosedContracts?: ReadonlyArray<Record<string, unknown>>;
+}
+
+export interface V1RecordAllocationParams {
+  readonly allocationCid: string;
+  readonly allocationUpdateId?: string;
+  readonly amount: string;
+  readonly ref?: string;
+  readonly cycle: number;
+  readonly executor?: string;
+  readonly unlockAt: string;
+  readonly expiresAt: string;
+}
+
+export interface V1PrepareReceiverClaimParams {
+  readonly cycle?: number;
+  readonly allocationCid?: string;
+}
+
+export interface V1PreparedReceiverClaim {
+  readonly ref: string;
+  readonly cycle: number;
+  readonly amount: string;
+  readonly allocationCid: string;
+  readonly executor: string;
+  readonly unlockAt: string;
+  readonly expiresAt: string;
+  readonly actAs: string;
+  readonly command: Record<string, unknown>;
+  readonly disclosedContracts: ReadonlyArray<Record<string, unknown>>;
+}
+
+export interface V1RecordReceiverClaimParams {
+  readonly receiverClaimCid: string;
+  readonly cycle?: number;
+  readonly allocationCid?: string;
+}
+
+export interface V1PrepareClaimParams {
+  readonly cycle?: number;
+  readonly allocationCid?: string;
+  readonly receiverClaimCid?: string;
+}
+
+export interface V1PreparedClaim {
+  readonly prepared: boolean;
+  readonly reason?: string;
+  readonly ref?: string;
+  readonly cycle?: number;
+  readonly amount?: string;
+  readonly allocationCid?: string;
+  readonly receiverClaimCid?: string;
+  readonly actAs?: string;
+  readonly command?: Record<string, unknown>;
+  readonly disclosedContracts?: ReadonlyArray<Record<string, unknown>>;
+}
+
+export interface V1RecordClaimParams {
+  readonly updateId: string;
+  readonly cycle?: number;
+  readonly allocationCid?: string;
+  readonly receiverClaimCid?: string;
+}
+
+// --- Pending-offer lane (TransferInstruction Accept / Withdraw) ---
+
+/** Selector for a pending offer — by cid (preferred) or cycle. */
+export interface V1PendingSelector {
+  readonly transferInstructionCid?: string;
+  readonly cycle?: number;
+}
+
+/** Ready-to-submit TransferInstruction_Accept / _Withdraw command. */
+export interface V1PreparedInstructionAction {
+  readonly prepared: boolean;
+  readonly reason?: string;
+  readonly ref?: string;
+  readonly cycle?: number;
+  readonly amount?: string;
+  readonly transferInstructionCid?: string;
+  readonly actAs?: string;
+  readonly command?: Record<string, unknown>;
+  readonly disclosedContracts?: ReadonlyArray<Record<string, unknown>>;
+}
+
+export interface V1RecordInstructionParams {
+  readonly updateId: string;
+  readonly transferInstructionCid?: string;
+  readonly cycle?: number;
+}
+
+export interface V1WithdrawResult {
+  readonly withdrawn: boolean;
+  readonly reason?: string;
+  readonly cycle?: number;
+  readonly updateId?: string;
 }
 
 // ---------------------------------------------------------------------------

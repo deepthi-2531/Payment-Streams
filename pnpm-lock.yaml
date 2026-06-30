@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@partylayer/adapter-loop@0.3.7':
+    hash: il4cn7n3okxll4m7o3ge6fat3u
+    path: patches/@partylayer__adapter-loop@0.3.7.patch
+
 importers:
 
   .:
@@ -4989,7 +4994,7 @@ snapshots:
       - react
       - supports-color
 
-  '@partylayer/adapter-loop@0.3.7(typescript@5.9.3)':
+  '@partylayer/adapter-loop@0.3.7(patch_hash=il4cn7n3okxll4m7o3ge6fat3u)(typescript@5.9.3)':
     dependencies:
       '@fivenorth/loop-sdk': 0.10.0(typescript@5.9.3)
       '@partylayer/core': 0.3.1
@@ -5019,7 +5024,7 @@ snapshots:
       '@partylayer/adapter-bron': 0.2.10
       '@partylayer/adapter-cantor8': 0.2.10
       '@partylayer/adapter-console': 0.3.4(react@19.2.4)
-      '@partylayer/adapter-loop': 0.3.7(typescript@5.9.3)
+      '@partylayer/adapter-loop': 0.3.7(patch_hash=il4cn7n3okxll4m7o3ge6fat3u)(typescript@5.9.3)
       '@partylayer/adapter-nightly': 0.2.9
       '@partylayer/adapter-send': 1.0.3
       '@partylayer/core': 0.3.1

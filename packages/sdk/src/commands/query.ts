@@ -715,12 +715,15 @@ function isStreamAdminPayload(raw: any): boolean {
     raw?.sender !== undefined &&
     raw?.recipient !== undefined &&
     raw?.operator !== undefined &&
-    raw?.instrumentRef !== undefined &&
+    raw?.instrumentId !== undefined &&
     Object.prototype.hasOwnProperty.call(raw, 'currentAllocationCid');
 }
 
 function deserializeStreamAdminContract(raw: any): Stream {
-  const instrumentRef = deserializeInstrumentRef(raw.instrumentRef) ?? {
+  // The admin template now stores the V2 asset identity `{ admin, id }`
+  // (per the CIP-56 V2 token standard). Surface it to consumers in the
+  // SDK's `InstrumentRef` shape (issuer = admin, instrumentId = id).
+  const instrumentRef = deserializeInstrumentIdV2ToRef(raw.instrumentId) ?? {
     depository: '',
     issuer: '',
     instrumentId: '',
@@ -1197,6 +1200,26 @@ function deserializeInstrumentRef(raw: any): InstrumentRef | undefined {
     issuer: value.issuer,
     instrumentId: value.instrumentId,
     instrumentVersion: value.instrumentVersion,
+  };
+}
+
+// | Deserialize a V2 `InstrumentIdV2 { admin, id }` (as stored on the
+// admin templates) into the SDK-facing `InstrumentRef` shape. The V2
+// `admin` maps to `issuer` and `id` to `instrumentId` (mirroring
+// `bridgeInstrumentRefToV2`); the V1-only `depository`/`instrumentVersion`
+// fields have no V2 source and are surfaced as empty strings. Returns
+// undefined if the value is absent or not a `{ admin, id }` record.
+function deserializeInstrumentIdV2ToRef(raw: any): InstrumentRef | undefined {
+  if (!raw) return undefined;
+  const tag = raw.tag ?? raw.variant_constructor;
+  if (tag === 'None') return undefined;
+  const value = tag === 'Some' ? (raw.value ?? raw) : raw;
+  if (!value || value.admin === undefined || value.id === undefined) return undefined;
+  return {
+    depository: '',
+    issuer: value.admin,
+    instrumentId: value.id,
+    instrumentVersion: '',
   };
 }
 

@@ -224,11 +224,10 @@ describe('query archived streams', () => {
       sender,
       recipient,
       operator: escrowOperator,
-      instrumentRef: {
-        depository: 'AmuletAdmin::party',
-        issuer: 'AmuletAdmin::party',
-        instrumentId: 'Amulet',
-        instrumentVersion: 'v2',
+      // V2 asset identity `{ admin, id }` as stored on the admin template.
+      instrumentId: {
+        admin: 'AmuletAdmin::party',
+        id: 'Amulet',
       },
       totalDeposited: '12.0000000000',
       totalWithdrawn: '2.0000000000',

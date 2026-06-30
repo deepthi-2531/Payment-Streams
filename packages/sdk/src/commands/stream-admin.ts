@@ -55,6 +55,16 @@ function optionalText(value: string | undefined): { optional: { text: string } |
   return value !== undefined ? { optional: { text: value } } : { optional: null };
 }
 
+function optionalInt(value: number | undefined): { optional: { int64: string } | null } {
+  return value !== undefined ? { optional: { int64: value.toString() } } : { optional: null };
+}
+
+function optionalTimestamp(
+  value: Date | undefined,
+): { optional: { timestamp: string } | null } {
+  return value !== undefined ? { optional: damlTimestamp(value) } : { optional: null };
+}
+
 function damlVariant(
   variantConstructor: string,
   value: Record<string, unknown> = { unit: {} },
@@ -154,11 +164,15 @@ export function buildStreamAdminCreate(
       sender: { party: params.sender },
       recipient: { party: params.recipient },
       operator: { party: params.operator },
-      instrumentRef: {
-        depository: { party: params.instrumentRef.depository },
-        issuer: { party: params.instrumentRef.issuer },
-        instrumentId: { text: params.instrumentRef.instrumentId },
-        instrumentVersion: { text: params.instrumentRef.instrumentVersion },
+      // V2 asset identity `{ admin, id }` per the CIP-56 V2 token standard.
+      // The public param shape (`instrumentRef`) is kept stable; we convert
+      // it internally via the V1->V2 bridge (admin = issuer, id = instrumentId).
+      // The V1 depository + instrumentVersion fields have no V2 equivalent and
+      // are intentionally dropped — they were never read off this
+      // observability template.
+      instrumentId: {
+        admin: { party: params.instrumentRef.issuer },
+        id: { text: params.instrumentRef.instrumentId },
       },
       totalDeposited: damlNumeric(params.totalDeposited),
       vestingMode: encodeVestingMode(params.vestingMode),
@@ -186,6 +200,8 @@ export interface SyncIterationParams {
   readonly operator: string;
   readonly iterationAmount: Decimal;
   readonly newAllocationCid?: string | undefined;
+  readonly expectedIteration?: number;
+  readonly settledAt?: Date;
 }
 
 /**
@@ -216,6 +232,8 @@ export async function buildSyncIteration(
     {
       iterationAmount: damlNumeric(params.iterationAmount),
       newAllocationCid: optionalText(params.newAllocationCid),
+      expectedIteration: optionalInt(params.expectedIteration),
+      settledAt: optionalTimestamp(params.settledAt),
     },
     [params.operator],
   )) as { contractId?: string };
@@ -235,6 +253,7 @@ export interface MarkCancelledParams {
   readonly operator: string;
   readonly cancelTime: Date;
   readonly finalWithdrawn: Decimal;
+  readonly releasedAllocationCid?: string;
 }
 
 /**
@@ -262,6 +281,7 @@ export async function buildMarkCancelled(
     {
       cancelTime: damlTimestamp(params.cancelTime),
       finalWithdrawn: damlNumeric(params.finalWithdrawn),
+      releasedAllocationCid: optionalText(params.releasedAllocationCid),
     },
     [params.operator],
   )) as { contractId?: string };

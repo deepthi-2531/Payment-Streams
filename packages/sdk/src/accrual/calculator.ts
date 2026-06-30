@@ -6,9 +6,9 @@
  * Client-side accrual math that mirrors the Daml `Accrual` module exactly.
  * Used to power real-time UI balance displays between ledger round-trips.
  *
- * All arithmetic uses `decimal.js` with `ROUND_DOWN` to match Daml Decimal's
- * fixed-scale semantics and ensure the client never shows more than the ledger
- * would actually allow.
+ * All arithmetic uses `decimal.js` with `ROUND_HALF_EVEN` to match Daml
+ * Decimal's fixed-scale (10 dp, banker's rounding) division semantics, so
+ * client-computed amounts match on-ledger assertions.
  *
  * --- Daml Parity Reference ---
  * Each function here corresponds to its Daml counterpart in
@@ -34,9 +34,9 @@ import { InvariantViolationError } from '../utils/errors.js';
 // Configure decimal.js for this module: plenty of precision.
 // Daml LF uses Java BigDecimal under the hood and rounds numeric division
 // results with HALF_EVEN (banker's rounding), NOT truncation toward zero.
-// The "TruncateTowardZero" policy comment in Accrual.daml describes the
-// intended rounding semantics for the *application* (never overpay), but the
-// Daml LF runtime itself applies HALF_EVEN for individual divisions.
+// The RoundingPolicy marker in the Daml interfaces (HalfEvenScale10) documents
+// this; the "never overpay" property comes from the accrual min/max clamps,
+// not truncation. The Daml LF runtime itself applies HALF_EVEN for divisions.
 // We mirror HALF_EVEN here so client-computed amounts match on-ledger assertions.
 const D = Decimal.clone({ precision: 38, rounding: Decimal.ROUND_HALF_EVEN });
 

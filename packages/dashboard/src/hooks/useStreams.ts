@@ -12,7 +12,20 @@ import type {
   StreamFilter,
   PendingStreamRequestFilter,
 } from '@canton-streams/sdk/browser';
+import type {
+  V1CreateStreamParams,
+  V1SettleParams,
+} from '../api/client.js';
 import { useCantonClient } from './useCantonClient.js';
+import { useAuth } from '../store/auth.js';
+import { isHostedLedgerAvailable } from '../lib/hostedWalletLedger.js';
+import {
+  settleV1ViaWallet,
+  fundReceiverClaimV1ViaWallet,
+  claimV1ViaWallet,
+  acceptTransferV1ViaWallet,
+  withdrawTransferV1ViaWallet,
+} from '../lib/settleV1Wallet.js';
 
 /**
  * Delay in ms before refetching after a mutation.
@@ -178,6 +191,214 @@ export function useRenew() {
     }) => client!.renew(sender, streamId, params),
     onSuccess: () => {
       invalidateStreamsAfterMutation(queryClient);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// V1 streams (proxy /api/v1/streams group)
+//
+// Distinct query keys (`streams-v1` / `stream-v1`) so V1 invalidation never
+// races V2 ACS refetches. V1 state is proxy-side bookkeeping (settled
+// cycles), so a single delayed refetch after a settle is enough.
+// ---------------------------------------------------------------------------
+
+export function useStreamsV1() {
+  const client = useCantonClient();
+
+  return useQuery({
+    queryKey: ['streams-v1'],
+    queryFn: () => client!.listStreamsV1(),
+    enabled: !!client,
+    refetchInterval: 15_000,
+  });
+}
+
+export function useStreamV1(id: string) {
+  const client = useCantonClient();
+
+  return useQuery({
+    queryKey: ['stream-v1', id],
+    queryFn: () => client!.getStreamV1(id),
+    enabled: !!client && !!id,
+    refetchInterval: 10_000,
+  });
+}
+
+export function useCreateStreamV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (params: V1CreateStreamParams) => client!.createStreamV1(params),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+    },
+  });
+}
+
+export function useSettleStreamV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+  const { devMode } = useAuth();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      params,
+      payerParty,
+    }: {
+      id: string;
+      params?: V1SettleParams;
+      payerParty?: string;
+    }) => {
+      // Model 2: when the payer is a hosted (wallet-held) party, the transfer
+      // must be signed + submitted through the WALLET'S participant. Otherwise
+      // (a party this proxy hosts, including a dev-mode session with no live
+      // wallet) fall back to the proxy submit (model 1). `isHostedLedgerAvailable`
+      // only reports adapter CAPABILITIES, so it stays true even when no wallet
+      // is actually connected — gate on `!devMode` to require a real session.
+      if (payerParty && !devMode && isHostedLedgerAvailable()) {
+        return settleV1ViaWallet(client!, id, payerParty, params ?? {});
+      }
+      return client!.settleStreamV1(id, params);
+    },
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
+    },
+  });
+}
+
+/** Stop a V1 stream (payer only) — halts accrual + settlement. */
+export function useStopStreamV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => client!.stopStreamV1(id),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
+    },
+  });
+}
+
+/**
+ * Sender-side "Send for claim" (receiver-claim escrow). Alice's wallet locks one
+ * cycle into a V1 allocation and signs `ReceiverClaimV1` once, so Bob can later
+ * claim without Alice. This requires `canton-streams-v1-shim` to be vetted on
+ * the payer's participant, so it is for controlled validators, not arbitrary
+ * hosted wallets such as Loop.
+ */
+export function useFundReceiverClaimV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      payerParty,
+      opts,
+    }: {
+      id: string;
+      payerParty: string;
+      opts?: { force?: boolean; amount?: string; unlockAt?: string; expiresAt?: string };
+    }) => fundReceiverClaimV1ViaWallet(client!, id, payerParty, opts ?? {}),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
+    },
+  });
+}
+
+/**
+ * Receiver-side claim. Bob's wallet signs `ReceiverClaimV1.Claim` (the proxy
+ * supplies the live registry execute-transfer context); the proxy records only
+ * after Scan confirms the update id. Requires the same custom-DAR deployment as
+ * `useFundReceiverClaimV1`.
+ */
+export function useClaimV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipientParty,
+      selector,
+    }: {
+      id: string;
+      recipientParty: string;
+      selector?: { cycle?: number; allocationCid?: string; receiverClaimCid?: string };
+    }) => claimV1ViaWallet(client!, id, recipientParty, selector ?? {}),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
+    },
+  });
+}
+
+/**
+ * Receiver-side "Accept" of a pending transfer offer. Bob's wallet signs
+ * `TransferInstruction_Accept`; the proxy records the delivered cycle only after
+ * Scan confirms it. Hosted-wallet only — the recipient signs via its participant.
+ */
+export function useAcceptTransferV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+  const { devMode } = useAuth();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      recipientParty,
+      selector,
+    }: {
+      id: string;
+      recipientParty: string;
+      selector?: { cycle?: number; transferInstructionCid?: string };
+    }) => {
+      // Loop/external recipient → wallet signs the accept (model 2). A hosted /
+      // dev-mode recipient (e.g. a validator-local party such as streamsbob) has
+      // no browser wallet, so the proxy submits the accept on its participant
+      // (model 1). `isHostedLedgerAvailable` only reports adapter CAPABILITIES,
+      // so it stays true for a dev-mode session with no live wallet — gate on
+      // `!devMode` so the accept routes to the proxy instead of a dead session.
+      if (!devMode && isHostedLedgerAvailable()) {
+        return acceptTransferV1ViaWallet(client!, id, recipientParty, selector ?? {});
+      }
+      return client!.acceptTransferV1(id, selector ?? {});
+    },
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
+    },
+  });
+}
+
+/**
+ * Sender-side "Withdraw / retry" of a pending offer the recipient never
+ * accepted. Alice's wallet signs `TransferInstruction_Withdraw`, reclaiming the
+ * locked CC; the proxy records the reclaim only after Scan confirms it.
+ */
+export function useWithdrawTransferV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({
+      id,
+      payerParty,
+      selector,
+    }: {
+      id: string;
+      payerParty: string;
+      selector?: { cycle?: number; transferInstructionCid?: string };
+    }) => withdrawTransferV1ViaWallet(client!, id, payerParty, selector ?? {}),
+    onSuccess: (_result, { id }) => {
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
     },
   });
 }

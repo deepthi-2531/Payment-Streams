@@ -1,0 +1,20 @@
+-- | Shared deadline helper for stream lifecycle choices.
+--
+-- Centralizes the `now <- getTime; assertMsg "... has expired" (now < deadline)`
+-- pattern so time-bound checks read consistently across the model rather than
+-- being hand-rolled at each call site.
+module CantonStreams.Stream.Time where
+
+-- | Assert that `deadline` has not passed relative to ledger time.
+-- The label is the subject of the failure message:
+-- `assertNotExpired "Request" t` fails with "Request has expired".
+assertNotExpired : Text -> Time -> Update ()
+assertNotExpired label deadline = do
+  now <- getTime
+  assertMsg (label <> " has expired") (now < deadline)
+
+-- | Assert that `t` is not in the future relative to ledger time.
+assertNotInFuture : Text -> Time -> Update ()
+assertNotInFuture label t = do
+  now <- getTime
+  assertMsg (label <> " must not be in the future") (t <= now)

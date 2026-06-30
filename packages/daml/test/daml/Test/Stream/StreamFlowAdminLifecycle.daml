@@ -15,12 +15,10 @@ setupFlowAdmin = do
   bob <- allocateParty "Bob"
   carol <- allocateParty "Carol-Op"
   let start = time (date 2026 Jan 1) 0 0 0
-      ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "TEST-COIN"
-        instrumentVersion = "1.0"
-      payload = mkStreamFlowAdmin "flow-001" alice bob carol ref 0.001 start 100.0 []
+      iid = InstrumentIdV2 with
+        admin = alice
+        id = "TEST-COIN"
+      payload = mkStreamFlowAdmin "flow-001" alice bob carol iid 0.001 start 100.0 []
   setTime start
   cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
   pure (alice, bob, carol, cid)
@@ -31,6 +29,8 @@ testFlowSyncIterationFirst = script do
   c1 <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-002"
+    expectedIteration = None
+    settledAt = None
   Some a <- queryContractId carol c1
   assertMsg "totalWithdrawn" (a.totalWithdrawn == 10.0)
   assertMsg "numIterations" (a.numIterations == 1)
@@ -59,6 +59,8 @@ testFlowPauseResume = script do
   submitMustFail carol $ exerciseCmd c1 Sync_Iteration_Flow with
     iterationAmount = 10.0
     newAllocationCid = Some "x"
+    expectedIteration = None
+    settledAt = None
   -- Resume
   c2 <- submit carol $ exerciseCmd c1 Resume_Flow_Admin
   Some a2 <- queryContractId carol c2
@@ -67,6 +69,8 @@ testFlowPauseResume = script do
   _ <- submit carol $ exerciseCmd c2 Sync_Iteration_Flow with
     iterationAmount = 10.0
     newAllocationCid = Some "flow-alloc-002"
+    expectedIteration = None
+    settledAt = None
   pure ()
 
 testFlowPauseRejectsDoublePause : Script ()
@@ -87,6 +91,8 @@ testFlowOvershootRejects = script do
   submitMustFail carol $ exerciseCmd cid Sync_Iteration_Flow with
     iterationAmount = 150.0
     newAllocationCid = Some "x"
+    expectedIteration = None
+    settledAt = None
 
 testFlowTopUpThenWithdrawBeyondInitial : Script ()
 testFlowTopUpThenWithdrawBeyondInitial = script do
@@ -99,6 +105,8 @@ testFlowTopUpThenWithdrawBeyondInitial = script do
   c2 <- submit carol $ exerciseCmd c1 Sync_Iteration_Flow with
     iterationAmount = 130.0
     newAllocationCid = Some "f3"
+    expectedIteration = None
+    settledAt = None
   Some a <- queryContractId carol c2
   assertMsg "totalWithdrawn = 130" (a.totalWithdrawn == 130.0)
   assertMsg "fundedAmount still 150" (a.currentFundedAmount == 150.0)
@@ -106,6 +114,8 @@ testFlowTopUpThenWithdrawBeyondInitial = script do
   submitMustFail carol $ exerciseCmd c2 Sync_Iteration_Flow with
     iterationAmount = 30.0
     newAllocationCid = Some "f4"
+    expectedIteration = None
+    settledAt = None
 
 testFlowMarkCancelled : Script ()
 testFlowMarkCancelled = script do
@@ -113,9 +123,12 @@ testFlowMarkCancelled = script do
   c1 <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
     iterationAmount = 50.0
     newAllocationCid = Some "f2"
+    expectedIteration = None
+    settledAt = None
   c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled_Flow_Admin with
     cancelTime = time (date 2026 Feb 1) 0 0 0
     finalWithdrawn = 50.0
+    releasedAllocationCid = None
   Some a <- queryContractId carol c2
   assertMsg "status Cancelled" (a.status == Cancelled)
   assertMsg "currentAllocationCid cleared" (a.currentAllocationCid == None)
@@ -126,9 +139,41 @@ testFlowGetInfo = script do
   _ <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
     iterationAmount = 25.0
     newAllocationCid = Some "f2"
+    expectedIteration = None
+    settledAt = None
   -- Need to query latest cid because Sync archives
   [(latestCid, _)] <- query @StreamFlowAdmin bob
   info <- submit bob $ exerciseCmd latestCid GetStreamFlowAdminInfo with viewer = bob
   assertMsg "info.totalWithdrawn" (info.totalWithdrawn == 25.0)
   assertMsg "info.currentFundedAmount" (info.currentFundedAmount == 100.0)
   assertMsg "info.numIterations" (info.numIterations == 1)
+
+-- | Opt-in replay guard on Sync_Iteration_Flow: `expectedIteration = Some k`
+-- asserts k == numIterations + 1. A replayed value is rejected; the correct
+-- next index succeeds.
+testFlowSyncIterationReplayGuard : Script ()
+testFlowSyncIterationReplayGuard = script do
+  (_, _, carol, cid) <- setupFlowAdmin
+  -- First iteration: numIterations 0 -> 1, expectedIteration = Some 1 OK.
+  c1 <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "flow-alloc-002"
+    expectedIteration = Some 1
+    settledAt = None
+  Some a1 <- queryContractId carol c1
+  assertMsg "first flow iteration advanced to 1" (a1.numIterations == 1)
+  -- Replay: same expectedIteration = Some 1 on the advanced contract MUST fail.
+  submitMustFail carol $ exerciseCmd c1 Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "flow-alloc-003"
+    expectedIteration = Some 1
+    settledAt = None
+  -- Correct next index = Some 2 succeeds: numIterations 1 -> 2.
+  c2 <- submit carol $ exerciseCmd c1 Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "flow-alloc-003"
+    expectedIteration = Some 2
+    settledAt = None
+  Some a2 <- queryContractId carol c2
+  assertMsg "second flow iteration advanced to 2" (a2.numIterations == 2)
+  assertMsg "flow totalWithdrawn = 20" (a2.totalWithdrawn == 20.0)

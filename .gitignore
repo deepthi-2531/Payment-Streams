@@ -18,6 +18,7 @@ packages/sdk/test/fixtures/accrual-golden.json
 # IDE / per-developer tooling (may contain absolute paths)
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
@@ -56,3 +57,7 @@ docs/reports/
 .proxy-settlement-journal.json
 .executor-guard
 .executor-offset
+
+# Private docs — excluded from the public repo
+docs/submissions/
+docs/ADOPTION-PLAN.md

@@ -1,10 +1,10 @@
 -- | Pure accrual math functions for all vesting modes.
 --
--- This is the critical invariant module. Linear/cliff accrual preserves the
--- ledger's native Decimal precision so fractional-token streams vest smoothly,
--- while still avoiding any upward rounding beyond what Daml Decimal already
--- represents. The TypeScript SDK mirrors these functions for display only;
--- the ledger is authoritative.
+-- This is the critical invariant module. Linear/cliff accrual relies on the
+-- ledger's native Decimal (fixed scale 10, HALF_EVEN rounding) so
+-- fractional-token streams vest smoothly; the "never overpay" property comes
+-- from the min/max clamps below, not from truncation. The TypeScript SDK
+-- mirrors these functions for display only; the ledger is authoritative.
 --
 -- Core invariant (with dust tolerance):
 --   refundable(now) + withdrawable(now) + totalWithdrawn <= totalDeposited

@@ -15,18 +15,19 @@ setupMilestoneAdmin = do
   alice <- allocateParty "Alice"
   bob <- allocateParty "Bob"
   carol <- allocateParty "Carol-Op"
-  let ref = InstrumentRef with
-        depository = alice
-        issuer = alice
-        instrumentId = "TEST-COIN"
-        instrumentVersion = "1.0"
+  let iid = InstrumentIdV2 with
+        admin = alice
+        id = "TEST-COIN"
       ms = [ mkPendingMilestone "m1" "milestone 1" 100.0
            , mkPendingMilestone "m2" "milestone 2" 200.0
            , mkPendingMilestone "m3" "milestone 3" 300.0
            , mkPendingMilestone "m4" "milestone 4" 400.0
            ]
-      payload = mkMilestoneAdmin "milestone-001" alice bob carol ref ms []
-  setTime (time (date 2026 Jan 1) 0 0 0)
+      payload = mkMilestoneAdmin "milestone-001" alice bob carol iid ms []
+  -- Pin ledger time AFTER the milestone confirm timestamps used below
+  -- (2026 Feb 1) so the opt-in `assertNotInFuture "confirmedAt"` guard in
+  -- Confirm_Milestone / Confirm_Milestone_Batch sees a past confirmation.
+  setTime (time (date 2026 Mar 1) 0 0 0)
   cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
   pure (alice, bob, carol, cid)
 
@@ -136,6 +137,7 @@ testMilestoneMarkCancelled = script do
     milestoneName = "m1"; confirmedAt = t
   c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled_Milestone_Admin with
     cancelTime = time (date 2026 Apr 1) 0 0 0
+    releasedAllocationCid = None
   Some a <- queryContractId carol c2
   assertMsg "status Cancelled" (a.status == Cancelled)
   assertMsg "allocationCid cleared" (a.allocationCid == None)

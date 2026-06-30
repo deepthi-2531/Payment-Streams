@@ -52,10 +52,19 @@ module CantonStreams.Stream.StreamFlowAdmin where
 import CantonStreams.Interface.Types
   ( StreamId
   , StreamStatus(..)
-  , InstrumentRef
+  , InstrumentIdV2
   )
+import CantonStreams.Stream.Time (assertNotInFuture)
 
 -- | A V2-only rolling top-up stream's admin/observability contract.
+--
+-- Trust boundary: the sync/top-up/pause/cancel choices are operator-controlled
+-- bookkeeping, so a faulty or malicious operator can desync this record from
+-- real settlement. The underlying V2 `Allocation` (see `currentAllocationCid`)
+-- is the authoritative settlement + cancellation state — who may cancel and
+-- which funds are released is enforced there, not here. Consumers must
+-- reconcile against the Allocation and treat this contract as a non-binding
+-- index over it.
 template StreamFlowAdmin
   with
     streamId : StreamId
@@ -63,7 +72,8 @@ template StreamFlowAdmin
     recipient : Party
     operator : Party
       -- ^ Escrow operator / executor.
-    instrumentRef : InstrumentRef
+    instrumentId : InstrumentIdV2
+      -- ^ V2 asset identity `{ admin, id }` (per the CIP-56 V2 token standard).
     flowRate : Decimal
       -- ^ Tokens-per-microsecond rate (for off-chain accrual
       -- computation; operator pumps `Allocation_Settle` according to
@@ -103,6 +113,16 @@ template StreamFlowAdmin
       with
         iterationAmount : Decimal
         newAllocationCid : Optional Text
+        expectedIteration : Optional Int
+          -- ^ Opt-in replay guard. When `Some k`, asserts this call records
+          -- exactly the next iteration (k == numIterations + 1), mirroring the
+          -- authoritative V2 `AllocationView.numIterations`, so a replayed or
+          -- out-of-order settle is rejected. `None` keeps legacy behaviour.
+        settledAt : Optional Time
+          -- ^ Opt-in settle-time bound. When `Some t`, asserts the claimed
+          -- settlement time `t` is not in the future relative to ledger time,
+          -- so a settle can't be recorded with a future timestamp. `None`
+          -- keeps legacy behaviour.
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
@@ -111,6 +131,10 @@ template StreamFlowAdmin
         let newTotalWithdrawn = totalWithdrawn + iterationAmount
         assertMsg "Iteration overshoots funded balance"
           (newTotalWithdrawn <= currentFundedAmount)
+        case expectedIteration of
+          None -> pure ()
+          Some k -> assertMsg "Iteration out of order or replayed" (k == numIterations + 1)
+        optional (pure ()) (assertNotInFuture "settledAt") settledAt
         let newOriginal = case originalAllocationId of
               Some _ -> originalAllocationId
               None -> newAllocationCid
@@ -161,6 +185,8 @@ template StreamFlowAdmin
       with
         cancelTime : Time
         finalWithdrawn : Decimal
+        releasedAllocationCid : Optional Text
+          -- ^ cid of the V2 Allocation whose Allocation_Cancel released the funds, recorded for audit linkage
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
@@ -169,6 +195,7 @@ template StreamFlowAdmin
         assertMsg "Final withdrawn must be >= current totalWithdrawn"
           (finalWithdrawn >= totalWithdrawn)
         let _ = cancelTime
+        let _ = releasedAllocationCid  -- captured in the exercise event for audit linkage; not stored on-ledger here
         archive self
         create this with
           totalWithdrawn = finalWithdrawn
@@ -218,18 +245,18 @@ mkStreamFlowAdmin :
   -> Party         -- sender
   -> Party         -- recipient
   -> Party         -- operator
-  -> InstrumentRef
+  -> InstrumentIdV2
   -> Decimal       -- flowRate (tokens/microsecond)
   -> Time          -- startTime
   -> Decimal       -- initialFundedAmount
   -> [Party]       -- observers
   -> StreamFlowAdmin
-mkStreamFlowAdmin sid s r op ref rate st initialFund obs = StreamFlowAdmin with
+mkStreamFlowAdmin sid s r op iid rate st initialFund obs = StreamFlowAdmin with
   streamId = sid
   sender = s
   recipient = r
   operator = op
-  instrumentRef = ref
+  instrumentId = iid
   flowRate = rate
   startTime = st
   currentFundedAmount = initialFund

@@ -56,8 +56,9 @@ module CantonStreams.Stream.MilestoneAdmin where
 import CantonStreams.Interface.Types
   ( StreamId
   , StreamStatus(..)
-  , InstrumentRef
+  , InstrumentIdV2
   )
+import CantonStreams.Stream.Time (assertNotInFuture)
 
 -- | A single milestone in a milestone-based stream.
 data Milestone = Milestone with
@@ -84,7 +85,8 @@ template MilestoneAdmin
     sender : Party
     recipient : Party
     operator : Party
-    instrumentRef : InstrumentRef
+    instrumentId : InstrumentIdV2
+      -- ^ V2 asset identity `{ admin, id }` (per the CIP-56 V2 token standard).
     milestones : [Milestone]
       -- ^ Full list of milestones. Each entry's `confirmed` flag is
       -- flipped from False → True via `Confirm_Milestone` /
@@ -139,6 +141,7 @@ template MilestoneAdmin
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
+        assertNotInFuture "confirmedAt" confirmedAt
         let matching = filter (\m -> m.name == milestoneName) milestones
             others   = filter (\m -> m.name /= milestoneName) milestones
         case matching of
@@ -168,6 +171,7 @@ template MilestoneAdmin
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
+        assertNotInFuture "confirmedAt" confirmedAt
         assertMsg "Batch must be non-empty" (not (null milestoneNames))
         -- Validate every requested milestone exists + is unconfirmed.
         let isRequested m = m.name `elem` milestoneNames
@@ -194,10 +198,13 @@ template MilestoneAdmin
     nonconsuming choice Mark_Cancelled_Milestone_Admin : ContractId MilestoneAdmin
       with
         cancelTime : Time
+        releasedAllocationCid : Optional Text
+          -- ^ cid of the V2 Allocation whose Allocation_Cancel released the funds, recorded for audit linkage
       controller operator
       do
         assertMsg "Stream not active" (status == Active)
         let _ = cancelTime
+        let _ = releasedAllocationCid  -- captured in the exercise event for audit linkage; not stored on-ledger here
         archive self
         create this with
           status = Cancelled
@@ -251,16 +258,16 @@ mkMilestoneAdmin :
   -> Party
   -> Party
   -> Party
-  -> InstrumentRef
+  -> InstrumentIdV2
   -> [Milestone]
   -> [Party]
   -> MilestoneAdmin
-mkMilestoneAdmin sid s r op ref ms obs = MilestoneAdmin with
+mkMilestoneAdmin sid s r op iid ms obs = MilestoneAdmin with
   streamId = sid
   sender = s
   recipient = r
   operator = op
-  instrumentRef = ref
+  instrumentId = iid
   milestones = ms
   totalDeposited = sum (map (.amount) ms)
   totalReleased = 0.0

@@ -99,6 +99,12 @@ import {
   requireId,
   optionalId,
 } from './validation.js';
+import {
+  parseV1LaneConfig,
+  V1LaneService,
+  V1LaneError,
+  type CreateV1StreamInput,
+} from './v1-lane.js';
 
 // ---------------------------------------------------------------------------
 // Configuration from environment
@@ -108,6 +114,11 @@ const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '4000', 10);
 const CANTON_HOST = process.env['CANTON_HOST'] ?? 'localhost';
 const CANTON_PORT = parseInt(process.env['CANTON_PORT'] ?? '6865', 10);
 const CANTON_USE_TLS = process.env['CANTON_USE_TLS'] === 'true';
+// Allow forwarding a bearer token over a plaintext gRPC channel to the
+// participant. Default false (SEC hardening). Set true ONLY on a trusted
+// private network — here the participant is on the validator's internal docker
+// network and its ledger-API auth is disabled, so the token is unused there.
+const CANTON_ALLOW_INSECURE_TOKEN = process.env['CANTON_ALLOW_INSECURE_TOKEN'] === 'true';
 const CANTON_SYNCHRONIZER_ID = process.env['CANTON_SYNCHRONIZER_ID'];
 const autoWithdrawConfig = parseAutoWithdrawConfig(process.env);
 
@@ -116,6 +127,15 @@ const authConfig: AuthConfig = parseAuthConfig();
 // Fail closed at boot: refuse to start with a spoofable dev-auth
 // posture unless it is explicitly acknowledged AND loopback-bound.
 assertAuthConfigSafe(authConfig);
+
+/**
+ * V1 transfer-instruction lane service — ports the proven settle/create logic
+ * from scripts/interest-stream-scheduler.mjs. Wired from the V1 lane env
+ * (CANTON_JSON_API_URL, REGISTRY_API_URL, CC_ADMIN_PARTY, the StreamAdmin
+ * template / TransferFactory interface ids, operator/user id) with the spec's
+ * defaults. Parallel to the SDK-backed V2 /api/streams group.
+ */
+const v1Lane = new V1LaneService(parseV1LaneConfig(process.env));
 let startupReadiness: ReadinessReport | null = null;
 let stopAutoWithdrawWorker: (() => void) | null = null;
 
@@ -221,6 +241,7 @@ async function createAuthorizedClient(
     host: CANTON_HOST,
     port: CANTON_PORT,
     useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
     synchronizerId: CANTON_SYNCHRONIZER_ID,
     token: auth.token,
     actAs: [...new Set([...auth.actAs, ...additionalParties.filter(Boolean)])],
@@ -250,6 +271,7 @@ async function createAuthorizedClientWithParty(
     host: CANTON_HOST,
     port: CANTON_PORT,
     useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
     synchronizerId: CANTON_SYNCHRONIZER_ID,
     token: auth.token,
     actAs: [...new Set([...auth.actAs, ...additionalParties.filter(Boolean)])],
@@ -330,6 +352,7 @@ async function createServiceClient(
     host: CANTON_HOST,
     port: CANTON_PORT,
     useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
     synchronizerId: CANTON_SYNCHRONIZER_ID,
     token: auth.token,
     actAs: [...auth.actAs, ...additionalParties],
@@ -359,6 +382,7 @@ function createInternalServiceClient(additionalParties: string[]): CantonStreams
     host: CANTON_HOST,
     port: CANTON_PORT,
     useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
     synchronizerId: CANTON_SYNCHRONIZER_ID,
     token: authConfig.serviceToken,
     actAs: [...new Set([authConfig.escrowOperator, ...additionalParties.filter(Boolean)])],
@@ -388,6 +412,7 @@ function createClientForAuth(auth: AuthResult): CantonStreamsClient {
     host: CANTON_HOST,
     port: CANTON_PORT,
     useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
     synchronizerId: CANTON_SYNCHRONIZER_ID,
     token: auth.token,
     actAs: auth.actAs,
@@ -404,6 +429,7 @@ function createClientForAuthWithParties(
     host: CANTON_HOST,
     port: CANTON_PORT,
     useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
     synchronizerId: CANTON_SYNCHRONIZER_ID,
     token: auth.token,
     actAs: [...new Set([...auth.actAs, ...additionalParties.filter(Boolean)])],
@@ -1257,6 +1283,436 @@ app.post('/api/streams/:sender/:streamId/finalize', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// V1 transfer-instruction lane routes (/api/v1/streams)
+//
+// Parallel to the SDK-backed V2 /api/streams group above; does NOT touch the
+// gRPC client. The settle path is the proven scheduler code (ported in
+// v1-lane.ts). It supports two V1 modes:
+//   1. direct delivery: payer holds unlocked Amulet/CC and pays each cycle via
+//      TransferFactory_Transfer; and
+//   2. receiver-claim: payer funds a V1 Allocation + ReceiverClaimV1 once, then
+//      the recipient claims after unlockAt. This second mode needs the V1 shim
+//      DAR vetted on the payer participant, so it is for controlled validators,
+//      not arbitrary hosted-wallet participants.
+// An optional on-ledger StreamAdmin contract remains the per-stream
+// observability record, advanced per settled cycle via Sync_Iteration.
+// ---------------------------------------------------------------------------
+
+/** POST /api/v1/streams — create a V1 stream (agreement row + optional StreamAdmin). */
+app.post('/api/v1/streams', async (req, res) => {
+  try {
+    // Reuse the existing user-auth + sender-role enforcement: the caller must
+    // be the payer (the on-chain sender for both transfer and Sync_Iteration).
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const payerParty = (body['payerParty'] as string | undefined)
+      ?? (body['sender'] as string | undefined)
+      ?? auth.party;
+    enforceRole(auth.party, getRequiredRole('create'), payerParty);
+
+    const input: CreateV1StreamInput = {
+      streamId: (body['streamId'] as string | undefined) ?? (body['id'] as string | undefined),
+      appId: body['appId'] as string | undefined,
+      payerParty,
+      recipientParty: (body['recipientParty'] as string | undefined)
+        ?? (body['recipient'] as string | undefined)
+        ?? '',
+      ratePerCycle: body['ratePerCycle'] as string | undefined,
+      amount: body['amount'] as string | undefined,
+      cadence: body['cadence'] as CreateV1StreamInput['cadence'],
+      effectiveFrom: body['effectiveFrom'] as string | undefined,
+      termEnd: body['termEnd'] as string | undefined,
+      arrearsPolicy: body['arrearsPolicy'] as CreateV1StreamInput['arrearsPolicy'],
+      totalDeposited: body['totalDeposited'] as string | undefined,
+      createAdminRecord: body['createAdminRecord'] === true,
+      cancellable: body['cancellable'] as boolean | undefined,
+      observers: body['observers'] as string[] | undefined,
+    };
+
+    const view = await v1Lane.createStream(input);
+    res.status(201).json(serializeForJson(view));
+  } catch (err) {
+    handleError(res, err, 'createV1Stream');
+  }
+});
+
+/** GET /api/v1/streams — list V1 streams (proxy state + on-ledger StreamAdmin progress). */
+app.get('/api/v1/streams', async (req, res) => {
+  try {
+    // Scope the listing to the caller: only streams where they are payer or
+    // recipient are returned, so one wallet can't enumerate another's streams.
+    const auth = await authorizeRequest(req, 'query', authConfig);
+    const streams = await v1Lane.listStreams(auth.party);
+    res.json(serializeForJson(streams));
+  } catch (err) {
+    handleError(res, err, 'listV1Streams');
+  }
+});
+
+/** GET /api/v1/streams/:id — V1 stream detail incl. settled cycles + on-ledger record. */
+app.get('/api/v1/streams/:id', async (req, res) => {
+  try {
+    // Only the payer or recipient may read a V1 stream's terms/history.
+    const auth = await authorizeRequest(req, 'query', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    res.json(serializeForJson(view));
+  } catch (err) {
+    handleError(res, err, 'getV1Stream');
+  }
+});
+
+/** POST /api/v1/streams/:id/settle — trigger one settle cycle now (on-demand). */
+app.post('/api/v1/streams/:id/settle', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    // Read-scope check first (payer or recipient); then restrict settle to payer.
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    // Only the payer may move money out of their own wallet.
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.settle(req.params['id']!, {
+      force: body['force'] === true,
+      amount: body['amount'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'settleV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/stop — halt a stream. Only the payer (sender) may
+ * stop their own stream; accrual + settlement cease immediately.
+ */
+app.post('/api/v1/streams/:id/stop', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const result = await v1Lane.stopStream(req.params['id']!);
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'stopV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/prepare-settle — model 2 (wallet-submitted settle).
+ * Forms the cycle's TransferFactory_Transfer (registry choice-context needs the
+ * whitelisted egress, so it must happen here) and returns the ready-to-submit
+ * command + disclosed contracts for the payer's WALLET to submit through its own
+ * participant. Nothing is settled until POST /record-settle confirms the commit.
+ */
+app.post('/api/v1/streams/:id/prepare-settle', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareSettle(req.params['id']!, {
+      force: body['force'] === true,
+      amount: body['amount'] as string | undefined,
+      holdings: body['holdings'] as { cid: string; amount: number }[] | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareSettleV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/record-settle — model 2 phase 2. Records a cycle the
+ * payer's wallet already committed (idempotent on updateId).
+ */
+app.post('/api/v1/streams/:id/record-settle', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.recordSettle(req.params['id']!, {
+      updateId: body['updateId'] as string,
+      amount: body['amount'] as string,
+      ref: body['ref'] as string | undefined,
+      executeBefore: body['executeBefore'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recordSettleV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/recover-pending — self-heal a settle that committed
+ * on-ledger but whose record was lost (e.g. the payer's wallet threw a false
+ * rejection after the transfer committed). Records any active, untracked offer.
+ */
+app.post('/api/v1/streams/:id/recover-pending', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const result = await v1Lane.recoverPendingOffers(req.params['id']!);
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recoverPendingV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/prepare-allocation — receiver-claim phase 1.
+ * Forms AllocationFactory_Allocate for Alice's wallet. By default the proxy
+ * sets executor == recipient so Bob can later claim solo from his wallet.
+ */
+app.post('/api/v1/streams/:id/prepare-allocation', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareReceiverAllocation(req.params['id']!, {
+      force: body['force'] === true,
+      amount: body['amount'] as string | undefined,
+      holdings: body['holdings'] as { cid: string; amount: number }[] | undefined,
+      executor: body['executor'] as string | undefined,
+      unlockAt: body['unlockAt'] as string | undefined,
+      expiresAt: body['expiresAt'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareAllocationV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/record-allocation — receiver-claim phase 2.
+ * Records the Allocation cid Alice's wallet created. The caller supplies the
+ * cid because hosted wallet submit responses do not reliably expose created
+ * contract ids.
+ */
+app.post('/api/v1/streams/:id/record-allocation', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.recordReceiverAllocation(req.params['id']!, {
+      allocationCid: body['allocationCid'] as string,
+      allocationUpdateId: body['allocationUpdateId'] as string | undefined,
+      amount: body['amount'] as string,
+      ref: body['ref'] as string | undefined,
+      cycle: Number(body['cycle']),
+      executor: body['executor'] as string | undefined,
+      unlockAt: body['unlockAt'] as string,
+      expiresAt: body['expiresAt'] as string,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recordAllocationV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/prepare-receiver-claim — receiver-claim phase 3.
+ * Builds the ReceiverClaimV1 create command for Alice's wallet. This is the
+ * sender's one-time consent that lets Bob claim later without Alice.
+ */
+app.post('/api/v1/streams/:id/prepare-receiver-claim', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareReceiverClaim(req.params['id']!, {
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+      allocationCid: body['allocationCid'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareReceiverClaimV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/record-receiver-claim — receiver-claim phase 4.
+ * Records the ReceiverClaimV1 cid Alice's wallet created.
+ */
+app.post('/api/v1/streams/:id/record-receiver-claim', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.recordReceiverClaim(req.params['id']!, {
+      receiverClaimCid: body['receiverClaimCid'] as string,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+      allocationCid: body['allocationCid'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recordReceiverClaimV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/prepare-claim — receiver-claim phase 5.
+ * Fetches the live registry execute-transfer choice-context/disclosures and
+ * returns Bob's ready-to-submit ReceiverClaimV1.Claim command.
+ */
+app.post('/api/v1/streams/:id/prepare-claim', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'recipient', view.agreement.payerParty, view.agreement.recipientParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareClaim(req.params['id']!, {
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+      allocationCid: body['allocationCid'] as string | undefined,
+      receiverClaimCid: body['receiverClaimCid'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareClaimV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/record-claim — receiver-claim phase 6.
+ * Records Bob's wallet-submitted claim only after Scan confirms the update.
+ */
+app.post('/api/v1/streams/:id/record-claim', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'recipient', view.agreement.payerParty, view.agreement.recipientParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.recordClaim(req.params['id']!, {
+      updateId: body['updateId'] as string,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+      allocationCid: body['allocationCid'] as string | undefined,
+      receiverClaimCid: body['receiverClaimCid'] as string | undefined,
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recordClaimV1Stream');
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Pending-offer lane (TransferInstruction Accept / Withdraw)
+//
+// Direct-delivery (preapproval) settles via /record-settle, which classifies
+// the on-chain outcome from the Scan update: a settle that landed as a pending
+// TransferInstruction is recorded as a pending offer (not "settled"). The
+// recipient accepts it from their own wallet; the sender can withdraw/retry
+// after expiry.
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /api/v1/streams/:id/prepare-accept — recipient accepts a pending offer.
+ * Forms TransferInstruction_Accept (registry choice-context + disclosures).
+ */
+app.post('/api/v1/streams/:id/prepare-accept', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'recipient', view.agreement.payerParty, view.agreement.recipientParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareAcceptTransfer(req.params['id']!, {
+      transferInstructionCid: body['transferInstructionCid'] as string | undefined,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareAcceptV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/record-accept — record the recipient's accepted
+ * transfer only after Scan confirms it committed. Advances settled/cycles.
+ */
+app.post('/api/v1/streams/:id/record-accept', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'recipient', view.agreement.payerParty, view.agreement.recipientParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.recordAcceptTransfer(req.params['id']!, {
+      updateId: body['updateId'] as string,
+      transferInstructionCid: body['transferInstructionCid'] as string | undefined,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recordAcceptV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/accept — model-1 hosted/dev-mode accept. The proxy
+ * SUBMITS TransferInstruction_Accept on behalf of a recipient hosted on this
+ * participant (no browser wallet, e.g. a validator-local party). Recipient-
+ * scoped + Scan-verified, same proof bar as the wallet accept.
+ */
+app.post('/api/v1/streams/:id/accept', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'recipient', view.agreement.payerParty, view.agreement.recipientParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.acceptTransferHosted(req.params['id']!, {
+      transferInstructionCid: body['transferInstructionCid'] as string | undefined,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'acceptHostedV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/prepare-withdraw — sender reclaims a pending
+ * (unaccepted) offer. Forms TransferInstruction_Withdraw.
+ */
+app.post('/api/v1/streams/:id/prepare-withdraw', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareWithdrawTransfer(req.params['id']!, {
+      transferInstructionCid: body['transferInstructionCid'] as string | undefined,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareWithdrawV1Stream');
+  }
+});
+
+/**
+ * POST /api/v1/streams/:id/record-withdraw — record the sender's withdrawal
+ * once Scan confirms it. Marks the offer reclaimed (settled is NOT advanced).
+ */
+app.post('/api/v1/streams/:id/record-withdraw', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const view = await v1Lane.getStream(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', view.agreement.payerParty);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.recordWithdrawTransfer(req.params['id']!, {
+      updateId: body['updateId'] as string,
+      transferInstructionCid: body['transferInstructionCid'] as string | undefined,
+      cycle: body['cycle'] === undefined ? undefined : Number(body['cycle']),
+    });
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'recordWithdrawV1Stream');
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Open-ended flow routes (StreamFlow — non-prefunded / rolling top-up)
 // ---------------------------------------------------------------------------
 
@@ -1534,6 +1990,19 @@ function handleError(res: express.Response, err: unknown, operation: string): vo
     });
     return;
   }
+  if (err instanceof V1LaneError) {
+    // Surface the V1 lane's structured reason code, but keep the published
+    // 5xx-masking posture: never echo raw upstream/ledger detail to clients.
+    const isServerErr = err.statusCode >= 500;
+    const correlationId = `${operation}-${Date.now().toString(36)}`;
+    if (isServerErr) console.error(`[${correlationId}] ${operation} error:`, err);
+    res.status(err.statusCode).json({
+      error: isServerErr ? `Internal error (ref ${correlationId})` : err.message,
+      reason: err.reason,
+      ...(isServerErr ? { correlationId } : {}),
+    });
+    return;
+  }
   const status = (err as any)?.statusCode ?? 500;
   // Always log the full error server-side with a correlation id.
   const correlationId = `${operation}-${Date.now().toString(36)}`;
@@ -1637,6 +2106,7 @@ async function start(): Promise<void> {
       host: CANTON_HOST,
       port: CANTON_PORT,
       useTls: CANTON_USE_TLS,
+    allowInsecureToken: CANTON_ALLOW_INSECURE_TOKEN,
       synchronizerId: CANTON_SYNCHRONIZER_ID,
       token: authConfig.serviceToken,
       actAs: [authConfig.escrowOperator],
