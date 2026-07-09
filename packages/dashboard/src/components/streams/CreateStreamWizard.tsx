@@ -124,21 +124,73 @@ export function CreateStreamWizard() {
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
 
-  // Pre-fill from `?asset=<id>&admin=<party>` query params. The
-  // dashboard's "Your wallet" cards link here with both set, so the
-  // user lands on Step 1 with the asset row already filled in.
-  // Reads the URL once at mount; subsequent navigation within the
-  // wizard does not re-run this.
+  // Pre-fill from query params. Two sources feed this page:
+  //   1. The dashboard's "Your wallet" cards link here with
+  //      `?asset=<id>&admin=<party>` so the asset row lands filled in.
+  //   2. A sibling lending app (Streams-Interest-Service) deep-links
+  //      borrowers here with the stream pre-described:
+  //        ?sender=<party>&recipient=<party>&total=<num>&end=<ISO8601>
+  //         &rate=<num>&cadence=<hourly|daily|monthly>&ref=<agreementId>
+  //
+  // Mapping onto the V2 wizard's actual fields (see createStreamSchema):
+  //   recipient      -> recipient
+  //   total          -> totalDeposited (the whole-term repayment total, which
+  //                     is exactly what the V2 deposit field expects)
+  //   end (ISO8601)  -> endTime (as a datetime-local string)
+  //   ref            -> fundingReference (the one free-text reference field,
+  //                     carried through to CreateStreamParams.fundingReference)
+  // Params the V2 form cannot represent are intentionally dropped:
+  //   sender       — the payer is always the connected wallet party, injected
+  //                  at submit time; there is no sender field to fill.
+  //   rate/cadence — per-period informational hints only. The V2 lane vests
+  //                  continuously over start->end with no per-period interval,
+  //                  and `rate` is NOT the term total (mapping it to
+  //                  totalDeposited would under-fund the stream), so both are
+  //                  ignored.
+  //
+  // Each param is applied independently and only when present + valid, so a
+  // missing or malformed value leaves that field at its normal default.
+  // Reads the URL once at mount; navigation within the wizard does not re-run.
   const prefillFromQuery = useMemo((): Partial<CreateStreamSchemaValues> => {
     if (typeof window === 'undefined') return {};
     const params = new URLSearchParams(window.location.search);
+    const prefill: Partial<CreateStreamSchemaValues> = {};
+
     const asset = params.get('asset');
+    if (asset) prefill.instrumentId = asset;
+
     const admin = params.get('admin');
-    if (!asset && !admin) return {};
-    return {
-      ...(asset ? { instrumentId: asset } : {}),
-      ...(admin ? { instrumentAdmin: admin } : {}),
-    };
+    if (admin) prefill.instrumentAdmin = admin;
+
+    const recipient = params.get('recipient');
+    if (recipient) prefill.recipient = recipient;
+
+    // `total` is the whole-term repayment total and maps straight onto the
+    // deposit. Only accept the positive-decimal shape the schema requires so a
+    // junk value leaves the field empty rather than pre-seeding a validation
+    // error. `rate` (per-period) is deliberately NOT used here — it is not the
+    // total and would under-fund the stream.
+    const total = params.get('total');
+    if (total && /^\d+(\.\d+)?$/.test(total) && Number(total) > 0) {
+      prefill.totalDeposited = total;
+    }
+
+    // `end` arrives as ISO-8601; the input is `datetime-local`, so normalize
+    // via the same helper the schedule step uses. Skip unparseable values.
+    const end = params.get('end');
+    if (end) {
+      const endDate = new Date(end);
+      if (!Number.isNaN(endDate.getTime())) {
+        prefill.endTime = toDatetimeLocal(endDate);
+      }
+    }
+
+    // `ref` (the lending agreement id) rides along on the funding reference,
+    // the only free-text reference the V2 create path carries on-ledger.
+    const ref = params.get('ref');
+    if (ref) prefill.fundingReference = ref;
+
+    return prefill;
   }, []);
 
   // zod's `.default()` on `cancellable` makes the *input* optional but the
