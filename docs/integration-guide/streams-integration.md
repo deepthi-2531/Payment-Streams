@@ -4,14 +4,13 @@ Integrate time-based CC payouts (vesting, payroll, LP incentives, recurring bill
 into your Canton dApp. Your stream terms stay **private to your parties**; only the
 asset settlements are publicly visible — stamped so usage is independently countable.
 
-Field-validated end-to-end on **TestNet and MainNet** 2026-06-10 (see
-`docs/reports/first-dapp-integration-testnet.md`): Linear, Stepped, and
+Field-validated end-to-end on **TestNet and MainNet** (2026-06-10): Linear, Stepped, and
 custom-curve streams settled real CC, including a production MainNet run
 (DAR vetted, on-ledger stream completed, usage discovered on public Scan).
 
 ---
 
-## What you run vs. what we provide
+## What you run vs. what the library provides
 
 | Component | Who runs it |
 | --- | --- |
@@ -19,10 +18,10 @@ custom-curve streams settled real CC, including a production MainNet run
 | `canton-streams` DAR (stream contracts) | **You** upload to your participant |
 | `@canton-streams/sdk` + executor loop | **You** (npm package + reference scripts) |
 | Token-standard registry API | The network (served by **Scan** for CC) |
-| Usage measurement & committee reporting | **Us** — from public Scan only; no access to your systems needed |
+| Usage measurement | Reproducible by anyone from public Scan; no access to your systems needed |
 
 There is no hosted facilitator and no third party in your money path: your parties,
-your participant, the network's registry. We never hold funds or keys.
+your participant, the network's registry. The library never holds funds or keys.
 
 ## Prerequisites
 
@@ -48,12 +47,8 @@ TestNet SCAN/REGISTRY: https://scan.sv-1.test.global.canton.network.sync.global
 MainNet SCAN/REGISTRY: https://scan.sv-1.global.canton.network.sync.global
                   (registry endpoints live at /registry/... on the BARE host — not /api/scan)
 DSO (CC admin):   GET {scan}/api/scan/v0/dso-party-id
-SYNCHRONIZER:     TestNet global-domain::1220f22a… / MainNet global-domain::1220b143…
+SYNCHRONIZER:     GET {scan}/api/scan/v0/synchronizer-id (per network)
 ```
-
-> Scan IP-filters many hosts (`403`). If your backend host is blocked, run the
-> settlement/reporting scripts from your validator host (a portable Node tarball
-> in the home directory works fine — no system install needed).
 
 ## 1. Install
 
@@ -87,12 +82,6 @@ printf '{"dars":[{"bytes":"%s"}],"vet_all_packages":true,"synchronize_vetting":t
 docker run --rm --network host -i fullstorydev/grpcurl -plaintext -max-msg-sz 104857600 \
   -d @ <participant-ip>:5002 com.digitalasset.canton.admin.participant.v30.PackageService/UploadDar < /tmp/up.json
 ```
-
-> **`KNOWN_PACKAGE_VERSION` anyway?** Either your DAR still bundles source-built
-> interface packages (rebuild per above), or your participant has two package
-> generations vetted from past uploads (common on long-lived validators).
-> Fallback: settlement-only mode (`SKIP_SHIM=true`) — the allocate/settle cycle
-> uses only network-vetted packages. See `docs/V1-LANE-TESTING.md` field notes.
 
 ## 3. Create a stream
 
@@ -163,7 +152,8 @@ node scripts/devnet-v1-cc-stream-probe.mjs
 > **Authority note:** the V1 execute-transfer choice is jointly controlled by
 > executor + sender + receiver. Co-hosted parties (one participant): pass all three
 > in `actAs` — done. Split topologies: compose the exercise in a Daml choice on a
-> contract signed by those parties (ask us for the pattern).
+> contract signed by those parties (see [`V1-LANE-TESTING.md`](../V1-LANE-TESTING.md)
+> for the composition pattern).
 
 ## 5. Attribution & usage reporting (how your usage gets counted)
 
@@ -187,8 +177,8 @@ reports rather than to your party prefix:
 export CANTON_STREAMS_APP_ID=your-app-name     # stamped as cantonstreams.dev/app
 ```
 
-Anyone — you, us, the Dev Fund Committee — can then reproduce the usage numbers
-from public Scan with no privileged access:
+The usage numbers are reproducible by anyone from public Scan with no privileged
+access:
 
 ```bash
 SCAN_URL=https://scan.sv-1.test.global.canton.network.sync.global \
@@ -196,12 +186,6 @@ SINCE=2026-07-01T00:00:00Z UNTIL=2026-08-01T00:00:00Z \
 node scripts/scan-usage-report.mjs
 # → settlements count, distinct streams, total settled, update-id evidence list
 ```
-
-We run this per reporting window, exclude our own/affiliate parties, and submit the
-result with the reproduction command. If you'd like your integration named in the
-report (vs. counted anonymously), tell us your party ids; if you'd like stream-level
-verification, you can grant a reviewer party observer status on your stream
-contracts — nothing becomes public either way.
 
 ## Troubleshooting (all hit and fixed in live integration)
 
@@ -222,5 +206,4 @@ contracts — nothing becomes public either way.
 ## Support
 
 - Field notes: [`docs/V1-LANE-TESTING.md`](../V1-LANE-TESTING.md)
-- Worked end-to-end example with on-chain evidence: [`docs/reports/first-dapp-integration-testnet.md`](../reports/first-dapp-integration-testnet.md)
 - Issues: GitHub issues on this repo. Integration-blocking bugs during pilots are prioritized.

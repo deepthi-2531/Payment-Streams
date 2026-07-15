@@ -92,7 +92,7 @@ A payment stream is exactly the iterated case:
 
 ## Behavioral interop — what a generic V2 wallet can and cannot do
 
-Earlier framing of this library overclaimed "wallet-agnostic" interop. Be precise about it:
+A precise statement of what generic V2-wallet interop covers:
 
 ### A wallet that knows ONLY the V2 standard vocabulary CAN
 
@@ -134,7 +134,7 @@ The wallet-agnostic claim holds for the **majority of stream activity** (creates
 | Surface | Trust source |
 |---|---|
 | Standard V2 interface choices (`AllocationFactory_Allocate`, `Allocation_Settle`, etc.) | **Interface-fixed**: wallet renders from typed view fields. Reliable. |
-| `meta` / `extraArgs` content + our template choices (`StreamEscrow.Sync_Iteration` etc.) | **dApp-honesty**: wallet must surface raw args alongside any operator-supplied label. |
+| `meta` / `extraArgs` content + the library's template choices (`StreamEscrow.Sync_Iteration` etc.) | **dApp-honesty**: wallet must surface raw args alongside any operator-supplied label. |
 | Executor's settle calls | **Operator trust**: per the CIP-0112 update, `SettlementFactory_SettleBatch` requires only executor authority. By exercising `AllocationFactory_Allocate(committed=True)`, the sender effectively pre-authorizes the executor's settlement series within the iteration chain. |
 
 ## What lives where
@@ -146,12 +146,12 @@ The wallet-agnostic claim holds for the **majority of stream activity** (creates
 
 ## Reference implementations to mirror
 
-* [`splice-token-test-trading-app-v2/TradingAppV2.daml`](https://github.com/canton-network/splice/blob/main/token-standard/examples/splice-token-test-trading-app-v2/daml/Splice/Testing/Apps/TradingAppV2.daml) — canonical V2 app that emits AllocationRequest + drives `SettlementFactory_SettleBatch`. Our `StreamEscrow` admin contract follows the same shape: group transfer legs by authorizer, emit per-authorizer requests, executor batch-settles. Streams differ because they iterate over time.
+* [`splice-token-test-trading-app-v2/TradingAppV2.daml`](https://github.com/canton-network/splice/blob/main/token-standard/examples/splice-token-test-trading-app-v2/daml/Splice/Testing/Apps/TradingAppV2.daml) — canonical V2 app that emits AllocationRequest + drives `SettlementFactory_SettleBatch`. The `StreamEscrow` admin contract follows the same shape: group transfer legs by authorizer, emit per-authorizer requests, executor batch-settles. Streams differ because they iterate over time.
 * [`splice-token-standard-v2-test/Tests/TestIteratedSettlement.daml`](https://github.com/canton-network/splice/blob/main/token-standard/splice-token-standard-v2-test/daml/Splice/Tests/TestIteratedSettlement.daml) — canonical end-to-end test for committed and iterated allocations.
 
 ## Related docs
 
 * [`per-asset-config.md`](./per-asset-config.md) — asset registry format and V1/V2 lane selection
 * [`cip-56-v2-types-reference.md`](./cip-56-v2-types-reference.md) — verified V2 type listing
-* [`cip-103-walkthrough.md`](./cip-103-walkthrough.md) — browser-wallet flow the SDK signs through
+* [`host-wallet-onboarding.md`](./host-wallet-onboarding.md) — browser-wallet flow the SDK signs through
 * [`THREAT-MODEL.md`](../THREAT-MODEL.md) — full threat model

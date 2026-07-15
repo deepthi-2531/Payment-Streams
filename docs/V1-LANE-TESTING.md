@@ -3,11 +3,11 @@
 > **Status:** the V1 lane (`splice-api-token-allocation-v1`) is transitional.
 > It exists so Canton Coin (Amulet) and USDCx — live on MainNet today but not
 > yet publishing CIP-0112 V2 interfaces — can settle streams now. It is
-> deprecated from birth; see "V1 lane retirement" in [CHANGELOG.md](../CHANGELOG.md).
+> deprecated from birth; once CC/USDCx advertise V2, its registry flags flip
+> to route V2 with no code change.
 >
 > **Validated on TestNet (2026-06-10):** three full allocate → execute-transfer
-> cycles settled real CC on the Canton TestNet global synchronizer via a
-> partner validator (see `docs/reports/first-dapp-integration-testnet.md`).
+> cycles settled real CC on the Canton TestNet global synchronizer.
 > Field-verified specifics are folded into the notes below.
 
 ## Field notes from the TestNet run (read these first)

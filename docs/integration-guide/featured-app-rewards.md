@@ -58,10 +58,4 @@ CIP-0047's featured-app marker mechanism may be replaced by [CIP-0104](https://g
 2. **`FeaturedAppConfig` may be renamed.** If CIP-0104 introduces a different marker shape, this SDK module will either grow a parallel CIP-0104 config type or be replaced. The current SDK API is opt-in and disabled by default, so existing integrations that don't enable it are unaffected.
 3. **`estimateRewardCapUsd` will stay caller-supplied.** The function returns `undefined` when no `rewardCapUsd` is passed, which keeps dashboards from baking stale reward assumptions into projections. This pattern carries forward to whatever CIP-0104 introduces.
 
-### Source of truth for the active reward regime
-
-- [CIP-0047 spec](https://github.com/canton-foundation/cips/blob/main/cip-0047/cip-0047.md)
-- [CIP-0104 spec](https://github.com/canton-foundation/cips/blob/main/cip-0104/cip-0104.md)
-- Network announcements for the active reward regime, the transition timeline, and any per-network differences
-
-The library will track CIP-0104 support under a future minor release; see [CHANGELOG.md](../../CHANGELOG.md) for the entry. Until then, treat CIP-0047 as transitional, and treat any economic projection as caller-supplied rather than library-supplied.
+The library will track CIP-0104 support under a future minor release; see [CHANGELOG.md](../../CHANGELOG.md) for the entry. Until then, treat CIP-0047 as transitional, and treat any economic projection as caller-supplied rather than library-supplied. The specs and network announcements above under [Where to verify the current state](#where-to-verify-the-current-state) are the source of truth for the active reward regime.

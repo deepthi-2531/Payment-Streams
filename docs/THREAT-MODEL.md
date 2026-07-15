@@ -140,7 +140,7 @@ future timestamp to unlock tokens early.
    This guard is present on every withdraw, cancel, mutual-cancel,
    complete, renew, pause, and resume choice in `Escrow.daml`,
    `HoldingEscrow.daml`, `LocalAssetEscrow.daml`, and `StreamFlow.daml`.
-   Without it (CR-1/CR-2 in the v0.2.7 audit) a recipient could pass
+   Without it, a recipient could pass
    `withdrawTime = endTime` to drain the escrow day one, or a sender
    could pass `cancelTime = startTime` to clawback already-vested funds.
 
@@ -531,25 +531,11 @@ appropriate for direct internet exposure.
 - Per-role response filtering not implemented
 - Graceful shutdown does not drain auto-withdraw worker
 
-### Security Review Scope
-
-Independent security reviews should cover:
-
-1. Core escrow templates (`StreamEscrow`, `TokenStandardEscrow`)
-2. `StreamFlow` (rolling top-up) templates
-3. Unified propose / accept workflow (`UnifiedStream`)
-4. `DelegatedPolicy` + `PolicyExecutionState` + `ExecutionLog` enforcement
-5. CIP-56 V2 allocation and settlement orchestration
-6. TransferEventsV2 subscriber plus raw Ledger API V2 fallback
-7. Off-ledger trust boundary: proxy, executor, auto-withdraw worker
-8. SDK V2 capability gating (`getAssetCapabilities`)
-9. Asset registry integrity model
-
 ---
 
 ## AllocationRequest Pattern — Trust Boundaries
 
-The V2-native AllocationRequest migration (plan §7) replaces the
+The V2-native AllocationRequest migration replaces the
 deprecated **settlement-reference path** (off-chain wallet-gateway
 prepare/execute calls anchored to on-ledger settlement references)
 with the **idiomatic CIP-56 Token Standard pattern**:
@@ -568,7 +554,7 @@ with the **idiomatic CIP-56 Token Standard pattern**:
 This section enumerates the new trust boundaries and invariants
 introduced by the AllocationRequest pattern.
 
-### ~~Trust boundary 1: dual-interface implementation~~
+### Trust boundary 1: single-interface implementation
 
 V2-native templates implement `AllocationRequestV2` for the full feature set.
 The transitional V1 lane is isolated in the SDK/Daml shim and does not add a
@@ -577,8 +563,9 @@ and `liftV1ToV2View` have been deleted from the main template path;
 V1 compatibility is covered by the dedicated V1 shim tests.
 
 V1-asset support follows the [CIP-0112 §5](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility)
-path: assets dual-implement V1+V2; once an asset advertises V2, our
-library integrates with it. We never see the V1 surface.
+path: assets dual-implement V1+V2; once an asset advertises V2, the
+library integrates with it. The main stream templates expose only the V2
+interface; the V1 surface is confined to the dedicated shim.
 
 ### Trust boundary 2: settlement-info deadlines
 
@@ -614,9 +601,9 @@ misconfigured provider could deny settlement.
 - `Holding.Lock { holders }` in V2 includes the recipient AND the
   escrow operator as joint holders, so neither can unilaterally move
   the locked funds without consent from the other side.
-- Audit recommendation: any deployment that supplies a non-None
-  provider must document the trust relationship between recipient and
-  custodian in `docs/validation/`.
+- Recommendation: any deployment that supplies a non-None
+  provider should document the trust relationship between recipient and
+  custodian in its own deployment documentation.
 
 ### Trust boundary 4: iterated allocation (V2 StreamFlow)
 
@@ -683,9 +670,9 @@ in) and cause the subscriber to advance the wrong stream's state.
 **Mitigation:**
 
 - The subscriber's package-hash filter (`packageHashes` in
-  `SubscriberConfig`) scopes events to only our published DARs;
+  `SubscriberConfig`) scopes events to only the published CantonStreams DARs;
   exercises against other packages are ignored.
-- The exercise-record's `templateId` must start with one of our
+- The exercise-record's `templateId` must start with one of the
   manifest hashes (`build-template-manifest.mjs` output) — a foreign
   DAR cannot impersonate a CantonStreams template.
 - The subscriber's `onSettlement` handler validates that the affected
@@ -693,16 +680,3 @@ in) and cause the subscriber to advance the wrong stream's state.
   operator party signs; orphan settlements are logged and dropped.
 - Reconnect uses exponential backoff to avoid amplifying a malicious
   settlement flood into self-DoS.
-
-### Security Review Checklist
-
-When security teams assess the AllocationRequest pattern, the scope should include:
-
-1. The seven trust boundaries above
-2. Daml-script test coverage, including `Test.Stream.AllocationWorkflow`
-3. SDK capability negotiation (`getAssetCapabilities`, `selectAdapter`)
-4. `dispatchSettlement` routing matrix for supported V2 flows
-5. Subscriber package-hash + template-id filtering
-6. Asset registry integrity (signatures on the in-repo JSON; CI
-   verification that `build-asset-registry.mjs` output matches
-   `config/asset-registry.json`)

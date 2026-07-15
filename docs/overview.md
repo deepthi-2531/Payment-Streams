@@ -182,7 +182,7 @@ Splice LocalNet validator wallet and expose a CIP-103 dApp gateway at:
 http://localhost:3030/api/v0/dapp
 ```
 
-For the full live-wallet flow, follow [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md).
+For the full live-wallet flow, follow [docs/E2E-HARNESS.md](./E2E-HARNESS.md).
 
 ### Run The Dashboard And Proxy Without Docker
 
@@ -225,7 +225,7 @@ Hosted wallet approval is intentionally truthful: when the selected hosted
 wallet does not expose automatic prepare-and-wait completion to the dashboard,
 the user completes approval in the wallet UI and returns to Streams.
 
-For live wallet validation, use [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md).
+For live wallet validation, use [docs/E2E-HARNESS.md](./E2E-HARNESS.md).
 
 ## Use The SDK
 
@@ -341,22 +341,22 @@ participant.
 
 | If you want to... | Read |
 | --- | --- |
-| Run locally | [docs/QUICKSTART.md](docs/QUICKSTART.md) |
-| Test with a real wallet | [docs/E2E-HARNESS.md](docs/E2E-HARNESS.md) |
-| Integrate into your dApp | [docs/integration-guide/README.md](docs/integration-guide/README.md) |
-| Understand the architecture | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) |
-| Deploy safely | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
-| Operate in production | [docs/OPERATIONS.md](docs/OPERATIONS.md) |
-| Review risks | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) |
-| Check REST endpoints | [docs/API.md](docs/API.md) |
-| Know what's supported | [docs/SUPPORT.md](docs/SUPPORT.md) |
+| Run locally | [Get started](./QUICKSTART.md) |
+| Test with a real wallet | [docs/E2E-HARNESS.md](./E2E-HARNESS.md) |
+| Integrate into your dApp | [docs/integration-guide/README.md](./integration-guide/README.md) |
+| Understand the architecture | [docs/ARCHITECTURE.md](./ARCHITECTURE.md) |
+| Deploy safely | [docs/DEPLOYMENT.md](./DEPLOYMENT.md) |
+| Operate in production | [docs/OPERATIONS.md](./OPERATIONS.md) |
+| Review risks | [docs/THREAT-MODEL.md](./THREAT-MODEL.md) |
+| Check REST endpoints | [docs/API.md](./API.md) |
+| Know what's supported | [docs/SUPPORT.md](./SUPPORT.md) |
 
 ## Contributing
 
 Contributions are welcome. Start with:
 
-- [CONTRIBUTING.md](CONTRIBUTING.md)
-- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [CONTRIBUTING.md](./contributing)
+- [CODE_OF_CONDUCT.md](./code-of-conduct)
 
 For a first PR, prefer a small change with a clear test. Good starter areas
 are documentation clarity, SDK validation tests, dashboard copy, and local

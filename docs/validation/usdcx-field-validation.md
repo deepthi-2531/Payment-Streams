@@ -3,17 +3,12 @@
 > **Status:** USDCx is a CIP-56 V1 token-standard asset live on MainNet today.
 > It settles streams through the same transitional V1 lane
 > (`splice-api-token-allocation-v1`) that was field-validated with real Canton
-> Coin on TestNet on 2026-06-10 (three allocate → execute-transfer cycles plus
-> an instrumented balance-conservation run; see
-> [first-dapp-integration-testnet.md](../reports/first-dapp-integration-testnet.md)
-> and [V1-LANE-TESTING.md](../V1-LANE-TESTING.md)).
->
-> **Evidence honesty:** no live USDCx cycle has been executed yet — it is
-> blocked only on a party funded with USDCx. The registry routing (issuer
-> admin party, instrument id, registry API base) is now committed in
-> `config/asset-registry.json` from Circle xReserve / Digital Asset docs.
-> Everything below is split explicitly into *validated today* vs *pending
-> live run*. There is no USDCx run data in this document.
+> Coin on TestNet (three allocate → execute-transfer cycles plus an instrumented
+> balance-conservation run; see [V1-LANE-TESTING.md](../V1-LANE-TESTING.md)).
+> The registry routing (issuer admin party, instrument id, registry API base)
+> is committed in `config/asset-registry.json` from Circle xReserve / Digital
+> Asset docs. The sections below separate what the shared lane already exercises
+> from the steps a live USDCx run adds.
 
 ## 1. Code-path parity with CC
 
@@ -50,12 +45,12 @@ Expected per-asset behavioral differences to watch for on the live run
 
 | Item | Evidence |
 | --- | --- |
-| V1 wire encodings (allocation request, `Allocation_ExecuteTransfer`/`_Cancel`/`_Withdraw`, ExtraArgs/ChoiceContext) | SDK unit tests — 285 tests across 21 files green (`corepack pnpm --filter @canton-streams/sdk test`, 2026-06-11) |
-| Shared V1 lane against a real network | Field-proven with CC on TestNet: 3 cycles + instrumented conservation run, publicly verifiable update ids in [first-dapp-integration-testnet.md](../reports/first-dapp-integration-testnet.md) |
+| V1 wire encodings (allocation request, `Allocation_ExecuteTransfer`/`_Cancel`/`_Withdraw`, ExtraArgs/ChoiceContext) | SDK unit tests green (`pnpm --filter @canton-streams/sdk test`) |
+| Shared V1 lane against a real network | Field-proven with CC on TestNet: 3 cycles + instrumented conservation run (see [V1-LANE-TESTING.md](../V1-LANE-TESTING.md)) |
 | Registry lookup for `usdcx` | `loadAssetRegistry(config/asset-registry.json)` resolves `usdcx`; `resolveSettlementVersion` routes `v1`; `getAssetByV2Id({ admin, id })` round-trips |
 | Capability gating | `allocation-iterated` / `allocation-batch` on `usdcx` throw (V2-only actions); recurring streams run one cycle per withdrawal |
-| Probe flag parsing + registry override | `node scripts/testnet-usdcx-stream-probe.mjs --dry-run --target testnet --asset-key usdcx` resolves `instrumentId=USDCx` + admin/depository from the registry (verified 2026-06-11) |
-| Placeholder guard | Pre-flight (`scripts/lib/preflight.mjs`) flags the remaining `TBD-` value (`walletGatewayUrl`, which is operator-specific) in the `usdcx` entry: warning on DevNet/TestNet, **hard error on `--target mainnet`** (verified 2026-06-11) |
+| Probe flag parsing + registry override | `node scripts/testnet-usdcx-stream-probe.mjs --dry-run --target testnet --asset-key usdcx` resolves `instrumentId=USDCx` + admin/depository from the registry |
+| Placeholder guard | Pre-flight (`scripts/lib/preflight.mjs`) flags the remaining `TBD-` value (`walletGatewayUrl`, which is operator-specific) in the `usdcx` entry: warning on DevNet/TestNet, **hard error on `--target mainnet`** |
 
 ## 3. Per-network routing (committed real values)
 
@@ -128,17 +123,15 @@ the resolved issuer endpoints from §3. When both exist, run exactly this:
    residual locked allocation for the settlement ref.
 6. **Verify publicly.** Fetch each cycle's update id via
    `GET {scan-host}/api/scan/v2/updates/{update_id}` and record
-   `record_time`, `synchronizer_id`, and root events in a run report under
-   `docs/reports/` — same format as the CC report.
+   `record_time`, `synchronizer_id`, and root events in your own run report.
 7. **Repeat for ≥2 cycles** against one stream id to demonstrate the
    per-withdrawal cycle cadence, then run the full lifecycle probe without
    `--dry-run`.
 
-Authority model is unchanged from CC: `Allocation_ExecuteTransfer` is
-controlled jointly by executor + sender + receiver; the probes submit with
-all three in `actAs`, which requires co-hosting on one participant. For
-separated topologies, compose the exercise inside a choice on a contract
-signed by those parties (see [V1-LANE-TESTING.md](../V1-LANE-TESTING.md)).
+The authority model is unchanged from CC (`Allocation_ExecuteTransfer` is
+jointly controlled by executor + sender + receiver) — see
+[V1-LANE-TESTING.md](../V1-LANE-TESTING.md) for the co-hosting requirement
+and the split-topology composition pattern.
 
 ## 5. After USDCx publishes V2
 

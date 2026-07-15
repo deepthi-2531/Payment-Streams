@@ -2,9 +2,10 @@
 
 How a wallet provider or dApp connects a user's wallet to Canton
 Payment Streams: connect → identity → read → write/approval, with the
-exact calls the reference dashboard makes today. Companion to
-[`cip-103-walkthrough.md`](./cip-103-walkthrough.md) (protocol-level)
-and [`streams-integration.md`](./streams-integration.md) (server-side).
+exact calls the reference dashboard makes today. This is the canonical
+wallet-integration page; companion to
+[`streams-integration.md`](./streams-integration.md) (server-side) and
+[`cip-103-conformance.md`](./cip-103-conformance.md) (validation).
 
 "Hosted wallet" here means the user's keys live with a wallet product
 (browser wallet, mobile wallet, custodial gateway), never in the dApp.
@@ -80,8 +81,75 @@ The wallet also exposes `ledgerApi` and `prepareExecuteAndWait`
 proxy can submit wallet-signed commands directly.
 
 Local gateway setup, allowed-origins config, and the popup caveats for
-automation are covered step-by-step in the SWK runbook referenced from
-[`cip-103-walkthrough.md`](./cip-103-walkthrough.md).
+automation follow the Splice Wallet Kernel gateway's own setup docs.
+
+### Building and submitting a stream (Path 1)
+
+Once connected, build the stream params with an SDK use-case helper and
+submit them through the wallet. `buildVestingStream` returns a
+`CreateStreamParams` payload; the create exercises the streams workflow
+that emits the CIP-0112 `AllocationRequest`.
+
+```ts
+import { buildVestingStream } from '@canton-streams/sdk/helpers';
+import { loadAssetRegistry } from '@canton-streams/sdk';
+
+const registry = loadAssetRegistry(assetRegistryFile);
+const usdcx = registry.requireAsset('usdcx');
+const usdcxInstrumentRef = {
+  depository: usdcx.instrumentIdV2.admin,
+  issuer: usdcx.instrumentIdV2.admin,
+  instrumentId: usdcx.instrumentIdV2.id,
+  instrumentVersion: usdcx.allocationsV2 ? 'v2' : 'v1',
+};
+
+const params = buildVestingStream({
+  streamId: `vest-${Date.now()}`,
+  sender: senderParty,
+  recipient: recipientParty,
+  totalAmount: '50000',
+  startTime: new Date(),
+  durationDays: 365 * 2,
+  cliffDays: 90,
+  instrumentRef: usdcxInstrumentRef,
+  escrowOperator: escrowOperatorParty,
+  fundingReference: walletFundingRef, // from the wallet's V2 allocation funding step
+});
+```
+
+Submit via the wallet when it advertises `capabilities.prepareExecuteAndWait`;
+otherwise fall back to `ledgerApi('/v2/commands/submit-and-wait')`. The
+wallet renders its own approval UI and the call resolves when the user
+approves and the command commits.
+
+```ts
+if (walletClient.capabilities.prepareExecuteAndWait) {
+  await walletClient.prepareExecuteAndWait!({
+    actAs: [party],
+    commands: [/* create CreateStreamRequest carrying the StreamConfig from `params` */],
+  });
+}
+```
+
+Recipient-side, withdrawals are signed the same way — one
+`Withdraw_Stream` exercise, signed by the recipient's wallet:
+
+```ts
+await walletClient.prepareExecuteAndWait!({
+  actAs: [party],
+  commands: [{
+    ExerciseCommand: {
+      templateId: STREAM_ESCROW_TEMPLATE_ID,
+      contractId: streamCid,
+      choice: 'Withdraw_Stream',
+      choiceArgument: { withdrawTime: new Date().toISOString() },
+    },
+  }],
+});
+```
+
+Hosted `submit-and-wait` returns only an update id — re-read the ACS
+after every write rather than relying on a returned contract id.
 
 ## Path 2 — PartyLayer adapter wallets (hosted multi-wallet)
 
@@ -247,8 +315,7 @@ acceptance. Without it, every cycle creates a two-step offer the
 recipient must accept in their wallet (works, worse UX). Onboarding
 recommendation: have recipients create a TransferPreapproval **once**
 in their wallet (most Canton wallets and the validator wallet UI offer
-this). Verified live on MainNet — see
-`docs/reports/mainnet-external-stream-2026-06-10.md`.
+this). Verified live on MainNet.
 
 ---
 
@@ -335,3 +402,13 @@ package-not-found error the dashboard maps to an actionable message.
 7. **Preapproval story** — document how a user creates a
    TransferPreapproval in the wallet so recipients can onboard
    hands-free.
+
+## Production checklist
+
+- [ ] CIP-103 OpenRPC conformance suite passes (see [`cip-103-conformance.md`](./cip-103-conformance.md))
+- [ ] Asset registry includes the production InstrumentRef + Scan endpoint for every asset you accept
+- [ ] You subscribe to `onAccountsChanged` so the UI re-binds when the user switches accounts
+- [ ] You handle `onStatusChanged → disconnected` by prompting reconnect, not by silently failing
+- [ ] You don't store JWT bearer tokens in localStorage (the wallet handles signing; the JWT is only for proxy / Ledger-API reads)
+- [ ] You re-read the ACS after every wallet-submitted write (hosted `submit-and-wait` returns only an update id)
+- [ ] Featured-app marker emission is reviewed against the current CIP-0047/CIP-0104 regime before enabling it

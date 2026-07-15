@@ -24,7 +24,22 @@ pnpm --filter @canton-streams/cli build
 pnpm daml:build
 ```
 
-5. Confirm npm publish access and set the `NPM_TOKEN` GitHub Actions secret.
+5. Confirm the upstream Splice DAR pin still matches the upstream branch head:
+
+```bash
+# capture current upstream tip
+git ls-remote https://github.com/canton-network/splice.git refs/heads/main
+
+# compare with the pin in the repo
+grep -E "SPLICE_PINNED_(COMMIT|AS_OF)" scripts/fetch-v2-dars.mjs
+```
+
+If upstream has moved, bump the pin, re-run
+`node scripts/fetch-v2-dars.mjs --mode source-build`, update
+`packages/daml/main/.lib/V2_DAR_HASHES.json`, and verify SDK payloads
+still align (`pnpm --filter @canton-streams/sdk test`).
+
+6. Confirm npm publish access is configured for the release workflow.
 
 ## Canonical Repository Metadata
 

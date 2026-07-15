@@ -22,8 +22,7 @@ You do not need all of them. Most integrations use the SDK directly
 | Understand the integration architecture in 5 minutes | this README (you're here) |
 | **Use the V2-native AllocationRequest pattern (default going forward)** | [**`allocation-request-pattern.md`**](./allocation-request-pattern.md) |
 | Integrate the non-prefunded / rolling top-up flow (`StreamFlow`) | [`non-prefunded-flow.md`](./non-prefunded-flow.md) |
-| See a complete browser-wallet integration end-to-end | [`cip-103-walkthrough.md`](./cip-103-walkthrough.md) |
-| Onboard a hosted wallet (connect/read/write/approval, capability matrix) | [`host-wallet-onboarding.md`](./host-wallet-onboarding.md) |
+| Onboard a hosted wallet end-to-end (connect/read/write/approval, capability matrix) | [`host-wallet-onboarding.md`](./host-wallet-onboarding.md) |
 | Run the CIP-103 conformance suite against your dApp | [`cip-103-conformance.md`](./cip-103-conformance.md) |
 | Configure your dApp for the right asset | [`per-asset-config.md`](./per-asset-config.md) |
 | Review the transitional CIP-0047/CIP-0104 marker seam | [`featured-app-rewards.md`](./featured-app-rewards.md) |
@@ -107,7 +106,8 @@ console.log('Stream created:', result.contractId);
 ```
 
 For the browser-wallet (Path A) flow, the same params object is passed
-into `provider.prepareExecute({...})`. See `cip-103-walkthrough.md`.
+into `provider.prepareExecute({...})`. See
+[`host-wallet-onboarding.md`](./host-wallet-onboarding.md).
 
 ---
 
