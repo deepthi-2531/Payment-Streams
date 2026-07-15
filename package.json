@@ -26,20 +26,25 @@
     "daml:deps": "node scripts/fetch-v2-dars.mjs",
     "fixtures": "./generate-fixtures.sh",
     "sync-versions": "./sync-versions.sh",
-    "clean": "turbo run clean"
+    "clean": "turbo run clean",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
+    "@eslint/js": "9.27.0",
+    "@types/node": "22.14.0",
+    "eslint": "9.27.0",
+    "prettier": "3.5.0",
     "turbo": "2.8.17",
     "typescript": "5.9.3",
-    "eslint": "9.27.0",
-    "@eslint/js": "9.27.0",
     "typescript-eslint": "8.59.4",
-    "prettier": "3.5.0",
-    "@types/node": "22.14.0"
+    "vitepress": "1.6.3"
   },
   "pnpm": {
     "patchedDependencies": {
-      "@partylayer/adapter-loop@0.3.7": "patches/@partylayer__adapter-loop@0.3.7.patch"
+      "@partylayer/adapter-loop@0.3.7": "patches/@partylayer__adapter-loop@0.3.7.patch",
+      "@fivenorth/loop-sdk@0.10.0": "patches/@fivenorth__loop-sdk@0.10.0.patch"
     }
   }
 }

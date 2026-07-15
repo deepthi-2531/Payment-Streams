@@ -92,6 +92,32 @@ function clearStaleLoopSession(): void {
   }
 }
 
+/**
+ * Force a FRESH Loop connect handshake before an explicit connect.
+ *
+ * The Loop SDK persists its connect handshake ({sessionId, ticketId}) in
+ * `localStorage["loop_connect"]` and reuses the cached ticketId on the next
+ * connect. Loop's ticket server hands out single-use, short-lived tickets, so
+ * once the cached ticket is consumed/expired EVERY reconnect reopens
+ * `testnet.cantonloop.com/.connect/?ticketId=<stale>` and the gateway dies with
+ * "Failed to Load Connection — the ticket may be invalid or expired" (the ticket
+ * server 404s the dead id — verified live: stale ticket → 404, fresh ticket →
+ * 401/exists). Dropping the cached handshake makes the SDK mint a fresh, live
+ * ticket.
+ *
+ * Unlike `clearStaleLoopSession` (which only fires for a WRONG-network session),
+ * this always runs — but ONLY from `connect()`. The autoConnect/session-resume
+ * path on load is left untouched, so a user whose session validly restores never
+ * reaches this; a user clicking "Connect" is re-initiating the session anyway.
+ */
+function resetLoopConnectHandshake(): void {
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem('loop_connect');
+  } catch {
+    // localStorage unavailable (incognito / SSR) — nothing to clear.
+  }
+}
+
 async function ensureClient(): Promise<PartyLayerClientLike> {
   if (!clientPromise) {
     clientPromise = (async () => {
@@ -272,6 +298,10 @@ export const partyLayerWalletClient: StreamsWalletClient = {
 
   async connect(walletId?: string): Promise<StreamsWalletConnectResult> {
     const client = await ensureClient();
+    // Start every explicit connect from a clean handshake so the Loop SDK mints
+    // a fresh ticket instead of reopening a stale/expired one (which 404s the
+    // gateway as "ticket invalid or expired").
+    resetLoopConnectHandshake();
     try {
       await client.connect(walletId ? { walletId } : { preferInstalled: true });
     } catch (err) {

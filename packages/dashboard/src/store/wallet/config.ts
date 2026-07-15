@@ -6,6 +6,7 @@ const env = (import.meta as unknown as { env?: DashboardEnv }).env ?? {};
 
 function normalizeWalletLayer(value: string | undefined): WalletLayer {
   if (value === 'partylayer') return 'partylayer';
+  if (value === 'combined') return 'combined';
   return 'dapp-sdk';
 }
 
@@ -14,6 +15,13 @@ export const WALLET_LAYER = normalizeWalletLayer(
 );
 
 export const SKIP_PICKER = env.VITE_SKIP_WALLET_PICKER === 'true';
+
+/** Combined layer: include PartyLayer's full wallet catalog (Console, Cantor8,
+ * Nightly, Send, …) as disabled/"not installed" rows in addition to the
+ * working defaults (5N Loop + the SWK gateway + discovered CIP-103 wallets).
+ * Off by default so the picker only lists wallets that actually work here. */
+export const SHOW_FULL_CATALOG =
+  env.VITE_WALLET_SHOW_FULL_CATALOG === 'true';
 
 export const WALLET_GATEWAY_URL =
   env.VITE_WALLET_GATEWAY_URL ?? 'http://localhost:3030/api/v0/dapp';

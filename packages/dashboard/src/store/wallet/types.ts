@@ -1,6 +1,6 @@
 /** Wallet-neutral dashboard contract. */
 
-export type WalletLayer = 'dapp-sdk' | 'partylayer';
+export type WalletLayer = 'dapp-sdk' | 'partylayer' | 'combined';
 
 export interface StreamsWalletConnection {
   readonly isConnected: boolean;
