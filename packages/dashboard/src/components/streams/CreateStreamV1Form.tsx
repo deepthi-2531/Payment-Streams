@@ -13,7 +13,7 @@
  * `useCreateStreamV1`, then navigates to the new V1 stream detail page.
  */
 
-import { useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { useNavigate, useLocation } from 'react-router';
 import { useForm, FormProvider, type Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -68,11 +68,64 @@ export function CreateStreamV1Form() {
   // carry the recipient the user already typed, so it isn't lost on the hop.
   const prefill = (location.state as { recipient?: string } | null) ?? null;
 
+  // Pre-fill from query params. A sibling lending app (Streams-Interest-Service)
+  // deep-links per-period loans here — hourly/daily repayments land on the V1
+  // lane (continuous continuous-cycle accrual), while monthly loans go to the V2
+  // /create wizard instead. The link shape is:
+  //   /v1/create?recipient=<party>&sender=<party>&ratePerCycle=<decimal>
+  //     &cadence=<hourly|daily>&end=<ISO8601>&ref=<agreementId>
+  //
+  // Mapping onto the V1 form's actual fields (see createStreamV1Schema):
+  //   recipient    -> recipientParty
+  //   ratePerCycle -> ratePerCycle (per-cycle amount; validated positive decimal)
+  //   cadence      -> cadence (only the 'hourly'|'daily' enum members are
+  //                   accepted here; SIS never sends monthly to V1)
+  // Params the V1 create FORM cannot represent are intentionally dropped:
+  //   sender — the payer is always the connected wallet party, injected at
+  //            submit time; there is no sender field to fill.
+  //   end    — the V1 create form exposes no term-end field; the lane accrues
+  //            per cycle until cancelled. (The proxy create body does accept an
+  //            optional `termEnd`, but the form/schema don't surface it, so
+  //            there is nothing to prefill without adding a new field.)
+  //   ref    — the V1 create form exposes no reference/memo field. `appId` is
+  //            the integrator app id (cantonstreams.dev/app), NOT the loan
+  //            agreement id, so `ref` is not mapped onto it. The
+  //            cantonstreams.dev/ref + /agreement metadata is stamped server-
+  //            side per settle, not set from a create-form input.
+  //
+  // Each param is applied independently and only when present + valid, so a
+  // missing or malformed value leaves that field at its normal default.
+  // Reads the URL once at mount; navigation within the form does not re-run.
+  const prefillFromQuery = useMemo((): Partial<CreateStreamV1Values> => {
+    if (typeof window === 'undefined') return {};
+    const params = new URLSearchParams(window.location.search);
+    const q: Partial<CreateStreamV1Values> = {};
+
+    const recipient = params.get('recipient');
+    if (recipient) q.recipientParty = recipient;
+
+    // Only accept the positive-decimal shape the schema requires so a junk
+    // value leaves the field empty rather than pre-seeding a validation error.
+    const rate = params.get('ratePerCycle');
+    if (rate && /^\d+(\.\d+)?$/.test(rate) && Number(rate) > 0) {
+      q.ratePerCycle = rate;
+    }
+
+    // Only the enum members the schema knows; SIS sends 'hourly'|'daily' here.
+    const cadence = params.get('cadence');
+    if (cadence === 'hourly' || cadence === 'daily') {
+      q.cadence = cadence;
+    }
+
+    return q;
+  }, []);
+
   const methods = useForm<CreateStreamV1Values>({
     resolver: zodResolver(createStreamV1Schema) as Resolver<CreateStreamV1Values>,
     defaultValues: {
       ...defaults,
       ...(prefill?.recipient ? { recipientParty: prefill.recipient } : {}),
+      ...prefillFromQuery,
     } as CreateStreamV1Values,
     mode: 'onBlur',
   });
