@@ -1,0 +1,187 @@
+diff --git a/dist/index.js b/dist/index.js
+index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0ffe13296f 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -2099,6 +2099,7 @@ class Connection {
+   ws = null;
+   network = "main";
+   ticketId = null;
++  ticketAuthToken = null;
+   onMessageHandler = null;
+   reconnectPromise = null;
+   status = "disconnected";
+@@ -2251,7 +2252,8 @@ class Connection {
+     };
+     return account;
+   }
+-  connectWebSocket(ticketId, onMessage) {
++  connectWebSocket(ticketId, ticketAuthToken, onMessage) {
++    this._pairReconnects = 0;
+     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) && this.ticketId !== ticketId) {
+       this.ws.close();
+       this.ws = null;
+@@ -2261,8 +2263,16 @@ class Connection {
+     }
+     this.onMessageHandler = onMessage;
+     this.ticketId = ticketId;
++    // testnet's ticket server was upgraded to issue a per-ticket
++    // auth token (returned by getTicket as `auth_token`) and now requires the
++    // pairing WebSocket to present it as the `loop-ticket-auth.<token>`
++    // subprotocol (this is what @fivenorth/loop-sdk 0.13.x sends). 0.10.0 opened
++    // the pairing socket UNauthenticated, so the server rejected the upgrade and
++    // the Loop gateway reported "Connection Request Expired". Thread the token
++    // through so the pairing socket authenticates.
++    this.ticketAuthToken = ticketAuthToken;
+     this.status = "connecting";
+-    this.attachWebSocket(ticketId, onMessage);
++    this.attachWebSocket(ticketId, ticketAuthToken, onMessage);
+   }
+   reconnect() {
+     if (!this.ticketId || !this.onMessageHandler) {
+@@ -2270,7 +2280,7 @@ class Connection {
+     }
+     return new Promise((resolve, reject) => {
+       let opened = false;
+-      this.attachWebSocket(this.ticketId, this.onMessageHandler, () => {
++      this.attachWebSocket(this.ticketId, this.ticketAuthToken, this.onMessageHandler, () => {
+         opened = true;
+         resolve();
+       }, () => {
+@@ -2289,29 +2299,60 @@ class Connection {
+   websocketUrl(ticketId) {
+     return `${this.network === "local" ? "ws" : "wss"}://${this.apiUrl.replace("https://", "").replace("http://", "")}/api/v1/.connect/pair/ws/${encodeURIComponent(ticketId)}`;
+   }
+-  attachWebSocket(ticketId, onMessage, onOpen, onError, onClose) {
++  websocketProtocols(ticketAuthToken) {
++    // Matches @fivenorth/loop-sdk 0.13.x: the ticket server authenticates the
++    // pairing socket via a WS subprotocol carrying the per-ticket auth token.
++    return ["loop-connect", `loop-ticket-auth.${ticketAuthToken}`];
++  }
++  attachWebSocket(ticketId, ticketAuthToken, onMessage, onOpen, onError, onClose) {
+     const wsUrl = this.websocketUrl(ticketId);
+-    const ws = new WebSocket(wsUrl);
++    // present the ticket auth token as a WS subprotocol so the
++    // upgraded testnet ticket server accepts the pairing socket. When no token
++    // is available (older servers) fall back to an unauthenticated socket.
++    const ws = ticketAuthToken ? new WebSocket(wsUrl, this.websocketProtocols(ticketAuthToken)) : new WebSocket(wsUrl);
+     ws.onmessage = onMessage;
+     ws.onopen = () => {
+       this.status = "connected";
++      // a successful (re)open refreshes the reconnect budget so
++      // sustained idle-close -> reopen cycles across a long sign-in are not
++      // capped; the cap only bounds a burst of failed (never-open) attempts.
++      this._pairReconnects = 0;
+       console.log("[LoopSDK] Connected to ticket server.");
+       onOpen?.();
+     };
+     ws.onclose = (event) => {
++      const wasCurrent = this.ws === ws;
+       this.status = "disconnected";
+-      if (this.ws === ws) {
++      if (wasCurrent) {
+         this.ws = null;
+       }
+       console.log("[LoopSDK] Disconnected from ticket server.");
+       onClose?.(event);
++      // auto-reconnect the PRIMARY pairing socket (attached
++      // without callbacks) when it drops abnormally (wasClean === false, e.g.
++      // 1006 idle/proxy drop) while a handshake is still pending, so a live
++      // dApp channel is present when the user completes sign-in. Intentional
++      // closes (logout / HANDSHAKE_REJECT / superseding ticket) are clean 1000
++      // closes and are naturally excluded. Managed reconnect() sockets pass an
++      // onOpen callback and are excluded so they are not double-driven.
++      if (wasCurrent && !onOpen && this.ticketId && this.onMessageHandler && event && event.wasClean === false && (this._pairReconnects | 0) < 5) {
++        this._pairReconnects = (this._pairReconnects | 0) + 1;
++        const delay = Math.min(1000 * this._pairReconnects, 5000);
++        console.log("[LoopSDK] Ticket-server dropped uncleanly; reconnecting (attempt " + this._pairReconnects + "/5) in " + delay + "ms.");
++        setTimeout(() => {
++          if (this.ws) return;
++          this.attachWebSocket(this.ticketId, this.ticketAuthToken, this.onMessageHandler);
++        }, delay);
++      }
+     };
+     ws.onerror = (event) => {
+       this.status = "disconnected";
++      // do NOT null this.ws here. onerror fires immediately
++      // before onclose for abnormal (1006) drops; nulling this.ws made the
++      // onclose reconnect guard (`this.ws === ws`) evaluate false, so the
++      // reconnect never fired for exactly the drops it was meant to cover. Let
++      // onclose null this.ws and decide whether to reconnect.
+       ws.close();
+-      if (this.ws === ws) {
+-        this.ws = null;
+-      }
+       onError?.(event);
+     };
+     this.ws = ws;
+@@ -2565,21 +2606,26 @@ var STORAGE_KEY_LOOP_CONNECT = "loop_connect";
+ class SessionInfo {
+   sessionId;
+   ticketId;
++  ticketAuthToken;
+   authToken;
+   partyId;
+   publicKey;
+   email;
+   _isAuthorized = false;
+-  constructor({ sessionId, ticketId, authToken, partyId, publicKey, email }) {
++  constructor({ sessionId, ticketId, ticketAuthToken, authToken, partyId, publicKey, email }) {
+     this.sessionId = sessionId;
+     this.ticketId = ticketId;
++    // persist the per-ticket auth token so a restored session
++    // can re-open its pairing/transaction WS with the required subprotocol.
++    this.ticketAuthToken = ticketAuthToken;
+     this.authToken = authToken;
+     this.partyId = partyId;
+     this.publicKey = publicKey;
+     this.email = email;
+   }
+-  setTicketId(ticketId) {
++  setTicketId(ticketId, ticketAuthToken) {
+     this.ticketId = ticketId;
++    this.ticketAuthToken = ticketAuthToken;
+     this.save();
+   }
+   authorized() {
+@@ -2602,6 +2648,7 @@ class SessionInfo {
+     this.sessionId = generateRequestId();
+     this._isAuthorized = false;
+     this.ticketId = undefined;
++    this.ticketAuthToken = undefined;
+     this.authToken = undefined;
+     this.partyId = undefined;
+     this.publicKey = undefined;
+@@ -2626,6 +2673,7 @@ class SessionInfo {
+     return JSON.stringify({
+       sessionId: this.sessionId,
+       ticketId: this.ticketId,
++      ticketAuthToken: this.ticketAuthToken,
+       authToken: this.authToken,
+       partyId: this.partyId,
+       publicKey: this.publicKey,
+@@ -2802,7 +2850,7 @@ class LoopSDK {
+         hooks: this.createProviderHooks()
+       });
+       this.onAccept?.(this.provider);
+-      this.connection.connectWebSocket(this.session.ticketId, this.handleWebSocketMessage.bind(this));
++      this.connection.connectWebSocket(this.session.ticketId, this.session.ticketAuthToken, this.handleWebSocketMessage.bind(this));
+       return Promise.resolve();
+     }
+   }
+@@ -2818,12 +2866,12 @@ class LoopSDK {
+       return;
+     }
+     try {
+-      if (!this.session.ticketId) {
+-        const { ticket_id: ticketId } = await this.connection.getTicket(this.appName, this.session.sessionId, this.version);
+-        this.session.setTicketId(ticketId);
++      if (!this.session.ticketId || !this.session.ticketAuthToken) {
++        const { ticket_id: ticketId, auth_token: ticketAuthToken } = await this.connection.getTicket(this.appName, this.session.sessionId, this.version);
++        this.session.setTicketId(ticketId, ticketAuthToken);
+       }
+       if (!this.connection.connectInProgress()) {
+-        this.connection.connectWebSocket(this.session.ticketId, this.handleWebSocketMessage.bind(this));
++        this.connection.connectWebSocket(this.session.ticketId, this.session.ticketAuthToken, this.handleWebSocketMessage.bind(this));
+       }
+       this.showQrCode(this.buildConnectUrl(this.session.ticketId));
+     } catch (error) {

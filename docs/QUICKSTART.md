@@ -1,4 +1,4 @@
-# Quick Start
+# Get started
 
 Get Canton Payment Streams running locally in ~5 minutes.
 

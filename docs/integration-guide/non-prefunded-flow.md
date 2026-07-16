@@ -7,16 +7,11 @@ prefunded `StreamAdmin` / `StreamEscrow` flow documented in
 [`WALKTHROUGHS.md`](../WALKTHROUGHS.md), and
 [`INTEGRATION-EXAMPLE.md`](../INTEGRATION-EXAMPLE.md).
 
-Source of truth for everything below:
-
-- Daml: `packages/daml/main/daml/CantonStreams/Stream/StreamFlow.daml`
-- SDK: `packages/sdk/src/commands/flow.ts` (+ client methods in
-  `packages/sdk/src/client.ts`), tests in
-  `packages/sdk/test/commands/flow.test.ts`
-- Proxy: `packages/proxy/src/index.ts` (`/api/flows` routes)
-- Dashboard: `packages/dashboard/src/pages/FlowsPage.tsx`,
-  `packages/dashboard/src/hooks/useFlows.ts`
-- Probe: `scripts/devnet-streamflow-probe.mjs`
+The implementation spans the `StreamFlow` Daml template
+(`packages/daml/main/daml/CantonStreams/Stream/StreamFlow.daml`), the SDK
+flow commands (`packages/sdk/src/commands/flow.ts`), the proxy `/api/flows`
+routes, the dashboard Flows page, and the
+`scripts/devnet-streamflow-probe.mjs` probe.
 
 ---
 

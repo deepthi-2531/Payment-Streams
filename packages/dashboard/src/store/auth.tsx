@@ -106,33 +106,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             /* ignore */
           }
         } else if (walletClient.capabilities.hostedMultiWallet) {
-          // Hosted wallets (Loop) persist their session in localStorage but
-          // don't always re-establish it on a page load, stranding the user on
-          // the connect screen. If a prior session exists, attempt a silent
-          // reconnect — connect() on an already-paired wallet restores it
-          // without a popup. The delayed re-check below remains as a fallback.
-          let hadPersistedSession = false;
-          try {
-            hadPersistedSession = !!localStorage.getItem('loop_connect');
-          } catch {
-            /* localStorage unavailable (incognito) */
-          }
-          if (hadPersistedSession) {
-            try {
-              const reconnected = await walletClient.connect();
-              if (!cancelled && reconnected.isConnected) {
-                const latest = await walletClient.status();
-                if (!cancelled) setStatus(latest);
-                const list = await walletClient.listAccounts().catch(() => []);
-                if (!cancelled) setAccounts(list ?? []);
-              }
-            } catch {
-              /* fall through to the delayed re-check below */
-            }
-          }
           // Some hosted wallets finish restoring shortly after initial load.
           // A single delayed check keeps refreshes from stranding users on
-          // the connect screen.
+          // the connect screen. (We do NOT auto-call connect() here — that can
+          // open the Loop window uninvited or strand a returning user mid-flow.
+          // The Loop SDK restores its own session; the user re-connects if not.)
           setTimeout(() => {
             if (cancelled) return;
             void walletClient

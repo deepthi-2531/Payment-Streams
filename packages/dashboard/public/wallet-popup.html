@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex" />
+    <title>Connecting wallet…</title>
+    <style>
+      :root { color-scheme: light dark; }
+      html, body {
+        margin: 0;
+        height: 100%;
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: #0b0f10;
+        color: #e6e8ea;
+      }
+      .wrap {
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        text-align: center;
+        padding: 24px;
+      }
+      .spinner {
+        width: 34px;
+        height: 34px;
+        border: 3px solid rgba(255, 255, 255, 0.18);
+        border-top-color: #46d39a;
+        border-radius: 50%;
+        animation: spin 0.9s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      .title { font-size: 15px; font-weight: 600; }
+      .sub { font-size: 12.5px; opacity: 0.65; max-width: 260px; line-height: 1.4; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Neutral placeholder for the SWK dapp-sdk "wallet-popup" window. The dApp
+      opens this same-origin page synchronously inside the Connect click gesture
+      so the popup is never blocked; the dapp-sdk then navigates THIS window to
+      its wallet picker (and then the selected wallet's login). Opening a real
+      same-origin URL rather than about:blank keeps embedded/strict browsers
+      from blocking the popup.
+    -->
+    <div class="wrap">
+      <div class="spinner" aria-hidden="true"></div>
+      <div class="title">Opening your wallet…</div>
+      <div class="sub">Choose a wallet in this window to continue connecting to Canton Streams.</div>
+    </div>
+  </body>
+</html>

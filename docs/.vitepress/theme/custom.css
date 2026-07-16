@@ -1,0 +1,237 @@
+/* Docs theme — tokens mirror packages/dashboard/src/styles/cc-streams.css.
+   Dark is primary; a light variant is kept for the toggle. */
+
+:root {
+  --vp-font-family-base: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'Helvetica Neue', sans-serif;
+  --vp-font-family-mono: 'Geist Mono', ui-monospace, 'SF Mono', 'Menlo',
+    monospace;
+
+  /* Emerald brand — darker in light mode for contrast on white */
+  --vp-c-brand-1: oklch(0.54 0.15 155);
+  --vp-c-brand-2: oklch(0.5 0.15 155);
+  --vp-c-brand-3: oklch(0.62 0.16 155);
+  --vp-c-brand-soft: oklch(0.6 0.15 155 / 0.12);
+  --vp-c-brand-softer: oklch(0.6 0.15 155 / 0.07);
+
+  /* Buttons: emerald bg with near-black text, like the dashboard .btn-primary */
+  --vp-button-brand-text: #061410;
+  --vp-button-brand-bg: oklch(0.62 0.16 155);
+  --vp-button-brand-hover-text: #061410;
+  --vp-button-brand-hover-bg: oklch(0.66 0.16 155);
+  --vp-button-brand-active-bg: oklch(0.58 0.16 155);
+  --vp-button-brand-border: transparent;
+  --vp-button-brand-hover-border: transparent;
+}
+
+/* Dark theme — the primary look */
+.dark {
+  /* Surfaces — pure cool grays (dashboard --bg / --bg-elev / --card / --card-2) */
+  --vp-c-bg: #07080b;
+  --vp-c-bg-alt: #0d0f15;
+  --vp-c-bg-elv: #11141c;
+  --vp-c-bg-soft: #11141c;
+
+  /* Neutral scale used for chips, alt buttons, code group tabs */
+  --vp-c-default-1: #262b3c;
+  --vp-c-default-2: #1d2130;
+  --vp-c-default-3: #161924;
+  --vp-c-default-soft: #161924;
+
+  /* Text (dashboard --fg / --fg-2 / --fg-3) */
+  --vp-c-text-1: #e7e9f0;
+  --vp-c-text-2: #b6bccd;
+  --vp-c-text-3: #7a8198;
+
+  /* Hairlines (dashboard --line / --line-2) */
+  --vp-c-divider: #1d2130;
+  --vp-c-border: #262b3c;
+  --vp-c-gutter: #05060a;
+
+  /* Brand for dark: brighter emerald so links/accents pop on near-black */
+  --vp-c-brand-1: oklch(0.84 0.15 155);
+  --vp-c-brand-2: oklch(0.8 0.16 155);
+  --vp-c-brand-3: oklch(0.74 0.16 155);
+  --vp-c-brand-soft: oklch(0.78 0.16 155 / 0.14);
+  --vp-c-brand-softer: oklch(0.78 0.16 155 / 0.08);
+
+  --vp-button-brand-bg: oklch(0.74 0.16 155);
+  --vp-button-brand-hover-bg: oklch(0.8 0.16 155);
+  --vp-button-brand-active-bg: oklch(0.7 0.16 155);
+
+  /* Code surfaces — lifted a hair above the page like the dashboard cards */
+  --vp-code-block-bg: #0d0f15;
+  --vp-code-bg: #161924;
+
+  /* Translucent, blurred nav like a modern fintech app shell */
+  --vp-nav-bg-color: rgba(7, 8, 11, 0.72);
+  --vp-sidebar-bg-color: #0a0b10;
+
+  /* Home hero — emerald gradient wordmark */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    oklch(0.88 0.13 155),
+    oklch(0.72 0.16 160)
+  );
+
+  /* Custom-container (tip) tinted emerald */
+  --vp-custom-block-tip-border: transparent;
+  --vp-custom-block-tip-text: var(--vp-c-text-1);
+  --vp-custom-block-tip-bg: oklch(0.78 0.16 155 / 0.08);
+  --vp-custom-block-tip-code-bg: #161924;
+}
+
+/* Light variant: keep VitePress' clean light surfaces, Geist + emerald brand. */
+:root:not(.dark) {
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #f6f7f9;
+  --vp-c-bg-soft: #f2f4f6;
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(
+    120deg,
+    oklch(0.6 0.16 155),
+    oklch(0.5 0.14 165)
+  );
+}
+
+/* "CS" monogram before the site title */
+.VPNavBarTitle .title {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.VPNavBarTitle .title::before {
+  content: 'CS';
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #061410;
+  background: linear-gradient(135deg, oklch(0.84 0.15 155), oklch(0.7 0.16 158));
+  box-shadow: 0 0 0 1px oklch(0.78 0.16 155 / 0.4),
+    0 6px 18px -8px oklch(0.78 0.16 155 / 0.6);
+}
+
+/* Sidebar — mono uppercase section labels */
+.VPSidebarItem.level-0 > .item > .text {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--vp-c-text-3);
+}
+.VPSidebarItem.level-1 .link .text {
+  font-size: 13.5px;
+}
+/* Active doc link: emerald text + a thin emerald rail */
+.VPSidebarItem.is-active > .item .link .text {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+/* Nav bar */
+.VPNavBar {
+  backdrop-filter: saturate(150%) blur(12px);
+}
+.VPNavBar.has-sidebar .content,
+.VPNavBar .divider {
+  border-color: var(--vp-c-divider);
+}
+
+/* Home hero — mono uppercase eyebrow + wordmark */
+.VPHero .container .main::before {
+  content: 'CANTON NETWORK · CIP-56 V2 · CIP-103';
+  display: block;
+  margin-bottom: 20px;
+  font-family: var(--vp-font-family-mono);
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--vp-c-brand-1);
+}
+.VPHero .name {
+  letter-spacing: -0.03em;
+}
+.VPHero .text {
+  color: var(--vp-c-text-1);
+  letter-spacing: -0.01em;
+}
+.VPHero .tagline {
+  color: var(--vp-c-text-2);
+}
+
+/* Feature cards on the landing page — card surface + hairline like the app */
+.VPFeature {
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  transition: border-color 140ms ease, transform 140ms ease;
+}
+.VPFeature:hover {
+  border-color: oklch(0.78 0.16 155 / 0.35);
+  transform: translateY(-2px);
+}
+.VPFeature .title {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Prose — code, tables, inline code */
+.vp-doc div[class*='language-'] {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+}
+.vp-doc :not(pre) > code {
+  font-size: 0.86em;
+  color: var(--vp-c-text-2);
+  background: var(--vp-c-default-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 5px;
+  padding: 0.15em 0.4em;
+}
+.vp-doc h1,
+.vp-doc h2,
+.vp-doc h3 {
+  letter-spacing: -0.02em;
+}
+.vp-doc h2 {
+  border-top: 1px solid var(--vp-c-divider);
+  padding-top: 22px;
+}
+.vp-doc table {
+  display: table;
+  width: 100%;
+}
+.vp-doc tr {
+  background: transparent;
+  border-top: 1px solid var(--vp-c-divider);
+}
+.vp-doc th {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--vp-c-text-3);
+  background: var(--vp-c-bg-soft);
+}
+
+/* Emerald text selection, matching the dashboard */
+::selection {
+  background: oklch(0.78 0.16 155 / 0.28);
+}
+
+/* Local search box — align with the dark surfaces */
+.dark .VPLocalSearchBox .shell {
+  background: var(--vp-c-bg-elv);
+  border: 1px solid var(--vp-c-border);
+}

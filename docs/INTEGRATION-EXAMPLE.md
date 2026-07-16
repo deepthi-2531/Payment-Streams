@@ -172,28 +172,10 @@ visible to the employee party.
 
 ### Bulk-create for the whole company
 
-```typescript
-const employees = await acmeHR.getEmployeesWithSalaries();
-
-const { streamIds } = await client.createBatch({
-  streams: employees.map((emp) => ({
-    streamId: `salary-${emp.party}`,
-    sender: treasuryParty,
-    recipient: emp.party,
-    totalDeposited: emp.monthlySalary,
-    startTime,
-    endTime,
-    vestingMode: { mode: VestingMode.Linear },
-    settlementMode: SettlementMode.TokenStandardCustody,
-    instrumentRef: usdcxRef,
-    fundingReference: emp.walletFundingRef,
-    escrowOperator: 'AcmeStreamsEscrow::1220...',
-    cancellable: false,
-  })),
-});
-```
-
-One signature, N streams.
+To create many streams from one operator workflow, pass an array of the same
+per-stream params to `client.createBatch({ streams: [...] })` — one signature,
+N streams. See the batch-create walkthrough in
+[`WALKTHROUGHS.md`](WALKTHROUGHS.md).
 
 ### Employee accepts
 
@@ -243,56 +225,28 @@ Output includes distinct streams, cumulative notional, days continuous, and per-
 
 ## Common variations
 
-### Subscriptions instead of fixed-term
+The prefunded vesting arc above is one shape. The other common shapes have
+dedicated references — mirror those rather than re-deriving them here:
 
-For SaaS-style monthly billing where the bill amount changes month-to-month, use the non-prefunded `StreamFlow` path — `client.createFlow(params)` / `buildFlowCreate` (`CreateFlowParams`; see `packages/sdk/src/commands/flow.ts`) — instead of `createStream`:
-
-```typescript
-const { streamId } = await client.createFlow({
-  sender: bobParty,
-  recipient: acmeParty,
-  escrowOperator: 'AcmeStreamsEscrow::1220...',
-  instrumentRef: usdcxRef,
-  flowRate: monthlyBill.div(30 * 86_400_000_000), // tokens per microsecond
-  fundedAmount: monthlyBill,                       // first period's funding
-});
-```
-
-The sender keeps the funded balance topped up via `client.topUpFlow` between iterations; withdrawals are bounded by the actually-funded balance (no unsecured credit). For the full `StreamFlow` lifecycle — choices, SDK builders, `/api/flows` routes, dashboard actions, and the probe — see [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
-
-> Note: `StreamFlow` is currently an operator/co-hosted reference — the SDK and proxy paths are solid (the proxy submits with sender + recipient + escrowOperator in `actAs`), but a fully hosted-wallet StreamFlow UX is future work. See the maturity note in [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
-
-### Milestone-gated releases
-
-Milestone streams are **admin-driven** — there is no SDK milestone-create method. The operator creates a `MilestoneAdmin` contract (`packages/daml/main/daml/CantonStreams/Stream/MilestoneAdmin.daml`) recording the milestone list, and the sender then approves a single multi-leg `AllocationFactory_Allocate` (one `TransferLegSide` per milestone, `committed=True`):
-
-```
--- Operator-created admin/observability contract for an AcmeSponsor program:
-create MilestoneAdmin with
-  streamId, sender = sponsorTreasury, recipient = projectRecipient,
-  operator = sponsorAdmin, instrumentRef = usdcxRef,
-  milestones =
-    [ Milestone with name = "mvp-shipped"; amount = 25000.0;  ...
-    , Milestone with name = "1k-users";    amount = 50000.0;  ...
-    , Milestone with name = "10k-users";   amount = 100000.0; ... ]
-  totalDeposited = 175000.0; ...
-```
-
-Each leg of the multi-leg V2 `Allocation` is settled with the standard V2 `Allocation_Settle` when the operator confirms the milestone (recorded via `Confirm_Milestone`). The admin record is operator-controlled bookkeeping over the authoritative allocation — reconcile against the allocation, not the admin contract.
-
-### Trust-minimized executor
-
-For trust-minimized recurring withdrawals — the employee doesn't want to click withdraw daily but doesn't want to give the company unlimited authority either — the employee creates an on-ledger `DelegatedPolicy` (`CantonStreams.Policy.DelegatedPolicy`) bounding the executor's authority (allowed actions, rate limit, max amount per execution, expiry). The proxy's executor honors those on-ledger bounds.
-
-The SDK manages policies read-side and supports revocation through the client (`packages/sdk/src/commands/policy.ts`):
-
-```typescript
-const policies = await client.listPolicies();              // active delegations
-const logs = await client.listExecutionLogs(policyId);     // per-policy execution audit
-await client.revokePolicy(policyContractId);               // sender revokes at any time
-```
-
-The employee can revoke at any time; the policy also expires on its own deadline.
+- **Subscriptions / usage-shaped billing** — use the non-prefunded `StreamFlow`
+  path (`client.createFlow` + rolling `client.topUpFlow`); withdrawals are
+  bounded by the funded balance (no unsecured credit). `StreamFlow` is
+  currently an operator/co-hosted reference; a hosted-wallet StreamFlow UX is
+  future work. Full lifecycle:
+  [`integration-guide/non-prefunded-flow.md`](integration-guide/non-prefunded-flow.md).
+- **Milestone-gated releases** — admin-driven: the operator creates a
+  `MilestoneAdmin` contract recording the milestone list, and the sender
+  approves a single multi-leg `AllocationFactory_Allocate` (one
+  `TransferLegSide` per milestone, `committed=True`). Each leg settles with
+  `Allocation_Settle` when the operator confirms the milestone (via
+  `Confirm_Milestone`); reconcile against the authoritative allocation, not the
+  admin record. See [`WALKTHROUGHS.md`](WALKTHROUGHS.md).
+- **Trust-minimized executor** — the recipient creates an on-ledger
+  `DelegatedPolicy` (`CantonStreams.Policy.DelegatedPolicy`) bounding the
+  executor's authority (allowed actions, rate limit, max per execution, expiry)
+  and can revoke at any time; the proxy's executor honors those on-ledger
+  bounds. SDK read/revoke: `client.listPolicies`, `client.listExecutionLogs`,
+  `client.revokePolicy` (`packages/sdk/src/commands/policy.ts`).
 
 ## Validation checklist before going to production
 

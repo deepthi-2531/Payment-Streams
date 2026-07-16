@@ -4,8 +4,8 @@ How to validate your Canton Payment Streams integration against the
 CIP-103 dApp API standard.
 
 CIP-103 defines the OpenRPC contract between a dApp and a wallet
-provider. Canton Payment Streams' CIP-103 Provider (in
-`packages/dashboard/src/lib/cip103/`) is designed to pass the official
+provider. Canton Payment Streams' wallet provider (in
+`packages/dashboard/src/store/wallet/`) is designed to pass the official
 OpenRPC conformance suite published in `splice-wallet-kernel`.
 
 This guide is for **dApp developers** who want their own integration
@@ -16,10 +16,10 @@ verify their wallet is compatible with Canton Payment Streams.
 
 ## Quick conformance check
 
-Run the SDK's bundled conformance test against your CIP-103 Provider:
+Run the SDK's bundled conformance suite (`packages/sdk/src/cip103/*.test.ts`):
 
-```
-npm test --workspace=@canton-streams/sdk -- cip-103
+```bash
+pnpm --filter @canton-streams/sdk test
 ```
 
 This exercises:
@@ -51,9 +51,9 @@ SWK_PROVIDER_URL=http://your-dapp.example/.well-known/cip103-provider \
 ```
 
 The harness expects a JSON-RPC-over-HTTP endpoint matching the
-published OpenRPC contract. The Canton Payment Streams Provider
-implements this via the sync or async transport — see
-`packages/dashboard/src/lib/cip103/transports/`.
+published OpenRPC contract. The Canton Payment Streams wallet provider
+implements this via the `dapp-sdk` and `partylayer` clients — see
+`packages/dashboard/src/store/wallet/`.
 
 ---
 
@@ -73,27 +73,11 @@ Per CIP-103, a conformant Provider must:
 - Allow read paths to be proxied via `ledgerApi` OR direct (with
   wallet-issued access token)
 
----
-
-## Two-wallet certification
-
-For production readiness, verify CIP-103 conformance against **at least
-two independent wallet implementations**. Reference wallets:
-
-1. **Splice Wallet Kernel** (canonical reference) — `canton-foundation/splice-wallet-kernel`
-2. **At least one external wallet** implementing the OpenRPC contract
-
-Each wallet must demonstrate a complete stream lifecycle (create →
-accept → withdraw) on Canton mainnet via the Canton Payment Streams
-dashboard.
-
-The certification artifact is a Markdown report committed under
-`docs/validation/cip-103-conformance-<wallet>.md` describing:
-
-- Wallet version + provider URL
-- Conformance test results
-- Any spec-drift issues encountered + remediations
-- Sign-off by the wallet maintainer
+For production readiness, verify CIP-103 conformance against more than
+one independent wallet implementation — the Splice Wallet Kernel
+(canonical reference, `canton-foundation/splice-wallet-kernel`) plus at
+least one other wallet implementing the OpenRPC contract — and confirm a
+complete stream lifecycle (create → accept → withdraw) through each.
 
 ---
 
@@ -103,8 +87,5 @@ CIP-103 conformance issues should be reported to:
 
 - The CIP-103 spec process (canton-foundation/cips repo) for spec
   ambiguities
-- This repo's GitHub Issues for Canton Payment Streams Provider bugs
+- This repo's GitHub Issues for Canton Payment Streams wallet-provider bugs
 - The respective wallet's issue tracker for wallet-side issues
-
-For coordinated reporting where multiple parties are involved, file
-in this repo and CC the others.

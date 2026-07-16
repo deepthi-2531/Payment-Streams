@@ -159,7 +159,7 @@ try {
 
 ---
 
-## V1 → V2 transition story (for partners)
+## V1 → V2 transition story (for asset issuers)
 
 If your asset is V1-only today, register it with `allocationsV1: true`
 (streams settle one allocation cycle per withdrawal; iterated/batch
@@ -172,8 +172,8 @@ actions stay V2-only). The path to the full feature set is:
    provides V1↔V2 mapping helpers so existing V1 holdings can be allocated
    via the V2 `AllocationFactory_Allocate` without re-issuance.
 2. **Advertise V2 in your metadata**: set `supportedApis` to include the
-   V2 package ids. This is the gate our SDK reads.
-3. **Add the asset to our registry**: with `allocationsV2: true`,
+   V2 package ids. This is the gate the SDK reads.
+3. **Add the asset to the registry**: with `allocationsV2: true`,
    `transferEventsV2: true` (if the asset publishes the V2 events
    package).
-4. Done — our library integrates automatically.
+4. Done — the library integrates automatically.
