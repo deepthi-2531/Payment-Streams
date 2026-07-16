@@ -14,6 +14,7 @@ ENV VITE_WALLET_NAME=${VITE_WALLET_NAME}
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml* ./
 COPY packages/sdk/package.json packages/sdk/
 COPY packages/dashboard/package.json packages/dashboard/
+COPY patches/ patches/
 RUN pnpm install --frozen-lockfile
 
 COPY packages/sdk/ packages/sdk/
