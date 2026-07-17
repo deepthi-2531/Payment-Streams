@@ -50,7 +50,9 @@ createLinearStream sender recipient sid start end deposit cancellable = do
       escrow = EscrowBalance with amount = deposit; owner = sender
       observers = []
 
--- | Test: create a linear stream via the propose/accept workflow.
+-- | Test: create a linear stream via the direct numeric-escrow helper and
+-- verify its initial state. (The propose/accept workflow is covered separately
+-- in Test.Stream.Lifecycle.)
 testLinearCreate : Script ()
 testLinearCreate = script do
   alice <- allocateParty "Alice"

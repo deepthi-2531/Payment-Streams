@@ -2,28 +2,40 @@
   "pinnedCommit": "2f2a8b94871bc9d68ae5bdbe7198b0c69a5fa9ea",
   "dars": {
     "splice-api-token-metadata-v1-1.0.0.dar": {
-      "sha256": "455eb160cb5abd4ae9918a6fbb9dad471f721adda39f0e5c76feef08d05637fc",
-      "size": 260414
+      "sha256": "c3e12431711822a96d81654d573a372626abb94152138b77898f25c6fcf7d144",
+      "size": 260715
+    },
+    "splice-api-token-holding-v1-1.0.0.dar": {
+      "sha256": "9caca94f13bacef20612962cfc3be6144425e542f8376d027c3811b13e1a9d20",
+      "size": 268099
+    },
+    "splice-api-token-allocation-v1-1.0.0.dar": {
+      "sha256": "1a11f7cae8ec45a0e49129791697171526bc128adbf4cff9fb96db213843ce71",
+      "size": 296697
+    },
+    "splice-api-token-allocation-request-v1-1.0.0.dar": {
+      "sha256": "d47a09a1253cf84a67fa8e3539227cee938068a58b37a406a80bc08a3a8dc3fa",
+      "size": 293355
     },
     "splice-api-token-holding-v2-1.0.0.dar": {
-      "sha256": "8144d55eaa3e5ace8977d72546ec69bda8f65c4c11e95c4cba87ccd1bb9c7e2f",
-      "size": 483157
+      "sha256": "41665d5440fd629fc0c2772efed91a442bbc0847943eb61a2cb0c9ce2c8cb722",
+      "size": 271483
     },
     "splice-api-token-transfer-instruction-v2-1.0.0.dar": {
       "sha256": "e8d3f66debf9d27a5f5b68a95ba36d5ae8f2b1820b0643aa6aeb1cce56a8100e",
       "size": 308289
     },
     "splice-api-token-allocation-v2-1.0.0.dar": {
-      "sha256": "55c7b72333fe19d4f0baa9ba498e5c559beeb0a41ceef904669743de2ac17f75",
-      "size": 542109
+      "sha256": "070e8e5ea96b7fd9bffc34e06af8aab2bf2518e865921296ed4d7a4fa7e6b6a9",
+      "size": 330442
     },
     "splice-api-token-allocation-instruction-v2-1.0.0.dar": {
       "sha256": "0d965edc2390c321449fd76229643729584a900752508ed0a6a8e91ea4e93284",
       "size": 334313
     },
     "splice-api-token-allocation-request-v2-1.0.0.dar": {
-      "sha256": "0fd9d39d14016869bb15d6d30d820f05b5565e24a0e23d0aa3191645317d8244",
-      "size": 534839
+      "sha256": "840c5d458d37875f659484cc00c5e9bb87faca57c4daf3ad04da71231e55838d",
+      "size": 323145
     },
     "splice-api-token-transfer-events-v2-1.0.0.dar": {
       "sha256": "b73e3e70419bc269f39e76e91dd334f54e3e19b4e0f63bb2ddd821b019a9da64",

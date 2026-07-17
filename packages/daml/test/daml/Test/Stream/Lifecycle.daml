@@ -1,0 +1,268 @@
+-- | Lifecycle-transition tests: mutual cancellation and the create/renew
+-- propose/accept workflows.
+--
+-- Covers MutualCancel_Stream, CreateStreamRequest -> AcceptStream, and
+-- RenewRequest -> ExecuteRenewal. Numeric escrow (LocalToken) path.
+module Test.Stream.Lifecycle where
+
+import Daml.Script
+import DA.Time (days, time)
+import DA.Date (date, Month(..))
+import DA.List (head)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+import CantonStreams.Workflow.CreateStream
+import CantonStreams.Workflow.RenewStream
+
+-- | Helper to create a standard linear stream config.
+mkLinearConfig : Party -> Party -> StreamId -> Time -> Time -> Decimal -> Bool -> StreamConfig
+mkLinearConfig sender recipient sid start end deposit cancellable =
+  StreamConfig with
+    streamId = sid
+    sender
+    recipient
+    totalDeposited = deposit
+    startTime = start
+    endTime = end
+    vestingMode = Linear
+    assetType = LocalToken
+    instrumentRef = None
+    cancellable
+    settlementMode = None
+
+-- | Test: mutual cancellation splits accrued to the recipient and refunds the
+-- remainder to the sender.
+testMutualCancelSplit : Script ()
+testMutualCancelSplit = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start   = time (date 2025 Jan 1) 0 0 0
+      end     = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      cancelAt = time (date 2025 Apr 1) 0 0 0
+      cfg = mkLinearConfig alice bob "mutual-cancel-001" start end deposit False
+
+  setTime start
+  escrowCid <- submitMulti [alice, bob] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = alice
+      observers = []
+
+  setTime cancelAt
+
+  submitMustFail alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = cancelAt
+
+  result <- submitMulti [alice, bob] [] do
+    exerciseCmd escrowCid MutualCancel_Stream with cancelTime = cancelAt
+
+  let accrued = linearAccrual deposit start end cancelAt
+      expectedRecipient = accrued
+      expectedRefund = refundable deposit accrued
+
+  debug ("GOLDEN:mutual_cancel:recipientAmount:" <> show result.recipientAmount)
+  debug ("GOLDEN:mutual_cancel:senderRefund:" <> show result.senderRefund)
+
+  assertMsg "Recipient receives the accrued portion"
+    (result.recipientAmount == expectedRecipient)
+  assertMsg "Sender is refunded the unaccrued remainder"
+    (result.senderRefund == expectedRefund)
+  assertMsg "Split conserves the full deposit"
+    (result.recipientAmount + result.senderRefund == deposit)
+
+  cancelled <- query @StreamEscrow bob
+  assertMsg "One escrow remains" (length cancelled == 1)
+  let (_, esc) = head cancelled
+  assertMsg "Status Cancelled" (esc.state.status == Cancelled)
+  assertMsg "totalWithdrawn advanced to accrued" (esc.state.totalWithdrawn == accrued)
+  assertMsg "Escrow drained to zero" (esc.escrow.amount == 0.0)
+  assertMsg "Drained escrow attributed to sender" (esc.escrow.owner == alice)
+
+-- | Test: mutual cancellation after a prior withdrawal settles only the
+-- remaining accrued amount.
+testMutualCancelAfterPartialWithdraw : Script ()
+testMutualCancelAfterPartialWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start      = time (date 2025 Jan 1) 0 0 0
+      end        = time (date 2025 Jul 1) 0 0 0
+      deposit    = 36000.0
+      withdrawAt = time (date 2025 Feb 1) 0 0 0
+      cancelAt   = time (date 2025 Apr 1) 0 0 0
+      cfg = mkLinearConfig alice bob "mutual-cancel-pw" start end deposit False
+
+  setTime start
+  escrowCid <- submitMulti [alice, bob] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = alice
+      observers = []
+
+  setTime withdrawAt
+  wr <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = withdrawAt
+
+  updated <- query @StreamEscrow bob
+  let (updatedCid, _) = head updated
+
+  setTime cancelAt
+  cr <- submitMulti [alice, bob] [] do
+    exerciseCmd updatedCid MutualCancel_Stream with cancelTime = cancelAt
+
+  let accruedAtCancel = linearAccrual deposit start end cancelAt
+      expectedRecipient = max 0.0 (accruedAtCancel - wr.newTotalWithdrawn)
+      expectedRefund = max 0.0 (deposit - accruedAtCancel)
+
+  debug ("GOLDEN:mutual_cancel_after_pw:recipientAmount:" <> show cr.recipientAmount)
+  debug ("GOLDEN:mutual_cancel_after_pw:senderRefund:" <> show cr.senderRefund)
+  debug ("GOLDEN:mutual_cancel_after_pw:previouslyWithdrawn:" <> show wr.newTotalWithdrawn)
+
+  assertMsg "Recipient gets remaining accrued after prior withdrawal"
+    (cr.recipientAmount == expectedRecipient)
+  assertMsg "Sender refunded the unaccrued remainder"
+    (cr.senderRefund == expectedRefund)
+  assertMsg "Prior withdrawal plus split conserves the deposit"
+    (wr.newTotalWithdrawn + cr.recipientAmount + cr.senderRefund == deposit)
+
+-- | Test: create a stream through the CreateStreamRequest -> AcceptStream
+-- workflow.
+testWorkflowCreateAccept : Script ()
+testWorkflowCreateAccept = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start   = time (date 2025 Jan 1) 0 0 0
+      end     = time (date 2025 Jul 1) 0 0 0
+      deposit = 36000.0
+      cfg = mkLinearConfig alice bob "wf-create-001" start end deposit True
+
+  setTime start
+
+  reqCid <- submit alice do
+    createCmd CreateStreamRequest with
+      config = cfg
+      depositAmount = deposit
+      observers = []
+
+  pending <- query @StreamEscrow bob
+  assertMsg "No escrow before acceptance" (null pending)
+
+  escrowCid <- submit bob do
+    exerciseCmd reqCid AcceptStream
+
+  escrows <- query @StreamEscrow bob
+  assertMsg "Exactly one escrow after acceptance" (length escrows == 1)
+  let (createdCid, esc) = head escrows
+  assertMsg "Accepted escrow matches returned cid" (createdCid == escrowCid)
+  assertMsg "Status Active" (esc.state.status == Active)
+  assertMsg "Nothing withdrawn yet" (esc.state.totalWithdrawn == 0.0)
+  assertMsg "Deposit locked in escrow" (esc.escrow.amount == deposit)
+  assertMsg "Escrow owned by sender" (esc.escrow.owner == alice)
+  assertMsg "Config preserved through the workflow" (esc.config == cfg)
+
+  setTime end
+  wr <- submit bob do
+    exerciseCmd createdCid Withdraw_Stream with withdrawTime = end
+  assertMsg "Full deposit vested at end" (wr.amountWithdrawn == deposit)
+  assertMsg "Status Completed after full withdraw" (wr.newStatus == Completed)
+
+  debug ("GOLDEN:workflow_create_accept:deposit:" <> show deposit)
+  debug ("GOLDEN:workflow_create_accept:status:" <> show wr.newStatus)
+
+-- | Test: DeclineStream leaves no escrow.
+testWorkflowCreateDecline : Script ()
+testWorkflowCreateDecline = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start   = time (date 2025 Jan 1) 0 0 0
+      end     = time (date 2025 Jul 1) 0 0 0
+      deposit = 12000.0
+      cfg = mkLinearConfig alice bob "wf-create-decline" start end deposit True
+
+  setTime start
+  reqCid <- submit alice do
+    createCmd CreateStreamRequest with
+      config = cfg
+      depositAmount = deposit
+      observers = []
+
+  submit bob do
+    exerciseCmd reqCid DeclineStream
+
+  escrows <- query @StreamEscrow bob
+  assertMsg "No escrow after decline" (null escrows)
+
+-- | Test: renew a stream through the RenewRequest -> ExecuteRenewal workflow.
+testWorkflowRenew : Script ()
+testWorkflowRenew = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start             = time (date 2025 Jan 1) 0 0 0
+      end               = time (date 2025 Apr 1) 0 0 0
+      deposit           = 9000.0
+      additionalDeposit = 6000.0
+      newEnd            = time (date 2025 Jul 1) 0 0 0
+      cfg = StreamConfig with
+        streamId = "wf-renew-001"
+        sender = alice
+        recipient = bob
+        totalDeposited = deposit
+        startTime = start
+        endTime = end
+        vestingMode = RenewableTerm with termDuration = days 90
+        assetType = LocalToken
+        instrumentRef = None
+        cancellable = True
+        settlementMode = None
+
+  setTime start
+  streamCid <- submitMulti [alice, bob] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = deposit; owner = alice
+      observers = []
+
+  reqCid <- submit alice do
+    createCmd RenewRequest with
+      sender = alice
+      streamCid
+      additionalDeposit
+      newEndTime = newEnd
+
+  renewedCid <- submit alice do
+    exerciseCmd reqCid ExecuteRenewal
+
+  renewed <- query @StreamEscrow bob
+  assertMsg "One escrow after renewal" (length renewed == 1)
+  let (queriedCid, esc) = head renewed
+  assertMsg "Renewed escrow matches returned cid" (queriedCid == renewedCid)
+  assertMsg "Total deposit increased by top-up"
+    (esc.config.totalDeposited == deposit + additionalDeposit)
+  assertMsg "End time extended" (esc.config.endTime == newEnd)
+  assertMsg "Renewal count incremented" (esc.state.renewalCount == 1)
+  assertMsg "Escrow balance topped up"
+    (esc.escrow.amount == deposit + additionalDeposit)
+  assertMsg "Status Active after renewal" (esc.state.status == Active)
+
+  debug ("GOLDEN:workflow_renew:newTotalDeposited:" <> show esc.config.totalDeposited)
+  debug ("GOLDEN:workflow_renew:renewalCount:" <> show esc.state.renewalCount)
+
+  setTime newEnd
+  wr <- submit bob do
+    exerciseCmd renewedCid Withdraw_Stream with withdrawTime = newEnd
+  assertMsg "Full topped-up deposit vested at the extended end"
+    (wr.amountWithdrawn == deposit + additionalDeposit)
+  assertMsg "Status Completed after full post-renewal withdraw"
+    (wr.newStatus == Completed)

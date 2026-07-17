@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Runs dpm test in each Daml package directory.
-# dpm test is per-package, not root-level.
+# Runs the Daml test runner in each Daml package directory.
+# The test runner is per-package, not root-level.
+#
+# Prefers `dpm test`; falls back to the classic `daml test` (which is what the
+# Daml CI workflow installs). Both run every `Script`-typed test in the package.
 #
 # Only the `test` acceptance suite runs by default. The optional
 # `packages/daml/scripts` helper package is source reference for local token
@@ -12,6 +15,15 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DAML_DIR="$SCRIPT_DIR/../packages/daml"
 
+if command -v dpm >/dev/null 2>&1; then
+  DAML_TEST=(dpm test)
+elif command -v daml >/dev/null 2>&1; then
+  DAML_TEST=(daml test)
+else
+  echo "Error: neither 'dpm' nor 'daml' found on PATH; cannot run Daml tests." >&2
+  exit 127
+fi
+
 PACKAGES=("test")
 FAILED=0
 
@@ -20,7 +32,7 @@ for pkg in "${PACKAGES[@]}"; do
   if [ -f "$PKG_DIR/daml.yaml" ]; then
     echo "=== Testing: packages/daml/$pkg ==="
     cd "$PKG_DIR"
-    if dpm test; then
+    if "${DAML_TEST[@]}"; then
       echo "  PASS"
     else
       echo "  FAIL"

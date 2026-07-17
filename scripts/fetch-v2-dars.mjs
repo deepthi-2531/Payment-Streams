@@ -427,15 +427,20 @@ async function modeSourceBuild(args) {
   }
 
   const tmpDir = resolve(tmpdir(), `splice-v2-fetch-${Date.now()}`);
-  log(`Cloning splice@${args.ref} into ${tmpDir}`);
+  log(`Fetching splice@${args.ref} into ${tmpDir}`);
   if (!args.dryRun) {
-    execSync('git', [
-      'clone',
-      '--depth=1',
-      '--branch', args.ref,
-      SPLICE_REPO_URL,
-      tmpDir,
-    ]);
+    // `git clone --branch <ref>` only accepts branch/tag names, but the
+    // default ref is a pinned commit SHA (SPLICE_PINNED_COMMIT), which it
+    // rejects with "Remote branch <sha> not found". Init + shallow-fetch the
+    // ref + checkout FETCH_HEAD resolves branches, tags, and commit SHAs
+    // uniformly while keeping the fetch shallow. (Fetching an unadvertised
+    // commit SHA requires the remote to allow reachable-SHA1 wants; GitHub
+    // does.)
+    mkdirSync(tmpDir, { recursive: true });
+    execSync('git', ['init', '-q'], { cwd: tmpDir });
+    execSync('git', ['remote', 'add', 'origin', SPLICE_REPO_URL], { cwd: tmpDir });
+    execSync('git', ['fetch', '--depth=1', 'origin', args.ref], { cwd: tmpDir });
+    execSync('git', ['checkout', '-q', 'FETCH_HEAD'], { cwd: tmpDir });
   }
 
   try {
