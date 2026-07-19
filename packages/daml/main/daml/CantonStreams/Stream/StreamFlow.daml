@@ -439,6 +439,10 @@ template StreamFlow
       allocationRequest_withdrawExtraObservers _ = []
 
       view =
+        -- Upper bound = funded - withdrawn: the MAX remaining entitlement, not
+        -- the amount claimable now (flow accrual is time-gated and enforced
+        -- on-ledger). The machine-readable rate + start in `meta` let a wallet
+        -- compute the currently-vested amount; a pure view has no ledger time.
         let claimable = flowClaimableUpperBound fundedAmount totalWithdrawn
             authorizerAcc = Bridge.escrowOperatorAccount escrowOperator
             recipientAcc = Bridge.streamRecipientAccount recipient
@@ -487,6 +491,13 @@ template StreamFlow
               , ("flowRate", show flowRate)
               , ("iterated", "true")
               , ("numIterations", show numIterations)
+              -- Machine-readable flow schedule; the leg amount is the max
+              -- remaining entitlement (funded - withdrawn), not claimable-now.
+              , ("schedule.startTime", show startTime)
+              , ("schedule.flowRatePerMicrosecond", show flowRate)
+              , ("schedule.fundedAmount", show fundedAmount)
+              , ("schedule.totalWithdrawn", show totalWithdrawn)
+              , ("schedule.legAmountIsMaxEntitlement", "true")
               ])
 
 ------------------------------------------------------------------------

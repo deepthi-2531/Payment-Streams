@@ -211,6 +211,14 @@ export interface SyncIterationParams {
  * iteration amount must match what the underlying settle transferred;
  * `newAllocationCid` is the next iteration's allocation (omit for the
  * final iteration when `nextIterationFunding = None`).
+ *
+ * The Daml choice enforces a MANDATORY ledger-time schedule cap: cumulative
+ * recorded settlement can never exceed the vesting curve at ledger time, so a
+ * Sync_Iteration that runs ahead of schedule is rejected on-ledger. Derive
+ * `iterationAmount` from the vesting schedule and FLOOR (do not round) any
+ * mirrored Decimal accrual to 10 dp, so the off-chain amount never exceeds the
+ * ledger's HALF_EVEN-rounded cap. Always pass `expectedIteration` (replay
+ * guard) and `settledAt` (audit + not-in-future bound) in production.
  */
 export async function buildSyncIteration(
   transport: Transport,

@@ -1,0 +1,186 @@
+-- | Regression tests that cancel/mutual-cancel settlement is priced at ledger
+-- time, not at a caller-supplied `cancelTime`, so a backdated timestamp cannot
+-- shift the sender/recipient split.
+module Test.Stream.CancelTimeSoundness where
+
+import Daml.Script
+import DA.Time (time, days, addRelTime)
+import DA.Date (date, Month(..))
+import DA.List (head)
+
+import CantonStreams.Interface.Types
+import CantonStreams.Interface.Stream (WithdrawResult(..), CancelResult(..))
+import CantonStreams.Stream.Escrow
+import CantonStreams.Stream.Accrual
+import CantonStreams.Settlement.Adapter (EscrowBalance(..))
+
+mkCfg : Party -> Party -> StreamId -> Time -> Time -> Decimal -> Bool -> VestingMode -> StreamConfig
+mkCfg sender recipient sid start end deposit cancellable vm =
+  StreamConfig with
+    streamId = sid
+    sender
+    recipient
+    totalDeposited = deposit
+    startTime = start
+    endTime = end
+    vestingMode = vm
+    assetType = LocalToken
+    instrumentRef = None
+    cancellable
+    settlementMode = None
+
+mkEscrow : Party -> Party -> StreamConfig -> Script (ContractId StreamEscrow)
+mkEscrow sender recipient cfg =
+  submitMulti [sender, recipient] [] do
+    createCmd StreamEscrow with
+      config = cfg
+      state = initialStreamState
+      escrow = EscrowBalance with amount = cfg.totalDeposited; owner = sender
+      observers = []
+
+jan1 : Time
+jan1 = time (date 2025 Jan 1) 0 0 0
+
+jul1 : Time
+jul1 = time (date 2025 Jul 1) 0 0 0
+
+-- | A sender who backdates `cancelTime` to the start (where accrued = 0) must
+-- not strip the recipient of accrual earned up to ledger time.
+testBackdatedCancelCannotClawVested : Script ()
+testBackdatedCancelCannotClawVested = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let deposit = 36000.0
+      apr1 = time (date 2025 Apr 1) 0 0 0
+      cfg = mkCfg alice bob "backdate-1" jan1 jul1 deposit True Linear
+
+  setTime jan1
+  escrowCid <- mkEscrow alice bob cfg
+
+  setTime apr1
+  -- Sender attempts to backdate the cancel to the start.
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = jan1
+
+  -- Settlement is priced at LEDGER time (apr1), not the backdated cancelTime.
+  let vestedAtLedger = linearAccrual deposit jan1 jul1 apr1
+  assertMsg "Recipient keeps accrual vested up to ledger time"
+    (result.recipientAmount == vestedAtLedger)
+  assertMsg "Sender refund is the complement"
+    (result.senderRefund == deposit - vestedAtLedger)
+  assertMsg "Conservation holds"
+    (result.recipientAmount + result.senderRefund == deposit)
+
+-- | Fully-vested, never-withdrawn stream: backdating cannot claw back 100%.
+testBackdatedCancelFullyVested : Script ()
+testBackdatedCancelFullyVested = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let deposit = 36000.0
+      afterEnd = time (date 2025 Aug 1) 0 0 0
+      cfg = mkCfg alice bob "backdate-2" jan1 jul1 deposit True Linear
+
+  setTime jan1
+  escrowCid <- mkEscrow alice bob cfg
+
+  setTime afterEnd
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = jan1
+
+  assertMsg "Recipient receives the fully vested deposit" (result.recipientAmount == deposit)
+  assertMsg "Sender refund is zero" (result.senderRefund == 0.0)
+
+-- | After a partial withdraw, backdating to the withdraw time must not erase
+-- the accrual earned between the withdraw and ledger time.
+testBackdatedCancelAfterPartialWithdraw : Script ()
+testBackdatedCancelAfterPartialWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let deposit = 36000.0
+      feb1 = time (date 2025 Feb 1) 0 0 0
+      apr1 = time (date 2025 Apr 1) 0 0 0
+      cfg = mkCfg alice bob "backdate-3" jan1 jul1 deposit True Linear
+
+  setTime jan1
+  escrowCid <- mkEscrow alice bob cfg
+
+  setTime feb1
+  wResult <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = feb1
+
+  escrows <- query @StreamEscrow bob
+  let (updatedCid, _) = head escrows
+
+  setTime apr1
+  cResult <- submit alice do
+    exerciseCmd updatedCid Cancel_Stream with cancelTime = feb1
+
+  let vestedAtLedger = linearAccrual deposit jan1 jul1 apr1
+  assertMsg "Recipient gets ledger-time accrual minus what they withdrew"
+    (cResult.recipientAmount == vestedAtLedger - wResult.newTotalWithdrawn)
+  assertMsg "Conservation across withdraw + cancel"
+    (cResult.recipientAmount + cResult.senderRefund + wResult.newTotalWithdrawn == deposit)
+
+-- | The retained upper bound still rejects a future cancelTime.
+testCancelRejectsFutureCancelTime : Script ()
+testCancelRejectsFutureCancelTime = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let deposit = 36000.0
+      apr1 = time (date 2025 Apr 1) 0 0 0
+      cfg = mkCfg alice bob "future-1" jan1 jul1 deposit True Linear
+
+  setTime jan1
+  escrowCid <- mkEscrow alice bob cfg
+
+  setTime apr1
+  submitMustFail alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = addRelTime apr1 (days 1)
+
+-- | MutualCancel is priced at ledger time too (consent model unchanged: both
+-- parties still authorize; the change is only WHEN settlement is priced).
+testMutualCancelBackdatedUsesLedgerTime : Script ()
+testMutualCancelBackdatedUsesLedgerTime = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let deposit = 36000.0
+      apr1 = time (date 2025 Apr 1) 0 0 0
+      -- cancellable = False proves MutualCancel needs no cancellable gate.
+      cfg = mkCfg alice bob "mutual-1" jan1 jul1 deposit False Linear
+
+  setTime jan1
+  escrowCid <- mkEscrow alice bob cfg
+
+  setTime apr1
+  result <- submitMulti [alice, bob] [] do
+    exerciseCmd escrowCid MutualCancel_Stream with cancelTime = jan1
+
+  let vestedAtLedger = linearAccrual deposit jan1 jul1 apr1
+  assertMsg "Mutual cancel prices recipient at ledger time"
+    (result.recipientAmount == vestedAtLedger)
+  assertMsg "Conservation holds"
+    (result.recipientAmount + result.senderRefund == deposit)
+
+-- | Cliff vesting: backdating to before the cliff (accrued = 0) must not strip
+-- accrual the recipient has earned past the cliff by ledger time.
+testBackdatedCancelCliff : Script ()
+testBackdatedCancelCliff = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  let deposit = 36000.0
+      cliff = time (date 2025 Apr 1) 0 0 0
+      feb1 = time (date 2025 Feb 1) 0 0 0
+      may1 = time (date 2025 May 1) 0 0 0
+      cfg = mkCfg alice bob "cliff-1" jan1 jul1 deposit True (CliffLinear cliff)
+
+  setTime jan1
+  escrowCid <- mkEscrow alice bob cfg
+
+  setTime may1
+  result <- submit alice do
+    exerciseCmd escrowCid Cancel_Stream with cancelTime = feb1
+
+  let vestedAtLedger = cliffLinearAccrual deposit jan1 jul1 cliff may1
+  assertMsg "Post-cliff accrual is non-zero" (vestedAtLedger > 0.0)
+  assertMsg "Recipient keeps post-cliff accrual despite pre-cliff backdate"
+    (result.recipientAmount == vestedAtLedger)

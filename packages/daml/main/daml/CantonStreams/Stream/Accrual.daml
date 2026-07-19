@@ -12,6 +12,7 @@
 module CantonStreams.Stream.Accrual where
 
 import DA.Time (subTime, convertRelTimeToMicroseconds, RelTime)
+import CantonStreams.Interface.Types (VestingMode(..))
 
 -- | Convert a time difference to Decimal microseconds.
 timeToMicros : Time -> Time -> Decimal
@@ -91,6 +92,16 @@ withdrawable accrued totalWithdrawn =
 refundable : Decimal -> Decimal -> Decimal
 refundable totalDeposited accrued =
   max 0.0 (totalDeposited - accrued)
+
+-- | Accrued amount for a vesting mode at time `t`. Single source of truth
+-- for the accrual curve, shared by the escrow choices and the V2 admin
+-- settlement cap so the two can never drift.
+accruedAt : VestingMode -> Decimal -> Time -> Time -> Time -> Decimal
+accruedAt vm totalDeposited startTime endTime t = case vm of
+  Linear -> linearAccrual totalDeposited startTime endTime t
+  CliffLinear cliffTime -> cliffLinearAccrual totalDeposited startTime endTime cliffTime t
+  Stepped stepInterval amountPerStep -> steppedAccrual totalDeposited startTime stepInterval amountPerStep t
+  RenewableTerm _ -> linearAccrual totalDeposited startTime endTime t
 
 -- | Check the core invariant (with dust tolerance).
 -- Returns True if the invariant holds.

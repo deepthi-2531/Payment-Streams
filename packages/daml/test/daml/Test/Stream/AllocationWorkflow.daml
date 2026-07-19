@@ -127,6 +127,17 @@ testStreamEscrowV2ViewShape = script do
         _ -> abort "Expected one spec in V2 view"
       assertMsg "V2 conservation invariant holds"
         (Bridge.checkConservationV2 (mkAllocConfig alice bob "alloc-v2-shape" start end deposit (Some ref)) initialStreamState v)
+      -- Machine-readable vesting schedule is exposed so a V2 wallet can derive
+      -- the currently-claimable amount rather than treating the full leg amount
+      -- as immediately available.
+      assertMsg "schedule.totalDeposited exposed in view meta"
+        (TextMap.lookup "schedule.totalDeposited" v.meta.values == Some (show deposit))
+      assertMsg "schedule.startTime exposed in view meta"
+        (TextMap.lookup "schedule.startTime" v.meta.values == Some (show start))
+      assertMsg "schedule.endTime exposed in view meta"
+        (TextMap.lookup "schedule.endTime" v.meta.values == Some (show end))
+      assertMsg "leg amount flagged as max entitlement, not claimable-now"
+        (TextMap.lookup "schedule.legAmountIsMaxEntitlement" v.meta.values == Some "true")
       debug ("GOLDEN:alloc_v2_view:totalLegAmount:" <> show totalLeg)
       debug ("GOLDEN:alloc_v2_view:allocationsCount:" <> show (length v.allocations))
     None ->

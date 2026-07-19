@@ -19,7 +19,10 @@ setupFlowAdmin = do
         admin = alice
         id = "TEST-COIN"
       payload = mkStreamFlowAdmin "flow-001" alice bob carol iid 0.001 start 100.0 []
-  setTime start
+  -- Pin ledger time well past start so the mandatory flow-rate cap on
+  -- Sync_Iteration_Flow is non-binding for these bookkeeping tests. Schedule
+  -- enforcement is covered by dedicated tests.
+  setTime (time (date 2026 Mar 1) 0 0 0)
   cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
   pure (alice, bob, carol, cid)
 

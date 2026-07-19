@@ -133,14 +133,14 @@ template StreamHoldingEscrow
         assertMsg "Stream not cancellable" config.cancellable
         assertMsg "Stream not active" (state.status == Active)
 
-        -- Bound cancelTime to ledger time. Without this the sender
-        -- could pass cancelTime = startTime, clamp the recipient's payout to
-        -- zero, and refund themselves the full deposit — seizing the
-        -- recipient's vested-but-unwithdrawn entitlement.
+        -- `cancelTime` is audit-only: settlement is priced at LEDGER time so
+        -- the sole-controller sender cannot backdate to clamp the recipient's
+        -- payout and seize their vested-but-unwithdrawn entitlement. The upper
+        -- bound keeps the recorded timestamp out of the future.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
-        let accrued = computeAccrued cancelTime
+        let accrued = computeAccrued now
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
 
@@ -185,12 +185,13 @@ template StreamHoldingEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- Bound cancelTime even on mutual cancel: although both
-        -- parties consent, a back-dated time still mis-splits the holding.
+        -- Price at ledger time even on mutual cancel: both parties consent to
+        -- cancellation, but the split must not depend on a back-dated
+        -- timestamp. `cancelTime` is audit-only, bounded out of the future.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
-        let accrued = computeAccrued cancelTime
+        let accrued = computeAccrued now
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
 

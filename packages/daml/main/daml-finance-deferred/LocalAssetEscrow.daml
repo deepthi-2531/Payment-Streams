@@ -117,11 +117,13 @@ template LocalAssetEscrow
         assertMsg "Stream not cancellable" config.cancellable
         assertMsg "Stream not active" (state.status == Active)
 
-        -- Bound cancelTime to ledger time.
+        -- `cancelTime` is audit-only: settlement is priced at LEDGER time so
+        -- no back-dated timestamp can shift the split. The upper bound keeps
+        -- the recorded timestamp out of the future.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
-        let accrued = computeAccrued config cancelTime
+        let accrued = computeAccrued config now
             recipientAmount = max 0.0 (accrued - state.totalWithdrawn)
             senderRefundAmount = max 0.0 (config.totalDeposited - accrued)
 
@@ -159,11 +161,13 @@ template LocalAssetEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- Bound cancelTime to ledger time.
+        -- `cancelTime` is audit-only: settlement is priced at LEDGER time so
+        -- no back-dated timestamp can shift the split. The upper bound keeps
+        -- the recorded timestamp out of the future.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
-        let accrued = computeAccrued config cancelTime
+        let accrued = computeAccrued config now
             recipientAmount = max 0.0 (accrued - state.totalWithdrawn)
             senderRefundAmount = max 0.0 (config.totalDeposited - accrued)
 
