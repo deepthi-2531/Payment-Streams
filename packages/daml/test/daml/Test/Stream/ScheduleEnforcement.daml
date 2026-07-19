@@ -1,0 +1,128 @@
+-- | Regression tests that the operator settlement-reporting path enforces the
+-- vesting schedule at ledger time. `Sync_Iteration` / `Sync_Iteration_Flow`
+-- carry a mandatory (not opt-out-able) cap: cumulative recorded settlement can
+-- never exceed the accrual curve / flow-rate bound at ledger time, so the
+-- operator cannot record settlement ahead of schedule (e.g. drain the whole
+-- stream at t=start).
+module Test.Stream.ScheduleEnforcement where
+
+import Daml.Script
+import DA.Time (time)
+import DA.Date (date, Month(..))
+
+import CantonStreams.Interface.Types
+import CantonStreams.Stream.StreamAdmin
+import CantonStreams.Stream.StreamFlowAdmin
+
+adminStart : Time
+adminStart = time (date 2026 Jan 1) 0 0 0
+
+adminEnd : Time
+adminEnd = time (date 2026 Jul 1) 0 0 0  -- 181 days
+
+setupAdmin : Script (Party, Party, Party, ContractId StreamAdmin)
+setupAdmin = do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let iid = InstrumentIdV2 with admin = alice; id = "CC"
+      payload = mkStreamAdmin "sched-001" alice bob carol iid 1000.0 Linear adminStart adminEnd True []
+  setTime adminStart
+  cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  pure (alice, bob, carol, cid)
+
+-- | At t=start nothing has vested, so recording any positive settlement must
+-- be rejected; the identical call succeeds once fully vested.
+testSyncIterationRejectsPrematureRecording : Script ()
+testSyncIterationRejectsPrematureRecording = script do
+  (_, _, carol, cid) <- setupAdmin
+  -- t == start: vested cap is 0, so this MUST fail (opt-ins omitted; the cap
+  -- is mandatory regardless).
+  submitMustFail carol $ exerciseCmd cid Sync_Iteration with
+    iterationAmount = 200.0
+    newAllocationCid = Some "a1"
+    expectedIteration = None
+    settledAt = None
+  -- Fully vested: the same iteration is now within the cap.
+  setTime adminEnd
+  _ <- submit carol $ exerciseCmd cid Sync_Iteration with
+    iterationAmount = 200.0
+    newAllocationCid = Some "a1"
+    expectedIteration = None
+    settledAt = None
+  pure ()
+
+-- | The cap tracks the vesting curve: at ~half duration the cap is ~half the
+-- deposit — a draw under it succeeds, a draw over it is rejected.
+testSyncIterationCapTracksCurve : Script ()
+testSyncIterationCapTracksCurve = script do
+  (_, _, carol, cid) <- setupAdmin
+  -- Apr 1 is 90/181 of the way; cap ~= 497.
+  setTime (time (date 2026 Apr 1) 0 0 0)
+  submitMustFail carol $ exerciseCmd cid Sync_Iteration with
+    iterationAmount = 600.0
+    newAllocationCid = Some "over"
+    expectedIteration = None
+    settledAt = None
+  _ <- submit carol $ exerciseCmd cid Sync_Iteration with
+    iterationAmount = 400.0
+    newAllocationCid = Some "under"
+    expectedIteration = None
+    settledAt = None
+  pure ()
+
+-- | settledAt lower bound: a settle timestamp before the stream start is
+-- rejected even though it is not in the future.
+testSyncIterationRejectsSettledAtBeforeStart : Script ()
+testSyncIterationRejectsSettledAtBeforeStart = script do
+  (_, _, carol, cid) <- setupAdmin
+  setTime adminEnd
+  submitMustFail carol $ exerciseCmd cid Sync_Iteration with
+    iterationAmount = 100.0
+    newAllocationCid = Some "a1"
+    expectedIteration = None
+    settledAt = Some (time (date 2025 Dec 1) 0 0 0)  -- before adminStart
+
+setupFlow : Script (Party, Party, Party, ContractId StreamFlowAdmin)
+setupFlow = do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+  carol <- allocateParty "Carol-Op"
+  let iid = InstrumentIdV2 with admin = alice; id = "USDCx"
+      -- 0.001 tokens/microsecond.
+      payload = mkStreamFlowAdmin "sched-flow-001" alice bob carol iid 0.001 adminStart 100.0 []
+  setTime adminStart
+  cid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  pure (alice, bob, carol, cid)
+
+-- | Flow: at t=start the rate-accrued cap is 0, so any positive settle is
+-- rejected; after enough time elapses the same settle clears the cap.
+testFlowSyncRejectsRateOvershoot : Script ()
+testFlowSyncRejectsRateOvershoot = script do
+  (_, _, carol, cid) <- setupFlow
+  -- t == start: flowRate * 0 == 0, so this MUST fail.
+  submitMustFail carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "f1"
+    expectedIteration = None
+    settledAt = None
+  -- 1 second later: cap = 0.001 * 1e6 = 1000 >= 10.
+  setTime (time (date 2026 Jan 1) 0 0 1)
+  _ <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 10.0
+    newAllocationCid = Some "f1"
+    expectedIteration = None
+    settledAt = None
+  pure ()
+
+-- | The documented amount-0 initialization marker still passes at t=start
+-- (0 <= cap of 0).
+testFlowInitMarkerStillAllowed : Script ()
+testFlowInitMarkerStillAllowed = script do
+  (_, _, carol, cid) <- setupFlow
+  _ <- submit carol $ exerciseCmd cid Sync_Iteration_Flow with
+    iterationAmount = 0.0
+    newAllocationCid = Some "f0"
+    expectedIteration = None
+    settledAt = None
+  pure ()

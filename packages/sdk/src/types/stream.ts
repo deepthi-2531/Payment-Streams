@@ -497,10 +497,11 @@ export interface TokenStandardCancelParams {
   /** Amount actually refunded to the sender. */
   readonly senderRefundSettled: Decimal;
   /**
-   * Explicit cancel timestamp. When supplied, the SDK uses this instead of
-   * Date.now() so that the caller can compute recipientAmountSettled and
-   * senderRefundSettled against the exact same moment that Daml will verify.
-   * Must match the time used for computing recipientAmountSettled / senderRefundSettled.
+   * Optional cancel timestamp, recorded on-chain for audit. ADVISORY ONLY:
+   * the Daml choice prices the sender/recipient split at ledger time, so this
+   * value does not affect the split (on-chain it is merely bounded above by
+   * ledger time). Trust the returned recipientAmountSettled /
+   * senderRefundSettled, which reflect the authoritative on-ledger split.
    */
   readonly cancelTime?: Date;
 }

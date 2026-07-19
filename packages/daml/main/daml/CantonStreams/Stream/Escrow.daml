@@ -40,15 +40,8 @@ import qualified CantonStreams.Settlement.AllocationBridge as Bridge
 
 -- | Compute accrued amount based on vesting mode. Top-level helper.
 computeAccrued : StreamConfig -> Time -> Decimal
-computeAccrued cfg now = case cfg.vestingMode of
-  Linear ->
-    linearAccrual cfg.totalDeposited cfg.startTime cfg.endTime now
-  CliffLinear cliffTime ->
-    cliffLinearAccrual cfg.totalDeposited cfg.startTime cfg.endTime cliffTime now
-  Stepped stepInterval amountPerStep ->
-    steppedAccrual cfg.totalDeposited cfg.startTime stepInterval amountPerStep now
-  RenewableTerm _ ->
-    linearAccrual cfg.totalDeposited cfg.startTime cfg.endTime now
+computeAccrued cfg t =
+  accruedAt cfg.vestingMode cfg.totalDeposited cfg.startTime cfg.endTime t
 
 -- | Check if a vesting mode is renewable.
 isRenewable : VestingMode -> Bool
@@ -147,11 +140,15 @@ template StreamEscrow
         assertMsg "Stream not cancellable" config.cancellable
         assertMsg "Stream not active" (state.status == Active)
 
-        -- Bound cancelTime to ledger time.
+        -- `cancelTime` is the caller's declared intent, recorded in the
+        -- exercise event for audit; it never feeds accrual. Settlement is
+        -- priced at LEDGER time so no caller-supplied value can shift the
+        -- sender/recipient split. The upper bound is retained so the recorded
+        -- audit timestamp cannot be in the future.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
-        let accrued = computeAccrued config cancelTime
+        let accrued = computeAccrued config now
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
 
@@ -177,11 +174,15 @@ template StreamEscrow
       do
         assertMsg "Stream not active" (state.status == Active)
 
-        -- Bound cancelTime to ledger time.
+        -- Differs from Cancel_Stream in WHO authorizes (sender AND recipient;
+        -- no `cancellable` gate) — not in WHEN settlement is priced. As with
+        -- Cancel_Stream, `cancelTime` is audit-only and accrual is priced at
+        -- ledger time, so no timestamp value can shift the split even if a
+        -- future propose/accept wrapper leads a party to blind-sign.
         now <- getTime
         assertMsg "cancelTime must be at or before ledger time" (cancelTime <= now)
 
-        let accrued = computeAccrued config cancelTime
+        let accrued = computeAccrued config now
             recipientAmount = accrued - state.totalWithdrawn
             senderRefundAmount = config.totalDeposited - accrued
 
@@ -312,6 +313,12 @@ template StreamEscrow
       allocationRequest_withdrawExtraObservers _ = []
 
       view =
+        -- The leg advertises the full remaining entitlement (the maximum the
+        -- recipient can ever receive), NOT the amount claimable right now.
+        -- Claimability is gated by the vesting schedule (exposed
+        -- machine-readably in `meta` below) and enforced on-ledger by
+        -- Withdraw_Stream. A pure interface view has no ledger time, so it
+        -- cannot itself compute vested-at-now.
         let undrawn = config.totalDeposited - state.totalWithdrawn
             -- V2 instrument id is just the V1 ref's instrumentId Text;
             -- the asset admin lives on AllocationSpecification.admin
@@ -350,4 +357,12 @@ template StreamEscrow
               [ ("streamId", config.streamId)
               , ("streamStatus", show state.status)
               , ("vestingMode", show config.vestingMode)
+              -- Machine-readable vesting schedule so a V2 wallet can derive the
+              -- currently-claimable amount itself rather than treating the full
+              -- leg amount as immediately available.
+              , ("schedule.startTime", show config.startTime)
+              , ("schedule.endTime", show config.endTime)
+              , ("schedule.totalDeposited", show config.totalDeposited)
+              , ("schedule.totalWithdrawn", show state.totalWithdrawn)
+              , ("schedule.legAmountIsMaxEntitlement", "true")
               ])

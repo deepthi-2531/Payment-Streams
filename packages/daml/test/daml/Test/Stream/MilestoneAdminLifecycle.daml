@@ -136,7 +136,7 @@ testMilestoneMarkCancelled = script do
   c1 <- submit carol $ exerciseCmd cid Confirm_Milestone with
     milestoneName = "m1"; confirmedAt = t
   c2 <- submit carol $ exerciseCmd c1 Mark_Cancelled_Milestone_Admin with
-    cancelTime = time (date 2026 Apr 1) 0 0 0
+    cancelTime = time (date 2026 Mar 1) 0 0 0  -- <= pinned ledger time
     releasedAllocationCid = None
   Some a <- queryContractId carol c2
   assertMsg "status Cancelled" (a.status == Cancelled)

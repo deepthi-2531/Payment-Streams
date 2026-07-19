@@ -50,8 +50,12 @@ export async function cancel(
     actAs,
   );
 
-  // Use caller-supplied cancelTime when provided (ensures Daml accrual check
-  // uses the same moment the caller computed recipientAmountSettled / senderRefundSettled).
+  // `cancelTime` is advisory metadata only. The Daml choice prices the
+  // sender/recipient split at LEDGER time, not at this timestamp — a backdated
+  // value can no longer shift the split (it only serves as an audit record and
+  // is bounded above by ledger time on-chain). Callers must trust the returned
+  // CancelResult, which reflects the on-ledger split, rather than any locally
+  // pre-computed recipientAmountSettled / senderRefundSettled.
   const cancelTimestamp = params && 'cancelTime' in params && params.cancelTime instanceof Date
     ? params.cancelTime
     : new Date();

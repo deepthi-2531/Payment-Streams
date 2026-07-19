@@ -64,8 +64,12 @@ sender cancels a non-cancellable stream.
 - The `cancellable` flag is immutable after creation (part of
   `StreamConfig`).
 
-**Residual risk:** None for unilateral cancellation. Mutual
-cancellation requires explicit agreement from both parties.
+**Residual risk:** Both authorization and settlement *timing* are
+enforced. Only the sender may unilaterally cancel a cancellable stream,
+and the sender/recipient split is priced at ledger time (see §5, Time
+manipulation), so a correctly authorized sender cannot backdate
+`cancelTime` to under-credit the recipient. Mutual cancellation requires
+explicit agreement from both parties.
 
 ### 3. Double withdrawal
 
@@ -141,14 +145,25 @@ future timestamp to unlock tokens early.
    complete, renew, pause, and resume choice in `Escrow.daml`,
    `HoldingEscrow.daml`, `LocalAssetEscrow.daml`, and `StreamFlow.daml`.
    Without it, a recipient could pass
-   `withdrawTime = endTime` to drain the escrow day one, or a sender
-   could pass `cancelTime = startTime` to clawback already-vested funds.
+   `withdrawTime = endTime` to drain the escrow day one.
 
-**Residual risk:** Minimal. `getTime` returns the transaction's ledger
-time, which Canton bounds to the tolerance window (seconds) — negligible
-relative to stream durations (days to months). An earlier-than-now value
-is permitted but never benefits the submitter: under-stating the time can
-only *reduce* what a withdrawer or canceller can extract.
+   For cancellation the upper-bound guard alone is NOT sufficient:
+   because `senderRefund = totalDeposited - accrued(t)`, a backdated
+   `cancelTime` would *increase* the sole-controller sender's refund and
+   strip the recipient's vested-but-unwithdrawn accrual. `Cancel_Stream`
+   and `MutualCancel_Stream` therefore price the split at *ledger time*
+   (`accrued(now)`), never at the caller-supplied `cancelTime`; the
+   timestamp is retained only as an audit field bounded above by ledger
+   time. On the V2 operator path, `Sync_Iteration` / `Sync_Iteration_Flow`
+   enforce a mandatory ledger-time cap so cumulative recorded settlement
+   can never run ahead of the vesting schedule.
+
+**Residual risk:** Minimal. Cancellation and settlement are priced at
+ledger time, so no caller-supplied timestamp can shift a split. `getTime`
+returns the transaction's ledger time, which Canton bounds to the
+tolerance window (seconds) — negligible relative to stream durations
+(days to months), and any residual skew favors the recipient. A backdated
+`withdrawTime` only *reduces* the withdrawer's own payout (self-harm).
 
 ### 6. Front-running
 

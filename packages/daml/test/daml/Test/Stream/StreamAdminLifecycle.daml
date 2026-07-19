@@ -45,7 +45,11 @@ setupStreamAdmin = do
         admin = alice
         id = "TEST-COIN"
       payload = mkStreamAdmin "admin-001" alice bob carol iid 1000.0 Linear start end True []
-  setTime start
+  -- Pin ledger time to full vesting: these tests exercise bookkeeping
+  -- semantics (ordering, replay, overshoot, completion), not the vesting
+  -- schedule, so the mandatory ledger-time cap on Sync_Iteration must be
+  -- non-binding here. Schedule enforcement is covered by dedicated tests.
+  setTime end
   adminCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
   pure (alice, bob, carol, adminCid)
 

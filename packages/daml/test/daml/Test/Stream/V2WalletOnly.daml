@@ -74,6 +74,9 @@ testWalletOnlyStreamAdmin_SixIterations = script do
       adminPayload = mkStreamAdmin "v2-stream-001" alice bob carol iid 1200.0 Linear start end True []
   setTime start
   adminCid <- submitMulti [alice, bob, carol] [] $ createCmd adminPayload
+  -- Advance to full vesting so the operator's cumulative iterations sit under
+  -- the mandatory ledger-time schedule cap on Sync_Iteration.
+  setTime end
 
   -- Iterate 6 times, 200 CC each = 1200 CC total. Each iteration
   -- represents the operator exercising V2 Allocation_Settle, which
@@ -120,6 +123,9 @@ testWalletOnlyStreamFlow_TopUpPauseResume = script do
       payload = mkStreamFlowAdmin "v2-flow-001" alice bob carol iid 0.001 start 100.0 []
   setTime start
   flowCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  -- Advance past start so the mandatory flow-rate cap on Sync_Iteration_Flow
+  -- is non-binding for this bookkeeping walkthrough.
+  setTime (time (date 2026 Mar 1) 0 0 0)
 
   -- Wallet exercised AllocationFactory_Allocate for initial 100 USDCx.
   -- Operator records iteration 1: settle 30 USDCx.
@@ -223,6 +229,9 @@ testWalletOnlyStreamAdmin_Cancel = script do
       payload = mkStreamAdmin "v2-cancel-001" alice bob carol iid 1000.0 Linear start end True []
   setTime start
   adminCid <- submitMulti [alice, bob, carol] [] $ createCmd payload
+  -- Advance to full vesting so the two 200 CC iterations sit under the
+  -- mandatory ledger-time schedule cap on Sync_Iteration.
+  setTime end
 
   -- Operator settles 2 iterations (400 CC).
   c1 <- submit carol $ exerciseCmd adminCid Sync_Iteration with
