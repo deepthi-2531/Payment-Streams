@@ -105,6 +105,26 @@ import {
   V1LaneError,
   type CreateV1StreamInput,
 } from './v1-lane.js';
+import {
+  listStreamsViaJson,
+  getStreamViaJson,
+  getFlowViaJson,
+  listPendingRequestsViaJson,
+  listFlowsViaJson,
+  listPoliciesViaJson,
+  listExecutionLogsViaJson,
+  synthesizeStreamHistory,
+} from './v2-read.js';
+import {
+  createStreamAdminViaJson,
+  revokePolicyViaJson,
+  vestingModeToDaJson,
+  createFlowAdminViaJson,
+  topUpFlowAdminViaJson,
+  syncIterationFlowViaJson,
+  markCancelledFlowAdminViaJson,
+} from './v2-write.js';
+import { getSupportedAssets } from './assets.js';
 
 // ---------------------------------------------------------------------------
 // Configuration from environment
@@ -325,13 +345,12 @@ function scopeReadFilter(
       'You may only query streams where you are the sender or recipient.',
     );
   }
-  // No explicit filter → scope to the caller. We can't express "sender OR
-  // recipient = caller" in a single filter, so callers that want both
-  // directions should issue two queries; default to recipient-scoped
-  // (the inbox view) and let an explicit `?sender=<self>` cover outgoing.
-  if (!provided.sender && !provided.recipient) {
-    return { recipient: caller };
-  }
+  // No explicit filter → no extra filter. The JSON-Ledger-API reads
+  // (v2-read.ts) query `filtersByParty[caller]`, so the ledger's own
+  // visibility already scopes results to streams where the caller is a
+  // stakeholder (sender OR recipient) — both directions, no leakage. (The
+  // old gRPC path defaulted to recipient-scoped because it couldn't express
+  // "sender OR recipient" in one filter; that's no longer needed.)
   return provided;
 }
 
@@ -554,19 +573,6 @@ async function getStreamOrThrow(client: CantonStreamsClient, sender: string, str
   }
 }
 
-async function getFlowOrThrow(client: CantonStreamsClient, sender: string, flowId: string) {
-  const flows = await client.listFlows({ sender });
-  const flow = flows.find((f) => f.sender === sender && f.streamId === flowId);
-  if (!flow) {
-    throw new AuthError(
-      404,
-      'flow_not_found',
-      `Flow not found: sender=${sender}, flowId=${flowId}`,
-    );
-  }
-  return flow;
-}
-
 // ---------------------------------------------------------------------------
 // JSON serialization helpers for Decimal
 // ---------------------------------------------------------------------------
@@ -691,9 +697,10 @@ app.get('/api/stream-requests', async (req, res) => {
     if (req.query['assetType'])
       filter.assetType = req.query['assetType'] as PendingStreamRequestFilter['assetType'];
 
-    const requests = await client.listPendingStreamRequests(
-      Object.keys(filter).length > 0 ? filter : undefined,
-    );
+    // gRPC read is not functional on this deploy — read over JSON (v2-read.ts).
+    let requests = await listPendingRequestsViaJson(authed.party);
+    if (filter.sender) requests = requests.filter((r: any) => r.config?.sender === filter.sender);
+    if (filter.recipient) requests = requests.filter((r: any) => r.config?.recipient === filter.recipient);
     res.json(serializeForJson(requests));
   } catch (err) {
     handleError(res, err, 'listPendingStreamRequests');
@@ -728,9 +735,9 @@ app.get('/api/streams', async (req, res) => {
     if (req.query['settlementMode'])
       filter.settlementMode = req.query['settlementMode'] as StreamFilter['settlementMode'];
 
-    const streams = await client.listStreams(
-      Object.keys(filter).length > 0 ? (filter as StreamFilter) : undefined,
-    );
+    // The SDK gRPC read path is not functional on this deploy (see v2-read.ts);
+    // read StreamAdmin over the JSON Ledger API instead, scoped to the caller.
+    const streams = await listStreamsViaJson(authed.party, filter);
     res.json(serializeForJson(streams));
   } catch (err) {
     handleError(res, err, 'listStreams');
@@ -745,13 +752,22 @@ app.get('/api/streams/:sender/:streamId', async (req, res) => {
   try {
     const authed = await createAuthorizedClientWithParty(req, 'query');
     client = authed.client;
-    const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
+    // gRPC read is not functional on this deploy — read over JSON (v2-read.ts).
+    const stream = await getStreamViaJson(
+      authed.party,
+      req.params['sender']!,
+      req.params['streamId']!,
+    );
+    if (!stream) {
+      // Graceful 404 (not a 500) so a missing stream doesn't wall the detail
+      // page in a red error.
+      res.status(404).json({ error: 'stream not found', reason: 'stream_not_found' });
+      return;
+    }
+    const cfg = stream['config'] as { sender?: string; recipient?: string };
     // A specific stream is only readable by its participants (or a
-    // configured operator-reader). The ledger may surface it more broadly
-    // through the proxy's actAs identity, so enforce participation here.
-    const isParticipant =
-      stream.config.sender === authed.party ||
-      stream.config.recipient === authed.party;
+    // configured operator-reader).
+    const isParticipant = cfg.sender === authed.party || cfg.recipient === authed.party;
     if (!isParticipant && !OPERATOR_READERS.has(authed.party)) {
       throw new AuthError(
         403,
@@ -776,10 +792,19 @@ app.get('/api/streams/:sender/:streamId/history', async (req, res) => {
     // History exposes the same stream data as the getter, so apply the
     // same participation check: only the sender, recipient, or a
     // configured operator-reader may read it.
-    const stream = await client.getStream(req.params['sender']!, req.params['streamId']!);
-    const isParticipant =
-      stream.config.sender === authed.party ||
-      stream.config.recipient === authed.party;
+    // gRPC read is not functional on this deploy — read over JSON + synthesize
+    // history from current state (v2-read.ts).
+    const stream = await getStreamViaJson(
+      authed.party,
+      req.params['sender']!,
+      req.params['streamId']!,
+    );
+    if (!stream) {
+      res.json([]);
+      return;
+    }
+    const cfg = stream['config'] as { sender?: string; recipient?: string };
+    const isParticipant = cfg.sender === authed.party || cfg.recipient === authed.party;
     if (!isParticipant && !OPERATOR_READERS.has(authed.party)) {
       throw new AuthError(
         403,
@@ -787,7 +812,7 @@ app.get('/api/streams/:sender/:streamId/history', async (req, res) => {
         'You may only read a stream where you are the sender or recipient.',
       );
     }
-    const events = await client.getStreamHistory(req.params['sender']!, req.params['streamId']!);
+    const events = synthesizeStreamHistory(stream);
     res.json(serializeForJson(events));
   } catch (err) {
     handleError(res, err, 'getStreamHistory');
@@ -807,9 +832,30 @@ app.post('/api/streams', async (req, res) => {
     enforceRole(auth.party, getRequiredRole('create'), bodySender);
 
     const params = parseCreateParams(req.body, auth.party);
-    client = createClientForAuth(auth);
-    const result = await client.createStream(params);
-    res.status(201).json(result);
+    // gRPC submit is not functional on this deploy — create the StreamAdmin
+    // over the JSON Ledger API (v2-write.ts; proven working).
+    const instrumentAdmin = params.instrumentRef?.issuer ?? process.env['CC_ADMIN_PARTY'] ?? '';
+    if (!instrumentAdmin) {
+      throw new AuthError(400, 'missing_instrument', 'instrumentRef.issuer (or CC_ADMIN_PARTY) is required to create a stream');
+    }
+    const created = await createStreamAdminViaJson({
+      streamId: params.streamId,
+      sender: params.sender,
+      recipient: params.recipient,
+      operator: params.escrowOperator ?? params.sender,
+      instrumentAdmin,
+      instrumentId: params.instrumentRef?.instrumentId ?? 'Amulet',
+      totalDeposited: params.totalDeposited.toString(),
+      vestingMode: vestingModeToDaJson(params.vestingMode),
+      startTime: params.startTime,
+      endTime: params.endTime,
+      cancellable: params.cancellable ?? false,
+    });
+    res.status(201).json({
+      requestContractId: created.updateId,
+      updateId: created.updateId,
+      streamId: params.streamId,
+    });
   } catch (err) {
     handleError(res, err, 'createStream');
   } finally {
@@ -1672,6 +1718,57 @@ app.post('/api/v1/streams/:id/accept', async (req, res) => {
 });
 
 /**
+ * GET /api/v1/received — ledger-backed incoming view for the caller party:
+ * pending offers awaiting accept + CC already delivered. Independent of the
+ * proxy JSON store, so it surfaces transfers the proxy never created (raw
+ * registry or wallet-sent) that the stream list cannot show.
+ */
+app.get('/api/v1/received', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'query', authConfig);
+    const view = await v1Lane.listReceived(auth.party);
+    res.json(serializeForJson(view));
+  } catch (err) {
+    handleError(res, err, 'listV1Received');
+  }
+});
+
+/**
+ * POST /api/v1/received/accept — recipient accepts a pending incoming offer by
+ * contract id (model-1 hosted/dev-mode). The proxy submits
+ * TransferInstruction_Accept as the caller; the ledger enforces the caller is
+ * the offer's receiver, and the proxy only surfaces offers addressed to them.
+ */
+app.post('/api/v1/received/accept', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.acceptReceived(auth.party, body['transferInstructionCid'] as string);
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'acceptV1Received');
+  }
+});
+
+/**
+ * POST /api/v1/received/prepare-accept — model-2 (wallet) counterpart: returns
+ * the TransferInstruction_Accept command + disclosed contracts for the caller's
+ * WALLET to sign and submit on its own participant. Needed when the recipient is
+ * NOT hosted on the proxy's participant (e.g. a Loop wallet party), so the proxy
+ * can't submit for it but can still build the registry choice-context.
+ */
+app.post('/api/v1/received/prepare-accept', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'withdraw', authConfig);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const result = await v1Lane.prepareAcceptReceived(auth.party, body['transferInstructionCid'] as string);
+    res.json(serializeForJson(result));
+  } catch (err) {
+    handleError(res, err, 'prepareAcceptV1Received');
+  }
+});
+
+/**
  * POST /api/v1/streams/:id/prepare-withdraw — sender reclaims a pending
  * (unaccepted) offer. Forms TransferInstruction_Withdraw.
  */
@@ -1732,9 +1829,11 @@ app.get('/api/flows', async (req, res) => {
     if (scoped.recipient) filter.recipient = scoped.recipient;
     if (req.query['status']) filter.status = req.query['status'] as FlowFilter['status'];
 
-    const flows = await client.listFlows(
-      Object.keys(filter).length > 0 ? (filter as FlowFilter) : undefined,
-    );
+    // gRPC read is not functional on this deploy — read over JSON (v2-read.ts).
+    let flows = await listFlowsViaJson(authed.party);
+    if (filter.sender) flows = flows.filter((f: any) => f.sender === filter.sender);
+    if (filter.recipient) flows = flows.filter((f: any) => f.recipient === filter.recipient);
+    if (filter.status) flows = flows.filter((f: any) => f.status === filter.status);
     res.json(serializeForJson(flows));
   } catch (err) {
     handleError(res, err, 'listFlows');
@@ -1780,10 +1879,22 @@ app.post('/api/flows', async (req, res) => {
       startTime: req.body?.['startTime'] ? new Date(req.body['startTime'] as string) : new Date(),
     };
 
-    // StreamFlow is signed by sender + recipient + escrowOperator.
-    client = createClientForAuthWithParties(auth, [recipient, escrowOperator]);
-    const result = await client.createFlow(params);
-    res.status(201).json(result);
+    // gRPC submit is not functional on this deploy — create the StreamFlowAdmin
+    // over the JSON Ledger API (v2-write.ts). It is `signatory sender`, so
+    // actAs=[sender] suffices.
+    const streamId = params.streamId ?? `flow-${Date.now()}`;
+    const created = await createFlowAdminViaJson({
+      streamId,
+      sender: params.sender,
+      recipient: params.recipient,
+      operator: escrowOperator,
+      instrumentAdmin: params.instrumentRef.issuer,
+      instrumentId: params.instrumentRef.instrumentId,
+      flowRate: params.flowRate.toString(),
+      initialFundedAmount: params.fundedAmount.toString(),
+      startTime: params.startTime ?? new Date(),
+    });
+    res.status(201).json({ updateId: created.updateId, streamId });
   } catch (err) {
     handleError(res, err, 'createFlow');
   } finally {
@@ -1793,8 +1904,6 @@ app.post('/api/flows', async (req, res) => {
 
 /** POST /api/flows/:sender/:flowId/top-up — sender adds to the funded balance */
 app.post('/api/flows/:sender/:flowId/top-up', async (req, res) => {
-  let lookupClient: CantonStreamsClient | undefined;
-  let client: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'top-up', authConfig);
     const sender = requirePartyId(req.params['sender'], 'sender');
@@ -1802,102 +1911,91 @@ app.post('/api/flows/:sender/:flowId/top-up', async (req, res) => {
     // Enforce: caller must be the sender (top-up is sender-only)
     enforceRole(auth.party, getRequiredRole('top-up'), sender);
     const topUpAmount = requireAmount(req.body?.['topUpAmount'], 'topUpAmount');
-    const settlementReference = requireId(
-      req.body?.['settlementReference'],
-      'settlementReference',
-    );
+    const newAllocationCid = optionalId(req.body?.['settlementReference'], 'settlementReference');
 
-    lookupClient = createClientForAuth(auth);
-    const flow = await getFlowOrThrow(lookupClient, sender, flowId);
-    // TopUp_Flow is controlled by sender + escrowOperator.
-    client = createClientForAuthWithParties(auth, [flow.escrowOperator]);
-    const result = await client.topUpFlow(sender, flowId, { topUpAmount, settlementReference });
-    res.json(serializeForJson(result));
+    const flow = await getFlowViaJson(auth.party, sender, flowId);
+    if (!flow) {
+      throw new AuthError(404, 'flow_not_found', `Flow not found: sender=${sender}, flowId=${flowId}`);
+    }
+    // TopUp_Flow_Admin is controller operator — bookkeeping over JSON.
+    const result = await topUpFlowAdminViaJson(
+      flow.contractId as string,
+      flow.escrowOperator as string,
+      topUpAmount.toString(),
+      newAllocationCid,
+    );
+    res.json({ ...result, flowId });
   } catch (err) {
     handleError(res, err, 'topUpFlow');
-  } finally {
-    await lookupClient?.close();
-    await client?.close();
   }
 });
 
-/** POST /api/flows/:sender/:flowId/withdraw — recipient claims accrued + funded */
+/** POST /api/flows/:sender/:flowId/withdraw — record a settle iteration */
 app.post('/api/flows/:sender/:flowId/withdraw', async (req, res) => {
-  let lookupClient: CantonStreamsClient | undefined;
-  let client: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'withdraw', authConfig);
     const sender = requirePartyId(req.params['sender'], 'sender');
     const flowId = requireId(req.params['flowId'], 'flowId');
-    const settlementReference = requireId(
-      req.body?.['settlementReference'],
-      'settlementReference',
-    );
+    const newAllocationCid = optionalId(req.body?.['settlementReference'], 'settlementReference');
+    const iterationAmount = optionalAmount(req.body?.['settledAmount'], 'settledAmount');
 
-    lookupClient = createClientForAuth(auth);
-    const flow = await getFlowOrThrow(lookupClient, sender, flowId);
-    enforceRole(auth.party, getRequiredRole('withdraw'), flow.sender, flow.recipient);
-    // Withdraw_Flow is controlled by recipient + escrowOperator.
-    client = createClientForAuthWithParties(auth, [flow.escrowOperator]);
-    const result = await client.withdrawFlow(sender, flowId, {
-      settlementReference,
-      ...(req.body?.['withdrawTime']
-        ? { withdrawTime: new Date(req.body['withdrawTime'] as string) }
-        : {}),
+    const flow = await getFlowViaJson(auth.party, sender, flowId);
+    if (!flow) {
+      throw new AuthError(404, 'flow_not_found', `Flow not found: sender=${sender}, flowId=${flowId}`);
+    }
+    enforceRole(auth.party, getRequiredRole('withdraw'), flow.sender as string, flow.recipient as string);
+    // Sync_Iteration_Flow (controller operator) advances the admin index. The
+    // Amulet money leg (Allocation_Settle) is DSO-gated on this participant, so
+    // this records the iteration only — funds are not moved here.
+    const result = await syncIterationFlowViaJson(
+      flow.contractId as string,
+      flow.escrowOperator as string,
+      (iterationAmount ?? 0).toString(),
+      newAllocationCid,
+    );
+    res.json({
+      ...result,
+      flowId,
+      settlementNote: 'admin iteration recorded; Amulet Allocation_Settle is DSO-gated on this participant',
     });
-    res.json(serializeForJson(result));
   } catch (err) {
     handleError(res, err, 'withdrawFlow');
-  } finally {
-    await lookupClient?.close();
-    await client?.close();
   }
 });
 
-/** POST /api/flows/:sender/:flowId/stop — mutual termination */
+/** POST /api/flows/:sender/:flowId/stop — mark the flow cancelled */
 app.post('/api/flows/:sender/:flowId/stop', async (req, res) => {
-  let lookupClient: CantonStreamsClient | undefined;
-  let client: CantonStreamsClient | undefined;
   try {
     const auth = await authorizeRequest(req, 'stop', authConfig);
     const sender = requirePartyId(req.params['sender'], 'sender');
     const flowId = requireId(req.params['flowId'], 'flowId');
-    const recipientSettlement = requireNonNegativeAmount(
-      req.body?.['recipientSettlement'],
-      'recipientSettlement',
-    );
-    const senderRefund = requireNonNegativeAmount(req.body?.['senderRefund'], 'senderRefund');
-    const recipientSettlementReference = optionalId(
-      req.body?.['recipientSettlementReference'],
-      'recipientSettlementReference',
-    );
-    const senderRefundReference = optionalId(
-      req.body?.['senderRefundReference'],
-      'senderRefundReference',
+    const releasedAllocationCid = optionalId(
+      req.body?.['senderRefundReference'] ?? req.body?.['recipientSettlementReference'],
+      'releasedAllocationCid',
     );
 
-    lookupClient = createClientForAuth(auth);
-    const flow = await getFlowOrThrow(lookupClient, sender, flowId);
-    enforceRole(auth.party, getRequiredRole('stop'), flow.sender, flow.recipient);
-    // Stop_Flow is controlled by sender + recipient + escrowOperator.
-    client = createClientForAuthWithParties(auth, [
-      flow.sender,
-      flow.recipient,
-      flow.escrowOperator,
-    ]);
-    const result = await client.stopFlow(sender, flowId, {
-      recipientSettlement,
-      senderRefund,
-      ...(recipientSettlementReference !== undefined ? { recipientSettlementReference } : {}),
-      ...(senderRefundReference !== undefined ? { senderRefundReference } : {}),
-      ...(req.body?.['stopTime'] ? { stopTime: new Date(req.body['stopTime'] as string) } : {}),
+    const flow = await getFlowViaJson(auth.party, sender, flowId);
+    if (!flow) {
+      throw new AuthError(404, 'flow_not_found', `Flow not found: sender=${sender}, flowId=${flowId}`);
+    }
+    enforceRole(auth.party, getRequiredRole('stop'), flow.sender as string, flow.recipient as string);
+    // Mark_Cancelled_Flow_Admin (controller operator). finalWithdrawn must be
+    // >= current totalWithdrawn and <= funded — hold at the current recorded
+    // total (the Amulet Allocation_Cancel refund is DSO-gated here).
+    const result = await markCancelledFlowAdminViaJson(
+      flow.contractId as string,
+      flow.escrowOperator as string,
+      String(flow.totalWithdrawn ?? '0'),
+      new Date(),
+      releasedAllocationCid,
+    );
+    res.json({
+      ...result,
+      flowId,
+      settlementNote: 'flow marked cancelled; Amulet Allocation_Cancel refund is DSO-gated on this participant',
     });
-    res.json(serializeForJson(result));
   } catch (err) {
     handleError(res, err, 'stopFlow');
-  } finally {
-    await lookupClient?.close();
-    await client?.close();
   }
 });
 
@@ -1909,8 +2007,10 @@ app.post('/api/flows/:sender/:flowId/stop', async (req, res) => {
 app.get('/api/policies', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
-    const policies = await client.listPolicies();
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
+    // gRPC read is not functional on this deploy — read over JSON (v2-read.ts).
+    const policies = await listPoliciesViaJson(authed.party);
     res.json(serializeForJson(policies));
   } catch (err) {
     handleError(res, err, 'listPolicies');
@@ -1931,10 +2031,12 @@ app.post('/api/policies/:contractId/revoke', async (req, res) => {
     const contractId = requireId(req.params['contractId'], 'contractId');
 
     // Load the policy first, then assert the caller is the sender (only
-    // party authorized to revoke
-    // per the Daml template's controller list).
-    const policies = await client.listPolicies();
-    const policy = policies.find((p) => p.contractId === contractId);
+    // party authorized to revoke per the Daml template's controller list).
+    // gRPC read is not functional on this deploy — read over JSON.
+    const policies = await listPoliciesViaJson(callerParty);
+    const policy = policies.find((p: any) => p.contractId === contractId) as
+      | { contractId: string; sender: string }
+      | undefined;
     if (!policy) {
       res.status(404).json({ error: 'policy not found or not visible to caller' });
       return;
@@ -1954,7 +2056,8 @@ app.post('/api/policies/:contractId/revoke', async (req, res) => {
       return;
     }
 
-    const result = await client.revokePolicy(contractId);
+    // gRPC submit is not functional on this deploy — revoke over JSON.
+    const result = await revokePolicyViaJson(contractId, callerParty);
     res.json(result);
   } catch (err) {
     handleError(res, err, 'revokePolicy');
@@ -1967,9 +2070,12 @@ app.post('/api/policies/:contractId/revoke', async (req, res) => {
 app.get('/api/execution-logs', async (req, res) => {
   let client: CantonStreamsClient | undefined;
   try {
-    client = await createAuthorizedClient(req, 'query');
+    const authed = await createAuthorizedClientWithParty(req, 'query');
+    client = authed.client;
     const policyId = req.query['policyId'] as string | undefined;
-    const logs = await client.listExecutionLogs(policyId);
+    // gRPC read is not functional on this deploy — read over JSON (v2-read.ts).
+    let logs = await listExecutionLogsViaJson(authed.party);
+    if (policyId) logs = logs.filter((l: any) => l.policyId === policyId);
     res.json(serializeForJson(logs));
   } catch (err) {
     handleError(res, err, 'listExecutionLogs');
@@ -2034,6 +2140,16 @@ app.get('/api/health', (_req, res) => {
     canton: { host: CANTON_HOST, port: CANTON_PORT },
     readiness: startupReadiness,
   });
+});
+
+/**
+ * GET /api/assets — supported assets for the create-stream / create-flow asset
+ * picker. Public deployment config (admin parties resolved from the proxy env),
+ * no party/auth needed; the picker also offers a "Custom" entry for anything
+ * not listed here.
+ */
+app.get('/api/assets', (_req, res) => {
+  res.json(getSupportedAssets());
 });
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-/** Incoming streams for the connected party. */
+/** Incoming streams + transfers for the connected party. */
 
 import { type CSSProperties } from 'react';
 import { Link } from 'react-router';
@@ -11,7 +11,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
-import { useStreams, useStreamsV1, useAcceptTransferV1 } from '../hooks/useStreams.js';
+import { useStreams, useReceivedV1, useAcceptReceivedV1 } from '../hooks/useStreams.js';
 import { explorerUpdateUrl, explorerName, isVerifiableUpdateId } from '../lib/scanLink.js';
 import {
   Skeleton,
@@ -24,36 +24,24 @@ import { VestingBadge } from '../components/primitives/VestingBadge.js';
 import { SettlementBadge } from '../components/primitives/SettlementBadge.js';
 import { WalletApprovalControl } from '../components/streams/WalletApprovalControl.js';
 import type { Stream } from '@canton-streams/sdk/browser';
-import type { V1StreamView, V1PendingTransferRecord } from '../api/client.js';
+import type { V1ReceivedPendingOffer, V1ReceivedTransfer } from '../api/client.js';
 
-interface V1Offer {
-  readonly view: V1StreamView;
-  readonly offer: V1PendingTransferRecord;
+/** Amulet is Canton Coin — show the familiar ticker in the recipient view. */
+function instrumentLabel(id: string): string {
+  return id === 'Amulet' ? 'CC' : id;
 }
 
 export function InboxPage() {
   const { party, isAuthenticated } = useAuth();
 
   const incomingQ = useStreams(party ? { recipient: party } : undefined);
-  // V1 pending offers (TransferInstructions awaiting this party's acceptance)
-  // never appear in the V2 `useStreams` feed, so surface them here too — this is
-  // where a recipient looks for "money sent to me". Only OPEN, non-expired offers
-  // where this party is the recipient are actionable.
-  const v1Q = useStreamsV1();
-  const nowMs = Date.now();
-  const myV1 = (v1Q.data ?? []).filter((v) => v.agreement.recipientParty === party);
-  const v1Offers: readonly V1Offer[] = myV1.flatMap((view) =>
-    (view.state.pendingTransfers ?? [])
-      .filter((p) => p.status === 'pending' && Date.parse(p.executeBefore) > nowMs)
-      .map((offer) => ({ view, offer })),
-  );
-  // Offers this party already accepted — money has landed. Surface them so the
-  // recipient gets a "received" confirmation instead of the card just vanishing.
-  const v1Received: readonly V1Offer[] = myV1.flatMap((view) =>
-    (view.state.pendingTransfers ?? [])
-      .filter((p) => p.status === 'accepted')
-      .map((offer) => ({ view, offer })),
-  );
+  // Ledger-backed incoming CC: pending offers this party must accept + CC
+  // already delivered. Read straight from the participant, so it surfaces every
+  // transfer to the party — including raw-registry and wallet-sent ones the
+  // proxy store never tracked (which the V2 `useStreams` feed also cannot show).
+  const receivedQ = useReceivedV1();
+  const pending = receivedQ.data?.pending ?? [];
+  const received = receivedQ.data?.received ?? [];
 
   if (!isAuthenticated) {
     return (
@@ -71,12 +59,17 @@ export function InboxPage() {
 
   const incoming = incomingQ.data ?? [];
   const incomingCount = incoming.length;
+  const nothing =
+    !incomingQ.isPending &&
+    incomingCount === 0 &&
+    pending.length === 0 &&
+    received.length === 0;
 
   return (
     <div style={{ paddingTop: 28 }}>
       <PageHeader
         title="Incoming"
-        subtitle="Streams where you are the recipient"
+        subtitle="Streams and transfers where you are the recipient"
         actions={
           <Link to="/create" className="btn btn-primary">
             <ArrowUpRight size={14} /> New stream
@@ -84,31 +77,34 @@ export function InboxPage() {
         }
       />
 
-      {v1Offers.length > 0 && (
+      {pending.length > 0 && (
         <div style={{ marginBottom: 18 }}>
-          <SectionHeader title="Offers awaiting your acceptance" count={v1Offers.length} />
+          <SectionHeader title="Offers awaiting your acceptance" count={pending.length} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {v1Offers.map(({ view, offer }) => (
-              <IncomingOfferCard
-                key={offer.transferInstructionCid}
-                view={view}
-                offer={offer}
-                recipientParty={party!}
-              />
+            {pending.map((offer) => (
+              <ReceivedOfferCard key={offer.transferInstructionCid} offer={offer} />
             ))}
           </div>
         </div>
       )}
 
-      {v1Received.length > 0 && (
+      {received.length > 0 && (
         <div style={{ marginBottom: 18 }}>
-          <SectionHeader title="Received" count={v1Received.length} />
+          <SectionHeader title="Received" count={received.length} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {v1Received.map(({ view, offer }) => (
-              <ReceivedRow key={offer.transferInstructionCid} view={view} offer={offer} />
+            {received.map((r) => (
+              <ReceivedTransferRow key={r.updateId} transfer={r} />
             ))}
           </div>
         </div>
+      )}
+
+      {receivedQ.isError && (
+        <ErrorState
+          error={receivedQ.error}
+          title="Could not load incoming transfers"
+          onRetry={() => receivedQ.refetch()}
+        />
       )}
 
       {incomingQ.isError && (
@@ -119,19 +115,16 @@ export function InboxPage() {
         />
       )}
 
-      {incomingQ.isPending && <Skeleton.Row count={3} height={120} />}
+      {(incomingQ.isPending || receivedQ.isPending) && <Skeleton.Row count={3} height={120} />}
 
-      {!incomingQ.isPending &&
-        incomingCount === 0 &&
-        v1Offers.length === 0 &&
-        v1Received.length === 0 && (
+      {nothing && (
         <div className="card" style={{ padding: 36, textAlign: 'center' }}>
           <InboxIcon
             size={28}
             style={{ color: 'var(--fg-5)', margin: '0 auto 8px' }}
           />
           <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-3)' }}>
-            No incoming streams yet. V2 funding approvals happen in the wallet.
+            No incoming streams or transfers yet.
           </p>
         </div>
       )}
@@ -249,18 +242,12 @@ function IncomingCard({ stream }: { readonly stream: Stream }) {
   );
 }
 
-function IncomingOfferCard({
-  view,
-  offer,
-  recipientParty,
-}: {
-  readonly view: V1StreamView;
-  readonly offer: V1PendingTransferRecord;
-  readonly recipientParty: string;
-}) {
-  const accept = useAcceptTransferV1();
-  const sender = view.agreement.payerParty;
-  const expires = new Date(offer.executeBefore);
+/** A pending incoming CC offer (AmuletTransferInstruction) the connected party
+ * can accept. Read from the ledger, so it appears whether or not the transfer
+ * was created through a proxy stream. */
+function ReceivedOfferCard({ offer }: { readonly offer: V1ReceivedPendingOffer }) {
+  const accept = useAcceptReceivedV1();
+  const sender = offer.sender;
 
   return (
     <div className="card" style={cardStyle}>
@@ -279,7 +266,7 @@ function IncomingOfferCard({
           >
             <ArrowDownLeft size={11} /> Offer from ·{' '}
             <span className="mono" style={{ color: 'var(--fg-3)' }}>
-              {view.agreement.agreementId}
+              {sender.split('::')[0] ?? sender}
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
@@ -290,56 +277,65 @@ function IncomingOfferCard({
               {Number(offer.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })}
             </span>
             <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-              CC
+              {instrumentLabel(offer.instrumentId)}
             </span>
           </div>
         </div>
-        <button
-          className="btn btn-primary"
-          onClick={() =>
-            accept.mutate({
-              id: view.agreement.agreementId,
-              recipientParty,
-              selector: { transferInstructionCid: offer.transferInstructionCid },
-            })
-          }
-          disabled={accept.isPending || accept.isSuccess}
-          style={{ minWidth: 104, justifyContent: 'center' }}
-        >
-          {accept.isPending ? (
-            <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />
-          ) : accept.isSuccess ? (
-            'Accepted'
-          ) : (
-            <>
-              <HandCoins size={14} /> Accept
-            </>
-          )}
-        </button>
+        {offer.expired ? (
+          <span
+            style={{
+              minWidth: 104,
+              textAlign: 'center',
+              fontSize: 12,
+              fontWeight: 500,
+              color: 'var(--fg-4)',
+              border: '1px solid var(--line)',
+              borderRadius: 6,
+              padding: '6px 10px',
+            }}
+          >
+            Expired
+          </span>
+        ) : (
+          <button
+            className="btn btn-primary"
+            onClick={() => accept.mutate(offer.transferInstructionCid)}
+            disabled={accept.isPending || accept.isSuccess}
+            style={{ minWidth: 104, justifyContent: 'center' }}
+          >
+            {accept.isPending ? (
+              <Loader2 size={14} style={{ animation: 'spin 800ms linear infinite' }} />
+            ) : accept.isSuccess ? (
+              'Accepted'
+            ) : (
+              <>
+                <HandCoins size={14} /> Accept
+              </>
+            )}
+          </button>
+        )}
       </div>
 
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginTop: 12,
-          paddingTop: 12,
-          borderTop: '1px solid var(--line)',
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ fontSize: 11.5, color: 'var(--fg-4)' }}>
-          accept before {expires.toLocaleString()}
-        </div>
-        <Link
-          to={`/v1/streams/${encodeURIComponent(view.agreement.agreementId)}`}
-          className="btn btn-ghost btn-sm"
+      {offer.executeBefore && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginTop: 12,
+            paddingTop: 12,
+            borderTop: '1px solid var(--line)',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
         >
-          View details <ArrowUpRight size={11} />
-        </Link>
-      </div>
+          <div style={{ fontSize: 11.5, color: offer.expired ? 'var(--danger, #e5484d)' : 'var(--fg-4)' }}>
+            {offer.expired ? 'expired ' : 'accept before '}
+            {new Date(offer.executeBefore).toLocaleString()}
+            {offer.expired && ' — ask the sender to re-send'}
+          </div>
+        </div>
+      )}
 
       {accept.isError && (
         <div style={{ marginTop: 10, fontSize: 11.5, color: 'var(--danger, #e5484d)' }}>
@@ -350,14 +346,9 @@ function IncomingOfferCard({
   );
 }
 
-function ReceivedRow({
-  view,
-  offer,
-}: {
-  readonly view: V1StreamView;
-  readonly offer: V1PendingTransferRecord;
-}) {
-  const sender = view.agreement.payerParty;
+/** A completed incoming transfer — CC that has landed in the party's wallet,
+ * with its on-chain updateId linked to the explorer. */
+function ReceivedTransferRow({ transfer }: { readonly transfer: V1ReceivedTransfer }) {
   return (
     <div
       className="card"
@@ -370,37 +361,25 @@ function ReceivedRow({
       }}
     >
       <CheckCircle2 size={16} style={{ color: 'var(--accent, #2e9e6b)', flexShrink: 0 }} />
-      <span
-        className="mono"
-        style={{ fontSize: 15, fontWeight: 500, color: 'var(--fg)' }}
-      >
-        {Number(offer.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })} CC
+      <span className="mono" style={{ fontSize: 15, fontWeight: 500, color: 'var(--fg)' }}>
+        {Number(transfer.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })} CC
       </span>
       <span style={{ fontSize: 12, color: 'var(--fg-4)' }}>
-        received from{' '}
-        <span className="mono" style={{ color: 'var(--fg-3)' }}>
-          {sender.split('::')[0] ?? sender}
-        </span>
+        received · {new Date(transfer.at).toLocaleString()}
       </span>
       <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 12 }}>
-        {isVerifiableUpdateId(offer.finalUpdateId) && (
+        {isVerifiableUpdateId(transfer.updateId) && (
           <a
-            href={explorerUpdateUrl(offer.finalUpdateId)}
+            href={explorerUpdateUrl(transfer.updateId)}
             target="_blank"
             rel="noopener noreferrer"
             className="mono"
             style={{ fontSize: 11, color: 'var(--accent)', textDecoration: 'none' }}
-            title={offer.finalUpdateId}
+            title={transfer.updateId}
           >
             View on {explorerName()} ↗
           </a>
         )}
-        <Link
-          to={`/v1/streams/${encodeURIComponent(view.agreement.agreementId)}`}
-          className="btn btn-ghost btn-sm"
-        >
-          Details <ArrowUpRight size={11} />
-        </Link>
       </div>
     </div>
   );

@@ -23,6 +23,7 @@ import { useCreateStream } from '../../hooks/useStreams.js';
 import { useAuth } from '../../store/auth.js';
 import { FormField } from '../forms/FormField.js';
 import { FormError } from '../forms/FormError.js';
+import { AssetSelect } from './AssetSelect.js';
 import {
   createStreamSchema,
   type CreateStreamSchemaValues,
@@ -433,6 +434,9 @@ const inputStyle: CSSProperties = {
   fontSize: 13,
   color: 'var(--fg)',
   outline: 'none',
+  // Render native controls (date/time picker calendar icon + spinners, select
+  // arrow) in dark mode so they're visible against the dark form background.
+  colorScheme: 'dark',
 };
 
 function StepHeader({
@@ -514,20 +518,7 @@ function StepRecipient() {
           </FormField>
         </div>
 
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: '1fr 180px',
-            gap: 14,
-          }}
-        >
-          <FormField name="instrumentAdmin" label="Instrument admin" required>
-            <input className={inputClass} style={inputStyle} placeholder="AmuletAdmin::1220…" />
-          </FormField>
-          <FormField name="instrumentId" label="Instrument id" required>
-            <input className={inputClass} style={inputStyle} placeholder="Amulet" />
-          </FormField>
-        </div>
+        <AssetSelect />
       </div>
     </>
   );
@@ -691,8 +682,49 @@ const SETTLEMENT_OPTIONS = [
 function StepSettlement() {
   const { watch, setValue, register } = useFormContext<CreateStreamSchemaValues>();
   const navigate = useNavigate();
+  const { party } = useAuth();
   const settlementMode = watch('settlementMode');
   const recipient = watch('recipient');
+  const instrumentAdmin = watch('instrumentAdmin');
+  const escrowOperator = watch('escrowOperator');
+  const fundingReference = watch('fundingReference');
+  const senderAccount = watch('senderAccount');
+  const recipientAccount = watch('recipientAccount');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Auto-derive the settlement fields so the user never hand-types JSON: the
+  // operator defaults to the sender (self-operated) and the token-standard
+  // account records are built from the parties + instrument admin. The proxy's
+  // StreamAdmin create only uses parties/amounts/times, so these are metadata —
+  // sensible defaults let the user click straight through. Only fills blanks,
+  // so anything the user (or a deep link) set is preserved.
+  useEffect(() => {
+    if (settlementMode !== SettlementMode.TokenStandardCustody) return;
+    if (party && !escrowOperator) setValue('escrowOperator', party, { shouldValidate: true });
+    if (!fundingReference) setValue('fundingReference', 'stream-funding', { shouldValidate: true });
+    if (party && instrumentAdmin && !senderAccount) {
+      setValue('senderAccount', JSON.stringify({ custodian: instrumentAdmin, owner: party, id: 'amulet' }), {
+        shouldValidate: true,
+      });
+    }
+    if (recipient && instrumentAdmin && !recipientAccount) {
+      setValue(
+        'recipientAccount',
+        JSON.stringify({ custodian: instrumentAdmin, owner: recipient, id: 'amulet' }),
+        { shouldValidate: true },
+      );
+    }
+  }, [
+    settlementMode,
+    party,
+    recipient,
+    instrumentAdmin,
+    escrowOperator,
+    fundingReference,
+    senderAccount,
+    recipientAccount,
+    setValue,
+  ]);
 
   return (
     <>
@@ -816,38 +848,64 @@ function StepSettlement() {
             marginTop: 20,
           }}
         >
-          <FormField name="fundingReference" label="Funding reference" required>
-            <input
-              className={inputClass}
-              style={inputStyle}
-              placeholder="allocation-request/source-holding"
-            />
-          </FormField>
-          <FormField name="escrowOperator" label="Escrow operator" required>
+          <FormField
+            name="escrowOperator"
+            label="Escrow operator"
+            required
+            help="The party that runs settlement on your behalf. Defaults to you (self-operated) — leave as-is unless a separate operator holds the escrow."
+          >
             <input className={inputClass} style={inputStyle} placeholder="EscrowOperator::1220…" />
           </FormField>
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
-              gap: 14,
-            }}
+          <FormField
+            name="fundingReference"
+            label="Funding reference"
+            required
+            help="A label for where the streamed funds come from. Auto-filled; change only if you track a specific funding source."
           >
-            <FormField name="senderAccount" label="Sender account" required>
-              <input
-                className={inputClass}
-                style={inputStyle}
-                placeholder='{"custodian":"…","owner":"…","id":"…"}'
-              />
-            </FormField>
-            <FormField name="recipientAccount" label="Recipient account" required>
-              <input
-                className={inputClass}
-                style={inputStyle}
-                placeholder='{"custodian":"…","owner":"…","id":"…"}'
-              />
-            </FormField>
-          </div>
+            <input className={inputClass} style={inputStyle} placeholder="stream-funding" />
+          </FormField>
+
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            style={advancedToggleStyle}
+          >
+            {showAdvanced ? '▾' : '▸'} Advanced — token-standard account records (auto-filled)
+          </button>
+          {showAdvanced && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: 14,
+              }}
+            >
+              <FormField
+                name="senderAccount"
+                label="Sender account"
+                required
+                help="Your holding account as {custodian, owner, id}. Auto-derived from the parties."
+              >
+                <input
+                  className={inputClass}
+                  style={inputStyle}
+                  placeholder='{"custodian":"…","owner":"…","id":"…"}'
+                />
+              </FormField>
+              <FormField
+                name="recipientAccount"
+                label="Recipient account"
+                required
+                help="The recipient's holding account. Auto-derived from the parties."
+              >
+                <input
+                  className={inputClass}
+                  style={inputStyle}
+                  placeholder='{"custodian":"…","owner":"…","id":"…"}'
+                />
+              </FormField>
+            </div>
+          )}
         </div>
       )}
     </>
@@ -884,6 +942,16 @@ const radioStyle = (selected: boolean, disabled: boolean): CSSProperties => ({
   justifyContent: 'center',
   marginTop: 1,
 });
+
+const advancedToggleStyle: CSSProperties = {
+  alignSelf: 'flex-start',
+  background: 'none',
+  border: 'none',
+  padding: '2px 0',
+  fontSize: 12,
+  color: 'var(--fg-3)',
+  cursor: 'pointer',
+};
 
 // ---------------------------------------------------------------------------
 // Step 4: Review

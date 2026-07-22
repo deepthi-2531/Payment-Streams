@@ -1,0 +1,126 @@
+-- | StreamRecord — operator-signed, direct-transfer stream record.
+--
+-- Unlike `StreamAdmin` (which is `signatory sender` and models the
+-- iterated-allocation/escrow pattern), `StreamRecord` is signed **only by the
+-- operator** — the application provider that hosts this package, submits, and
+-- pays traffic. The payer and payee are recorded as plain **fields**, not as
+-- signatories or observers, so:
+--
+--   * only the operator's participant is a stakeholder, hence only it must vet
+--     this package;
+--   * the payer and payee are never stakeholders, so a stream can be recorded
+--     for *any* pair of parties on *any* nodes — the value moves separately as
+--     standard CIP-56 token-standard transfers, each visible to its own two
+--     parties and the network scan.
+--
+-- This is the on-ledger index for the direct-transfer streaming model
+-- (see `docs/SETTLEMENT-DESIGN.md`). It holds no funds and asserts no custody;
+-- it records that the operator scheduled a stream and how many cycles have
+-- settled. The authoritative value movement is the transfer chain, not this
+-- contract — treat it as a non-binding index the operator maintains.
+module CantonStreams.Stream.StreamRecord where
+
+import CantonStreams.Interface.Types (StreamId, StreamStatus(..), InstrumentIdV2)
+import CantonStreams.Stream.Time (assertNotInFuture)
+
+-- | How the payer authorizes funding for this stream. Recorded for UX only;
+-- the on-ledger authorization lives in the payer's own artifacts (a mandate
+-- contract, a per-cycle wallet signature, or an allocation).
+data FundingMode
+  = MandateFunding    -- ^ payer signed a rate-limited, revocable mandate
+  | PerCycleFunding   -- ^ payer's wallet authorizes each cycle
+  | EscrowFunding     -- ^ payer locked funds in an allocation
+  deriving (Eq, Show)
+
+template StreamRecord
+  with
+    streamId : StreamId
+    operator : Party
+      -- ^ Application provider. Sole signatory: hosts the package, submits,
+      -- pays traffic, holds no funds.
+    payer : Party
+      -- ^ Recorded only; NOT a stakeholder.
+    payee : Party
+      -- ^ Recorded only; NOT a stakeholder.
+    instrumentId : InstrumentIdV2
+    ratePerCycle : Decimal
+    cadenceSeconds : Int
+      -- ^ Seconds between cycles.
+    startTime : Time
+    endTime : Optional Time
+      -- ^ `None` for an open-ended stream.
+    fundingMode : FundingMode
+    -- ----- mutable state -----
+    totalPaid : Decimal
+    cyclesSettled : Int
+    lastTransferId : Optional Text
+      -- ^ updateId of the most recent settled cycle's transfer, for audit.
+    status : StreamStatus
+    observers : [Party]
+      -- ^ Opt-in visibility. Adding the payer/payee here lets them see the
+      -- record, but requires their participant to vet this package — so it is
+      -- used only for parties on nodes that run the application.
+  where
+    signatory operator
+    observer observers
+
+    ensure ratePerCycle >= 0.0
+      && totalPaid >= 0.0
+      && cyclesSettled >= 0
+      && cadenceSeconds > 0
+      && optional True (startTime <) endTime
+
+    -- | Record that one cycle settled (a committed direct transfer). Operator-
+    -- only bookkeeping: it advances the index, it does not move funds.
+    choice RecordCycle : ContractId StreamRecord
+      with
+        amount : Decimal
+        transferId : Text
+          -- ^ updateId of the cycle's on-ledger transfer (verifiable on scan).
+        settledAt : Optional Time
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        assertMsg "Cycle amount must be positive" (amount > 0.0)
+        optional (pure ()) (assertNotInFuture "settledAt") settledAt
+        create this with
+          totalPaid = totalPaid + amount
+          cyclesSettled = cyclesSettled + 1
+          lastTransferId = Some transferId
+
+    -- | Terminate the stream record. Operator-only.
+    choice MarkStopped : ContractId StreamRecord
+      controller operator
+      do
+        assertMsg "Stream not active" (status == Active)
+        create this with status = Cancelled
+
+    -- | Non-consuming projection for off-chain queries by a stakeholder.
+    nonconsuming choice GetStreamRecordInfo : StreamRecordInfo
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == operator || viewer `elem` observers)
+        pure StreamRecordInfo with
+          streamId
+          operator
+          payer
+          payee
+          ratePerCycle
+          totalPaid
+          cyclesSettled
+          status
+
+-- | Structured projection returned by `GetStreamRecordInfo`.
+data StreamRecordInfo = StreamRecordInfo with
+    streamId : StreamId
+    operator : Party
+    payer : Party
+    payee : Party
+    ratePerCycle : Decimal
+    totalPaid : Decimal
+    cyclesSettled : Int
+    status : StreamStatus
+  deriving (Eq, Show)

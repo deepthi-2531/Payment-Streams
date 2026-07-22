@@ -21,6 +21,7 @@ import {
 import type { RawFlow } from '../api/client.js';
 import { Form } from '../components/forms/Form.js';
 import { FormField } from '../components/forms/FormField.js';
+import { AssetSelect } from '../components/streams/AssetSelect.js';
 import { formatCantonDateTime } from '../lib/cantonTime.js';
 import {
   createFlowSchema,
@@ -188,12 +189,9 @@ function CreateFlowCard({ senderParty }: { readonly senderParty: string }) {
           <FormField name="escrowOperator" label="Escrow operator party" required>
             <input className={inputClass} style={inputStyle} placeholder="operator::1220abcd…" />
           </FormField>
-          <FormField name="instrumentAdmin" label="Instrument admin" required>
-            <input className={inputClass} style={inputStyle} placeholder="AmuletAdmin::1220…" />
-          </FormField>
-          <FormField name="instrumentId" label="Instrument id" required>
-            <input className={inputClass} style={inputStyle} placeholder="Amulet" />
-          </FormField>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <AssetSelect />
+          </div>
           <FormField
             name="ratePerDay"
             label="Rate (tokens / day)"

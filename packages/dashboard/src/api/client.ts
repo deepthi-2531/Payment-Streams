@@ -794,6 +794,19 @@ export class CantonStreamsApi {
     return this.request('POST', '/api/flows', params);
   }
 
+  /**
+   * Supported assets for the create-stream / create-flow asset picker. Public
+   * deployment config — admin parties resolved server-side for this network.
+   * Returns `[]` on any error so the picker degrades to Custom-only.
+   */
+  async listAssets(): Promise<SupportedAsset[]> {
+    try {
+      return await this.request<SupportedAsset[]>('GET', '/api/assets');
+    } catch {
+      return [];
+    }
+  }
+
   async topUpFlow(
     sender: string,
     flowId: string,
@@ -1034,6 +1047,31 @@ export class CantonStreamsApi {
       body,
     );
   }
+
+  /** Ledger-backed incoming view for the connected party: pending offers +
+   * delivered CC, read straight from the participant. Unlike listStreamsV1
+   * (proxy JSON store), this surfaces EVERY transfer to the party — including
+   * raw-registry and wallet-sent ones the proxy never tracked. */
+  async listReceivedV1(): Promise<V1ReceivedView> {
+    return this.request<V1ReceivedView>('GET', '/api/v1/received');
+  }
+
+  /** Recipient (hosted / dev-mode): accept a pending incoming offer by contract
+   * id. The proxy submits TransferInstruction_Accept as the connected party. */
+  async acceptReceivedV1(transferInstructionCid: string): Promise<V1ReceivedAcceptResult> {
+    return this.request<V1ReceivedAcceptResult>('POST', '/api/v1/received/accept', {
+      transferInstructionCid,
+    });
+  }
+
+  /** Recipient (wallet party NOT hosted on the proxy's participant, e.g. a Loop
+   * party): build the TransferInstruction_Accept command + disclosures so the
+   * caller's own wallet can sign and submit it. */
+  async prepareAcceptReceivedV1(transferInstructionCid: string): Promise<V1ReceivedPreparedAccept> {
+    return this.request<V1ReceivedPreparedAccept>('POST', '/api/v1/received/prepare-accept', {
+      transferInstructionCid,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,6 +1205,46 @@ export interface V1SettleResult {
   /** Present when a settle landed as a pending offer (recipient has no
    * pre-approval). `settled` is false in that case — the recipient must accept. */
   readonly pending?: V1PendingTransferRecord;
+}
+
+/** A pending incoming offer (AmuletTransferInstruction) the connected party may
+ * accept — read from the ledger, so not tied to any proxy stream record. */
+export interface V1ReceivedPendingOffer {
+  readonly transferInstructionCid: string;
+  readonly amount: string;
+  readonly sender: string;
+  readonly instrumentId: string;
+  readonly requestedAt?: string;
+  readonly executeBefore?: string;
+  /** True once the accept-by deadline has passed — Accept is no longer possible. */
+  readonly expired: boolean;
+}
+
+/** CC already delivered to the connected party (an accepted incoming transfer). */
+export interface V1ReceivedTransfer {
+  readonly updateId: string;
+  readonly amount: string;
+  readonly at: string;
+}
+
+/** Ledger-backed incoming view returned by GET /api/v1/received. */
+export interface V1ReceivedView {
+  readonly party: string;
+  readonly pending: readonly V1ReceivedPendingOffer[];
+  readonly received: readonly V1ReceivedTransfer[];
+}
+
+export interface V1ReceivedAcceptResult {
+  readonly updateId: string;
+  readonly amount: string;
+  readonly sender: string;
+}
+
+/** The prepared TransferInstruction_Accept for a wallet party to sign+submit. */
+export interface V1ReceivedPreparedAccept {
+  readonly command: unknown;
+  readonly disclosedContracts: readonly unknown[];
+  readonly actAs: string;
 }
 
 /** Model 2 — prepare-settle request. `holdings` are the payer's spendable
@@ -1404,6 +1482,16 @@ export interface RawFlow {
   cumulativePausedMicros: number;
   lastSettlementReference?: string;
   numIterations: number;
+}
+
+/** One supported asset returned by GET /api/assets. */
+export interface SupportedAsset {
+  key: string;
+  displayName: string;
+  instrumentAdmin: string;
+  instrumentId: string;
+  standard: string;
+  note?: string;
 }
 
 /** Create-flow request body (POST /api/flows). */

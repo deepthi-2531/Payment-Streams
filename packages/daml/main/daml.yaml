@@ -1,11 +1,12 @@
 sdk-version: 3.4.10
 name: canton-streams
 source: daml
-# Bumped 1.0.0 -> 1.1.0: this release changes lifecycle choice bodies
-# (cancellation priced at ledger time; mandatory schedule cap on the V2
-# operator settlement path). Template signatures/payloads are unchanged, so
-# this is a smart-contract-upgrade-compatible successor of 1.0.0.
-version: 1.1.0
+# Bumped 1.1.0 -> 1.2.0: adds two operator-facing templates for the
+# direct-transfer streaming model — `StreamRecord` (operator-signed on-ledger
+# index; payer/payee are fields, not stakeholders) and `StreamMandate` (the
+# payer's rate-limited, revocable pull authorization). Existing templates are
+# unchanged, so this is a smart-contract-upgrade-compatible successor of 1.1.0.
+version: 1.2.0
 dependencies:
   - daml-prim
   - daml-stdlib
