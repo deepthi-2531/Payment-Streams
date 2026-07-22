@@ -75,6 +75,8 @@ export interface V1LaneConfig {
   holdingTemplateId: string;
   /** On-ledger record template id (StreamAdmin) for create + Sync_Iteration. */
   streamAdminTemplateId: string;
+  /** Operator-signed direct-transfer index template id (StreamRecord). */
+  streamRecordTemplateId: string;
   /** TransferFactory interface id on the TransferFactory_Transfer exercise. */
   transferFactoryInterfaceId: string;
   /** v2 TransferFactory interface id (v2 direct-delivery money leg). */
@@ -116,6 +118,10 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     streamAdminTemplateId: get(
       'STREAM_ADMIN_TEMPLATE_ID',
       '#canton-streams:CantonStreams.Stream.StreamAdmin:StreamAdmin',
+    ),
+    streamRecordTemplateId: get(
+      'STREAM_RECORD_TEMPLATE_ID',
+      '#canton-streams:CantonStreams.Stream.StreamRecord:StreamRecord',
     ),
     transferFactoryInterfaceId: get(
       'TRANSFER_FACTORY_INTERFACE_ID',
@@ -178,6 +184,8 @@ export interface V1Agreement {
   arrearsPolicy?: ArrearsPolicy;
   /** Contract id of the pre-created StreamAdmin record (optional). */
   streamAdminCid?: string;
+  /** Contract id of the operator-signed StreamRecord index (optional). */
+  streamRecordCid?: string;
   /** Total committed at create time — stamped onto StreamAdmin.totalDeposited. */
   totalDeposited?: string;
   /** ISO timestamp the agreement row was created. */
@@ -1527,6 +1535,152 @@ export async function createStreamAdmin(
 }
 
 // ---------------------------------------------------------------------------
+// StreamRecord — the operator-signed direct-transfer index (any-node -> any-node)
+//
+// StreamRecord is `signatory operator`: the operator (this app provider) is the
+// only stakeholder, so the payer and payee never need to vet this package and a
+// stream can be recorded between any two parties on any nodes. Value moves as
+// standard CIP-56 transfers (the money leg); this contract is a best-effort
+// on-ledger index the operator maintains alongside them. It holds no funds and
+// is never on the settlement path — a create/record failure is observability
+// loss, not a payment failure.
+// ---------------------------------------------------------------------------
+
+/** cadence -> seconds, for StreamRecord.cadenceSeconds. */
+function cadenceToSeconds(cadence: Cadence): number {
+  return Math.max(1, Math.round(PERIOD_MS[cadence] / 1000));
+}
+
+/** Read the live StreamRecord createEvent for a stream (operator-visible). */
+async function resolveStreamRecordEvent(
+  config: V1LaneConfig,
+  streamId: string,
+): Promise<{ contractId: string; createArgument: any } | undefined> {
+  const operator = config.operatorParty;
+  if (!operator || !operator.includes('::')) return undefined;
+  const parts = config.streamRecordTemplateId.split(':');
+  const filterId = config.streamRecordTemplateId.startsWith('#')
+    ? config.streamRecordTemplateId
+    : `#canton-streams:${parts[1]}:${parts[2]}`;
+  const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: {
+      filtersByParty: {
+        [operator]: {
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: { value: { templateId: filterId, includeCreatedEventBlob: false } },
+              },
+            },
+          ],
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset: offset,
+  });
+  const matches = rows
+    .map((r) => r.contractEntry?.JsActiveContract?.createdEvent)
+    .filter((e: any) => e?.createArgument?.streamId === streamId && e?.createArgument?.operator === operator)
+    // The most-progressed record is the current one (RecordCycle is consuming).
+    .sort(
+      (a: any, b: any) =>
+        Number(b.createArgument.cyclesSettled ?? 0) - Number(a.createArgument.cyclesSettled ?? 0),
+    );
+  const only = matches[0];
+  return only ? { contractId: only.contractId, createArgument: only.createArgument } : undefined;
+}
+
+export interface StreamRecordCreateInput {
+  streamId: string;
+  operator: string;
+  payer: string;
+  payee: string;
+  instrumentAdmin: string;
+  instrumentId: string;
+  ratePerCycle: string;
+  cadenceSeconds: number;
+  startTime: string;
+  endTime?: string | null;
+  fundingMode: 'MandateFunding' | 'PerCycleFunding' | 'EscrowFunding';
+  observers?: string[];
+}
+
+/** Create an operator-signed StreamRecord (actAs=[operator]). Returns the cid. */
+export async function createStreamRecord(
+  config: V1LaneConfig,
+  input: StreamRecordCreateInput,
+): Promise<{ contractId: string; updateId: string }> {
+  const createArgument = {
+    streamId: input.streamId,
+    operator: input.operator,
+    payer: input.payer,
+    payee: input.payee,
+    instrumentId: { admin: input.instrumentAdmin, id: input.instrumentId },
+    ratePerCycle: Number(input.ratePerCycle).toFixed(10),
+    cadenceSeconds: String(input.cadenceSeconds),
+    startTime: input.startTime,
+    endTime: input.endTime ?? null,
+    fundingMode: input.fundingMode,
+    totalPaid: '0.0000000000',
+    cyclesSettled: '0',
+    lastTransferId: null,
+    status: 'Active',
+    observers: input.observers ?? [],
+  };
+  const res = await submit(config, 'record-create', [input.operator], [
+    { CreateCommand: { templateId: config.streamRecordTemplateId, createArguments: createArgument } },
+  ]);
+  const ev = await resolveStreamRecordEvent(config, input.streamId);
+  return { contractId: ev?.contractId ?? res.updateId ?? '', updateId: res.updateId ?? 'n/a' };
+}
+
+/**
+ * Record one settled cycle on the StreamRecord (RecordCycle, controller
+ * operator). Best-effort: returns the new (consuming-recreated) cid, or the
+ * old cid unchanged if there is no record / the exercise could not be made.
+ */
+async function recordStreamCycle(
+  config: V1LaneConfig,
+  agreement: V1Agreement,
+  amount: number,
+  transferId: string,
+): Promise<string | undefined> {
+  if (!agreement.streamRecordCid) return agreement.streamRecordCid;
+  const cid = (await resolveStreamRecordEvent(config, agreement.agreementId))?.contractId
+    ?? agreement.streamRecordCid;
+  await submit(config, 'record-cycle', [config.operatorParty], [
+    {
+      ExerciseCommand: {
+        templateId: config.streamRecordTemplateId,
+        contractId: cid,
+        choice: 'RecordCycle',
+        choiceArgument: { amount: amount.toFixed(10), transferId, settledAt: null },
+      },
+    },
+  ]);
+  return (await resolveStreamRecordEvent(config, agreement.agreementId))?.contractId ?? cid;
+}
+
+/** Mark a StreamRecord stopped (MarkStopped, controller operator). Best-effort. */
+async function markStreamRecordStopped(config: V1LaneConfig, agreement: V1Agreement): Promise<void> {
+  if (!agreement.streamRecordCid) return;
+  const cid = (await resolveStreamRecordEvent(config, agreement.agreementId))?.contractId
+    ?? agreement.streamRecordCid;
+  await submit(config, 'record-stop', [config.operatorParty], [
+    {
+      ExerciseCommand: {
+        templateId: config.streamRecordTemplateId,
+        contractId: cid,
+        choice: 'MarkStopped',
+        choiceArgument: {},
+      },
+    },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // Proxy-owned state store (agreements + settled history)
 // ---------------------------------------------------------------------------
 
@@ -1660,6 +1814,11 @@ export class V1LaneService {
     agreement.status = 'stopped';
     agreement.ratePerPeriod = '0';
     saveStore(this.config, store);
+    try {
+      await markStreamRecordStopped(this.config, agreement);
+    } catch {
+      // StreamRecord index is best-effort.
+    }
     // Scope the returned view to the payer (a stakeholder) — getStream 404s for
     // an undefined caller.
     return this.getStream(streamId, agreement.payerParty);
@@ -1718,6 +1877,32 @@ export class V1LaneService {
       streamAdminCid = created.contractId;
     }
 
+    // Operator-signed StreamRecord — the on-ledger index for the direct-transfer
+    // model. Created when a real operator party is configured; best-effort so a
+    // create failure never blocks the stream (the money leg is independent).
+    let streamRecordCid: string | undefined;
+    if (this.config.operatorParty && this.config.operatorParty.includes('::')) {
+      try {
+        const rec = await createStreamRecord(this.config, {
+          streamId,
+          operator: this.config.operatorParty,
+          payer: input.payerParty,
+          payee: input.recipientParty,
+          instrumentAdmin: this.config.ccAdminParty,
+          instrumentId: this.config.instrumentId,
+          ratePerCycle: ratePerPeriod,
+          cadenceSeconds: cadenceToSeconds(cadence),
+          startTime: effectiveFrom,
+          endTime: input.termEnd ?? null,
+          fundingMode: 'PerCycleFunding',
+          observers: input.observers,
+        });
+        streamRecordCid = rec.contractId;
+      } catch {
+        // Index is best-effort; the stream proceeds without it.
+      }
+    }
+
     const agreement: V1Agreement = {
       agreementId: streamId,
       ...(input.appId ? { appId: input.appId } : {}),
@@ -1729,6 +1914,7 @@ export class V1LaneService {
       ...(input.termEnd ? { termEnd: input.termEnd } : {}),
       arrearsPolicy: input.arrearsPolicy ?? 'catch-up',
       ...(streamAdminCid ? { streamAdminCid } : {}),
+      ...(streamRecordCid ? { streamRecordCid } : {}),
       totalDeposited,
       createdAt: new Date().toISOString(),
     };
@@ -1987,6 +2173,15 @@ export class V1LaneService {
       adminSynced = Boolean(agreement.streamAdminCid);
     } catch (e) {
       reason = `sync_failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`;
+    }
+    try {
+      const newCid = await recordStreamCycle(this.config, agreement, due, result.updateId);
+      if (newCid && newCid !== agreement.streamRecordCid) {
+        agreement.streamRecordCid = newCid;
+        saveStore(this.config, store);
+      }
+    } catch {
+      // StreamRecord index is best-effort; a miss is observability loss only.
     }
 
     return {
@@ -2382,6 +2577,15 @@ export class V1LaneService {
       adminSynced = Boolean(agreement.streamAdminCid);
     } catch (e) {
       reason = `sync_failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`;
+    }
+    try {
+      const newCid = await recordStreamCycle(this.config, agreement, amount, input.updateId);
+      if (newCid && newCid !== agreement.streamRecordCid) {
+        agreement.streamRecordCid = newCid;
+        saveStore(this.config, store);
+      }
+    } catch {
+      // StreamRecord index is best-effort; a miss is observability loss only.
     }
     return {
       settled: true,
