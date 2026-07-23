@@ -44,6 +44,15 @@ const labelStyle: CSSProperties = {
   marginBottom: 6,
 };
 
+// Inline variant for FormField labels — FormField wraps this in its own <label>
+// and appends the required "*". Keeping it inline (no display:block) keeps the
+// label text and the asterisk on one line instead of stacking them.
+const fieldLabelStyle: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 500,
+  color: 'var(--fg-2)',
+};
+
 const defaults: Partial<CreateStreamV1Values> = {
   cadence: 'daily',
   arrearsPolicy: 'catch-up',
@@ -127,17 +136,19 @@ export function CreateStreamV1Form() {
 
           <FormField
             name="recipientParty"
-            label={<span style={labelStyle}>Recipient</span>}
+            className=""
+            label={<span style={fieldLabelStyle}>Recipient</span>}
             required
             help="The wallet address you want to pay."
           >
             <input className="input" style={inputStyle} placeholder="Recipient's wallet address" autoComplete="off" />
           </FormField>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
             <FormField
               name="ratePerCycle"
-              label={<span style={labelStyle}>Amount per payment</span>}
+              className=""
+              label={<span style={fieldLabelStyle}>Amount per payment</span>}
               required
               help="How much Canton Coin to send each time."
             >
@@ -146,7 +157,8 @@ export function CreateStreamV1Form() {
 
             <FormField
               name="cadence"
-              label={<span style={labelStyle}>How often</span>}
+              className=""
+              label={<span style={fieldLabelStyle}>How often</span>}
             >
               <select className="input" style={inputStyle}>
                 <option value="second">Every second</option>

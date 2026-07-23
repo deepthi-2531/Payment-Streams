@@ -75,17 +75,9 @@ export function Sidebar() {
         {/* Brand */}
         <div style={brandStyle}>
           <Icons.Logo size={26} />
-          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-            <span style={{ fontSize: 14.5, fontWeight: 600, letterSpacing: '-0.01em' }}>
-              CC Streams
-            </span>
-            <span
-              className="mono"
-              style={{ fontSize: 9.5, color: 'var(--fg-4)', letterSpacing: '0.05em' }}
-            >
-              v1.0.0-rc.1
-            </span>
-          </div>
+          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' }}>
+            CC Streams
+          </span>
         </div>
 
         <div style={{ height: 1, background: 'var(--line)', marginBottom: 8 }} />
