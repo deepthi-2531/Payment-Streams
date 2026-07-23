@@ -920,8 +920,10 @@ export class EscrowLane {
     if (remaining <= 0) {
       // Only settle to completed once every release has actually delivered. A
       // still-active pending offer keeps the escrow open so its funds can be
-      // refunded if the offer later expires.
+      // refunded if the offer later expires; push the next check out one cadence
+      // so it isn't rewritten (and re-locked) every tick while it waits.
       if (!hasPendingRelease(e)) e.status = 'completed';
+      else e.nextDueAt = new Date(Date.now() + e.cadenceSeconds * 1000).toISOString();
       saveEscrows(this.config, store);
       return e;
     }
@@ -1158,6 +1160,12 @@ export class EscrowLane {
           l.offerStatus = next;
           mutated = true;
         }
+      }
+      // Once the offers reconcile, an escrow that owes nothing and has no pending
+      // release is done — complete it so the streamer stops revisiting it.
+      if (e.status === 'active' && remainingOf(e) <= 0 && !hasPendingRelease(e)) {
+        e.status = 'completed';
+        mutated = true;
       }
       if (mutated) saveEscrows(this.config, store);
     }
