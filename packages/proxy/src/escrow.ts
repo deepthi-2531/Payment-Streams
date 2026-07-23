@@ -27,6 +27,7 @@ import {
   ledger,
   prepareSettleCommand,
   prepareSettleCommandV2,
+  verifyDeliveryOnScan,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
@@ -656,27 +657,25 @@ export class EscrowLane {
     // Deposit leg. Either the wallet already did it (fundingTransferId given) or
     // the proxy submits it as the payer (hosted payer only).
     let fundingTransferId = input.fundingTransferId ? requireId(input.fundingTransferId, 'fundingTransferId') : '';
+    // What actually funds the escrow: the on-chain amount we verify for a
+    // wallet-signed deposit, or the amount the proxy transfers otherwise.
+    let depositAmount = totalDeposit;
     if (fundingTransferId) {
-      // A client-supplied fundingTransferId claims a deposit the proxy has not
-      // verified on-chain, so a forged (or too-small) id would mint an escrow
-      // that pays out of the commingled pool. Refuse it unless an operator opts
-      // in; fund via a proxy-submitted deposit instead.
-      if (!this.config.escrowTrustClientDeposit) {
-        throw new V1LaneError(
-          501,
-          'deposit_verification_unavailable',
-          'client-attested escrow deposits are disabled: the deposit is not yet verified on-chain. ' +
-            'Fund via a proxy-submitted deposit (omit fundingTransferId), or set ' +
-            'ESCROW_TRUST_CLIENT_DEPOSIT=true only if the deposit is verified out-of-band.',
-        );
-      }
-      // Global dedup: one fundingTransferId may back at most one escrow, so a
-      // single real deposit can't be replayed to fund several escrows.
+      // One funding id may back at most one escrow.
       for (const other of Object.values(store.escrows)) {
         if (other.fundingTransferId && other.fundingTransferId === fundingTransferId) {
           throw new V1LaneError(409, 'funding_reused', 'fundingTransferId already backs another escrow');
         }
       }
+      // Verify the deposit committed on-chain — payer -> escrow party in CC for at
+      // least the requested amount — and take the verified on-chain amount as the
+      // funded total, so a forged or too-small id can't mint an over-funded escrow.
+      const verified = await verifyDeliveryOnScan(this.config, fundingTransferId, {
+        sender: originalPayer,
+        receiver: this.config.escrowParty,
+        minAmount: Number(totalDeposit),
+      });
+      depositAmount = dec(verified.amount);
     }
     let depositPending: string | undefined;
     let depositExpires: string | undefined;
@@ -684,7 +683,7 @@ export class EscrowLane {
       const deposit = await settleCycle(
         this.config,
         leg(originalPayer, this.config.escrowParty, `${escrowId}:deposit`),
-        Number(totalDeposit),
+        Number(depositAmount),
         0,
       );
       fundingTransferId = deposit.updateId;
@@ -699,7 +698,7 @@ export class EscrowLane {
       recipient,
       ratePerCycle: dec(ratePerCycle),
       cadenceSeconds,
-      totalDeposited: dec(totalDeposit),
+      totalDeposited: dec(depositAmount),
       released: dec(0),
       fundingTransferId,
       status: 'active',
@@ -718,7 +717,7 @@ export class EscrowLane {
       direction: 'in',
       from: originalPayer,
       to: this.config.escrowParty,
-      amount: dec(totalDeposit),
+      amount: dec(depositAmount),
       updateId: fundingTransferId || undefined,
       contractCid: e.operatorEscrowCid,
       delivery: depositPending ? 'pending_offer' : 'direct',

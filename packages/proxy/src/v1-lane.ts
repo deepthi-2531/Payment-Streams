@@ -90,10 +90,6 @@ export interface V1LaneConfig {
   validatorAuthSecret: string;
   /** Escrow streamer tick interval in seconds (auto-release cadence check). */
   escrowTickSeconds: number;
-  /** Opt-in: trust a client-supplied `fundingTransferId` as proof of deposit.
-   * Default false — the deposit is not verified on-chain, so trusting it would
-   * let a forged id mint a funded escrow with no real deposit. */
-  escrowTrustClientDeposit: boolean;
   /** TransferFactory interface id on the TransferFactory_Transfer exercise. */
   transferFactoryInterfaceId: string;
   /** v2 TransferFactory interface id (v2 direct-delivery money leg). */
@@ -149,7 +145,6 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     validatorAuthAudience: get('VALIDATOR_AUTH_AUDIENCE'),
     validatorAuthSecret: get('VALIDATOR_AUTH_SECRET'),
     escrowTickSeconds: Number(get('ESCROW_STREAM_TICK_SECONDS', '30')),
-    escrowTrustClientDeposit: get('ESCROW_TRUST_CLIENT_DEPOSIT') === 'true',
     transferFactoryInterfaceId: get(
       'TRANSFER_FACTORY_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory',
@@ -383,31 +378,123 @@ function v1Sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+interface DeliveryLeg {
+  sender?: string;
+  receiver?: string;
+  amount: number;
+  instrumentOk: boolean;
+}
+
+function pickKey(o: any, keys: string[]): any {
+  for (const k of keys) if (o != null && o[k] !== undefined) return o[k];
+  return undefined;
+}
+
+function ccInstrumentMatches(instId: unknown, config: V1LaneConfig): boolean {
+  if (instId == null) return false;
+  if (typeof instId === 'string') return instId === config.instrumentId;
+  return String(pickKey(instId, ['id', 'instrumentId'])) === config.instrumentId;
+}
+
 /**
- * Confirm a settle's transfer actually committed on-ledger by looking it up on
- * the global Scan: `GET {registryApiUrl}/api/scan/v2/updates/{updateId}`.
- *
- * Why Scan and not our own participant: in model 2 the payer's wallet submits on
- * ITS participant, and Canton privacy means the proxy's participant generally
- * never witnesses that transfer — so an ACS/update lookup here returns nothing.
- * Scan ingests every committed update on the global synchronizer, so it is the
- * one vantage point that can see it. The caller-supplied `updateId` is UNTRUSTED;
- * this is what turns `recordSettle` from a blind write into a verified one and
- * stops a placeholder/phantom id (e.g. "wallet-submitted") from ever being shown
- * as settled. Polls briefly to absorb Scan ingestion lag (a 404 right after the
- * wallet returns is "not yet ingested", not "never committed").
- *
- * The update must be present on Scan AND name both the payer and the recipient,
- * so a transfer to one payee can't be replayed on another's stream. This is a
- * co-occurrence check over the Scan JSON, not a full structural decode: it does
- * not yet bind the sender, receiver, instrument, or amount, so callers must not
- * treat the client-supplied amount as chain-verified.
+ * Walk a committed Scan update tree and collect every value-delivery leg it can
+ * recognise: token-standard TransferInstruction creates (which carry
+ * transfer.sender/receiver/amount/instrumentId) and CC holding creates (owner +
+ * amount.initialAmount). Handles both the snake_case Scan shape and the
+ * camelCase participant shape, and both key spellings for create arguments.
  */
-async function verifyTransferOnScan(
+function collectDeliveryLegs(updateBody: string, config: V1LaneConfig): DeliveryLeg[] {
+  let root: unknown;
+  try {
+    root = JSON.parse(updateBody);
+  } catch {
+    return [];
+  }
+  const legs: DeliveryLeg[] = [];
+  const stack: unknown[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const v of node) stack.push(v);
+      continue;
+    }
+    const obj = node as Record<string, any>;
+    const tid = pickKey(obj, ['template_id', 'templateId']);
+    const args = pickKey(obj, ['create_arguments', 'createArguments', 'createArgument']);
+    if (typeof tid === 'string' && args && typeof args === 'object') {
+      if (/TransferInstruction/i.test(tid)) {
+        const tr = pickKey(args, ['transfer']) ?? {};
+        const amt = Number(pickKey(tr, ['amount']));
+        if (Number.isFinite(amt) && amt > 0) {
+          legs.push({
+            sender: pickKey(tr, ['sender']),
+            receiver: pickKey(tr, ['receiver']),
+            amount: amt,
+            instrumentOk: ccInstrumentMatches(pickKey(tr, ['instrument_id', 'instrumentId']), config),
+          });
+        }
+      } else if (String(tid).split(':').pop() === 'Amulet') {
+        const owner = pickKey(args, ['owner']);
+        const amtField = pickKey(args, ['amount']);
+        const amt = Number(
+          amtField && typeof amtField === 'object'
+            ? pickKey(amtField, ['initialAmount', 'initial_amount'])
+            : amtField,
+        );
+        if (owner && Number.isFinite(amt) && amt > 0) {
+          legs.push({ receiver: owner, amount: amt, instrumentOk: true });
+        }
+      }
+    }
+    for (const v of Object.values(obj)) stack.push(v);
+  }
+  return legs;
+}
+
+/**
+ * The largest CC amount a committed update delivers to `receiver` from `sender`,
+ * or null if none. A TransferInstruction leg carries the sender and is bound
+ * directly; a direct holding leg has no sender field (the sender's holdings are
+ * archived), so the sender must appear elsewhere in the same committed update.
+ */
+function verifiedDelivery(
+  updateBody: string,
+  config: V1LaneConfig,
+  expected: { sender: string; receiver: string; minAmount: number },
+): number | null {
+  const senderPresent = updateBody.includes(expected.sender);
+  let best: number | null = null;
+  for (const leg of collectDeliveryLegs(updateBody, config)) {
+    if (!leg.instrumentOk || leg.receiver !== expected.receiver) continue;
+    if (leg.amount + 1e-9 < expected.minAmount) continue;
+    if (leg.sender !== undefined) {
+      if (leg.sender !== expected.sender) continue;
+    } else if (!senderPresent) {
+      continue;
+    }
+    if (best === null || leg.amount > best) best = leg.amount;
+  }
+  return best;
+}
+
+/**
+ * Confirm a transfer committed on-ledger by looking it up on the global Scan
+ * (`GET {registryApiUrl}/api/scan/v2/updates/{updateId}`) and structurally
+ * binding it: the committed update must actually deliver the configured CC
+ * instrument from `sender` to `receiver` for at least `minAmount`. Returns the
+ * on-chain amount delivered, so callers credit the ledger, never a client claim.
+ *
+ * Why Scan and not our own participant: the payer's wallet submits on ITS
+ * participant, and Canton privacy means the proxy generally never witnesses the
+ * transfer. Scan ingests every committed update, so it is the one vantage point
+ * that can see it. Polls briefly to absorb Scan ingestion lag.
+ */
+export async function verifyDeliveryOnScan(
   config: V1LaneConfig,
   updateId: string,
-  agreement: V1Agreement,
-): Promise<string> {
+  expected: { sender: string; receiver: string; minAmount: number },
+): Promise<{ body: string; amount: number }> {
   const url = `${config.registryApiUrl}/api/scan/v2/updates/${encodeURIComponent(updateId)}`;
   const attempts = 8;
   const delayMs = 2500;
@@ -423,7 +510,7 @@ async function verifyTransferOnScan(
     }
     if (res.status === 404) {
       lastNote = 'not yet on Scan';
-      await v1Sleep(delayMs); // not ingested yet, or never committed
+      await v1Sleep(delayMs);
       continue;
     }
     const text = await res.text();
@@ -432,32 +519,44 @@ async function verifyTransferOnScan(
       await v1Sleep(delayMs);
       continue;
     }
-    // 200 — Scan only holds COMMITTED updates, so existence already disproves a
-    // phantom. Bind it to this stream: the returned update must be the one we
-    // asked for and must name BOTH parties of this stream (so a transfer to a
-    // different payee can't be replayed here).
     let parsed: { update_id?: string; updateId?: string };
     try {
       parsed = JSON.parse(text);
     } catch {
       parsed = {};
     }
-    const idOk = (parsed.update_id ?? parsed.updateId) === updateId;
-    const namesPayer = text.includes(agreement.payerParty);
-    const namesRecipient = text.includes(agreement.recipientParty);
-    if (idOk && namesPayer && namesRecipient) return text; // present + names both parties
-    throw new V1LaneError(
-      422,
-      'settlement_mismatch',
-      `update ${updateId} committed on chain but does not name both parties of this stream; refusing to record.`,
-    );
+    if ((parsed.update_id ?? parsed.updateId) !== updateId) {
+      throw new V1LaneError(422, 'settlement_mismatch', `update ${updateId} on Scan does not echo the requested id.`);
+    }
+    const amount = verifiedDelivery(text, config, expected);
+    if (amount === null) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${updateId} committed on chain but delivers no ${config.instrumentId} of at least ${expected.minAmount} from ` +
+          `${expected.sender.split('::')[0]} to ${expected.receiver.split('::')[0]}; refusing to record.`,
+      );
+    }
+    return { body: text, amount };
   }
   throw new V1LaneError(
     422,
     'settlement_unverified',
-    `update ${updateId} is not confirmed on Scan after ${(attempts * delayMs) / 1000}s (${lastNote}); ` +
-      `the transfer is NOT on chain, so nothing was recorded.`,
+    `update ${updateId} is not confirmed on Scan after ${(attempts * delayMs) / 1000}s (${lastNote}); nothing was recorded.`,
   );
+}
+
+/** Verify a stream cycle's transfer: payer -> recipient in the configured CC. */
+async function verifyTransferOnScan(
+  config: V1LaneConfig,
+  updateId: string,
+  agreement: V1Agreement,
+): Promise<{ body: string; amount: number }> {
+  return verifyDeliveryOnScan(config, updateId, {
+    sender: agreement.payerParty,
+    receiver: agreement.recipientParty,
+    minAmount: 0,
+  });
 }
 
 /**
@@ -2575,8 +2674,7 @@ export class V1LaneService {
     }
     const st = store.state[streamId] ?? emptyState();
     store.state[streamId] = st;
-    const amount = Number(input.amount);
-    if (!(amount > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
+    if (!(Number(input.amount) > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
     // Idempotent: never double-count the same committed transfer.
     if (input.updateId && st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
@@ -2586,11 +2684,10 @@ export class V1LaneService {
     if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
       throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
     }
-    // The updateId is a CLIENT claim — verify the transfer actually committed on
-    // chain (via Scan) BEFORE crediting the cycle. Throws unless it is real and
-    // matches this stream's payer, so a settle is never recorded — and never
-    // shown as "settled" — without an on-ledger transaction backing it.
-    const updateBody = await verifyTransferOnScan(this.config, input.updateId, agreement);
+    // The updateId is a client claim — verify the transfer committed on chain and
+    // actually delivered payer -> recipient in CC before crediting. Credit the
+    // on-chain amount it returns, never the client's amount.
+    const { body: updateBody, amount } = await verifyTransferOnScan(this.config, input.updateId, agreement);
 
     // Classify the on-chain outcome from the committed transaction:
     //  - a created TransferInstruction → the receiver had NO pre-approval, so
