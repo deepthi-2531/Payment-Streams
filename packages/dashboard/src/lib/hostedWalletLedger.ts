@@ -265,6 +265,32 @@ export async function queryActiveContracts(
 }
 
 /**
+ * Probe whether the connected party's participant vets our canton-streams DAR.
+ * The custody + flow lanes put a canton-streams contract on-ledger signed by
+ * the payer, so they only work where that participant runs our DAR.
+ *
+ * A READ of a canton-streams template is the reliable signal: it rejects with
+ * PACKAGE_NAMES_NOT_FOUND when the DAR is not vetted, whereas the matching WRITE
+ * path hangs without settling. Returns false on any non-success (including a
+ * timeout), so an uncertain result degrades to direct delivery only — which
+ * works on every participant.
+ */
+export async function probeStreamsDarVetted(party: string): Promise<boolean> {
+  if (!isHostedLedgerAvailable()) return false;
+  try {
+    await Promise.race([
+      queryActiveContracts([HOSTED_TID_CREATE_REQUEST], party),
+      new Promise((_resolve, reject) =>
+        setTimeout(() => reject(new Error('streams-dar probe timed out')), 8000),
+      ),
+    ]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Submit a Daml command (CreateCommand or ExerciseCommand) via the
  * wallet's `POST /v2/commands/submit-and-wait` endpoint. The wallet
  * drives the user's signing surface. Returns the parsed transaction

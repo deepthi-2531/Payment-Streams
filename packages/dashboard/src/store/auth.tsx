@@ -21,6 +21,7 @@ import {
   type StreamsWalletProviderInfo,
   type StreamsWalletStatus,
 } from './wallet/index.js';
+import { probeStreamsDarVetted } from '../lib/hostedWalletLedger.js';
 
 type WalletProvider = StreamsWalletProviderInfo | null;
 
@@ -229,17 +230,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAuthenticated = hostedWalletAuth || Boolean(token && party);
 
   // A live custodial multi-wallet (Loop) round-trips ledger access through its
-  // own participant, which does NOT vet our canton-streams DAR — so it can't
-  // create custody streams (a StreamAdmin submit there hangs on
-  // PACKAGE_NAMES_NOT_FOUND). Dev/proxy-hosted parties and dapp-SDK/SWK parties
-  // run on the operator's validator, which does vet it.
+  // own participant, which may or may not vet our canton-streams DAR. Rather
+  // than assume, probe it directly (a read of a canton-streams template rejects
+  // with PACKAGE_NAMES_NOT_FOUND when it isn't vetted). Dev/proxy-hosted parties
+  // and dapp-SDK/SWK parties run on the operator's validator, which does vet it.
+  const isCustodialWallet =
+    walletConnected &&
+    walletClient.capabilities.hostedMultiWallet &&
+    walletClient.capabilities.ledgerApi;
+
+  const [custodialDarVetted, setCustodialDarVetted] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!isCustodialWallet || !party) {
+      setCustodialDarVetted(null);
+      return;
+    }
+    let cancelled = false;
+    setCustodialDarVetted(null); // re-probing on (re)connect
+    void probeStreamsDarVetted(party).then((vetted) => {
+      if (!cancelled) setCustodialDarVetted(vetted);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isCustodialWallet, party]);
+
+  // Custody + flow lanes require the DAR on the acting party's participant.
+  // Dev + non-custodial (dapp-SDK/SWK on our validator) => true; a custodial
+  // wallet => the probe result (false while probing / if not vetted, so the UI
+  // fails safe to direct delivery, which works on every participant).
   const canCreateCustodyStream =
-    devMode ||
-    !(
-      walletConnected &&
-      walletClient.capabilities.hostedMultiWallet &&
-      walletClient.capabilities.ledgerApi
-    );
+    devMode || (isCustodialWallet ? custodialDarVetted === true : true);
 
   const value: AuthContextValue = useMemo(
     () => ({
