@@ -63,6 +63,29 @@ export function parseHostWalletAdapterKind(
   }
 }
 
+/** The wallet gateway carries the app bearer token and prepared hashes, so a
+ * plaintext http:// endpoint would leak them. Require https except for a loopback
+ * host, or an explicit acknowledgement for a trusted private network. */
+function assertSecureWalletUrl(url: string): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error(`invalid wallet gateway URL: ${url}`);
+  }
+  const loopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+  if (
+    u.protocol !== 'https:' &&
+    !loopback &&
+    process.env['PROXY_ALLOW_INSECURE_WALLET_URL'] !== 'true'
+  ) {
+    throw new Error(
+      `wallet gateway URL must use https (got ${u.protocol}//${u.hostname}); set ` +
+        `PROXY_ALLOW_INSECURE_WALLET_URL=true to allow http on a trusted private network.`,
+    );
+  }
+}
+
 export function createHostWalletClient(
   options: CreateHostWalletClientOptions,
 ): HostWalletClient {
@@ -70,6 +93,7 @@ export function createHostWalletClient(
     trimToUndefined(options.baseUrl),
     'CANTON_STREAMS_WALLET_GATEWAY_URL',
   ).replace(/\/+$/, '');
+  assertSecureWalletUrl(baseUrl);
   const fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
 
   async function listPendingTransfers(party: string): Promise<PendingTransferRecord[]> {

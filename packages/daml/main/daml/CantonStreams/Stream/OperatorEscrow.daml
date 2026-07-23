@@ -60,6 +60,13 @@ template OperatorEscrow
     -- | Record that one cycle was released — a committed transfer
     -- operator -> payee. Operator-only bookkeeping, bounded by the deposited
     -- balance so the escrow can never over-release what the payer funded.
+    -- Dedup note (index-only): `released` is not idempotent on `transferId` here
+    -- — a retried exercise double-advances it (still capped at totalDeposited).
+    -- The proxy is the authoritative dedup layer (deterministic release command id
+    -- + store-global update dedup). A proper on-ledger guard (a seen-id set or a
+    -- monotonic cycle index, applied to both this and StreamRecord.RecordCycle,
+    -- whose last-id-only check is likewise weak) is deferred to the next DAR
+    -- re-vet so the two are redesigned together.
     choice RecordRelease : ContractId OperatorEscrow
       with
         amount : Decimal
