@@ -21,7 +21,6 @@ import {
   type StreamsWalletProviderInfo,
   type StreamsWalletStatus,
 } from './wallet/index.js';
-import { probeStreamsDarVetted } from '../lib/hostedWalletLedger.js';
 
 type WalletProvider = StreamsWalletProviderInfo | null;
 
@@ -229,38 +228,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAuthenticated = hostedWalletAuth || Boolean(token && party);
 
-  // A live custodial multi-wallet (Loop) round-trips ledger access through its
-  // own participant, which may or may not vet our canton-streams DAR. Rather
-  // than assume, probe it directly (a read of a canton-streams template rejects
-  // with PACKAGE_NAMES_NOT_FOUND when it isn't vetted). Dev/proxy-hosted parties
-  // and dapp-SDK/SWK parties run on the operator's validator, which does vet it.
+  // A live custodial multi-wallet (Loop) routes ledger access through its own
+  // participant, which does NOT vet our canton-streams DAR — so it cannot create
+  // the V2 custody stream (a signatory contract needs the package vetted on the
+  // payer's own participant). Such wallets get Direct delivery + Vault instead.
+  // Dev/proxy-hosted parties and dapp-SDK/SWK parties run on the operator's
+  // validator, which does vet the DAR, so they keep the V2 custody lane.
+  //
+  // (We used to read-probe the DAR on the wallet's participant, but an ACS read
+  // for an unvetted template returns empty rather than erroring, so the probe
+  // reported a false "vetted" and offered a lane that fails at create time.)
   const isCustodialWallet =
     walletConnected &&
     walletClient.capabilities.hostedMultiWallet &&
     walletClient.capabilities.ledgerApi;
 
-  const [custodialDarVetted, setCustodialDarVetted] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (!isCustodialWallet || !party) {
-      setCustodialDarVetted(null);
-      return;
-    }
-    let cancelled = false;
-    setCustodialDarVetted(null); // re-probing on (re)connect
-    void probeStreamsDarVetted(party).then((vetted) => {
-      if (!cancelled) setCustodialDarVetted(vetted);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [isCustodialWallet, party]);
-
-  // Custody + flow lanes require the DAR on the acting party's participant.
-  // Dev + non-custodial (dapp-SDK/SWK on our validator) => true; a custodial
-  // wallet => the probe result (false while probing / if not vetted, so the UI
-  // fails safe to direct delivery, which works on every participant).
-  const canCreateCustodyStream =
-    devMode || (isCustodialWallet ? custodialDarVetted === true : true);
+  const canCreateCustodyStream = devMode || !isCustodialWallet;
 
   const value: AuthContextValue = useMemo(
     () => ({
