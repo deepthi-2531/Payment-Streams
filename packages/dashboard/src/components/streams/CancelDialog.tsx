@@ -24,6 +24,23 @@ interface CancelDialogProps {
   readonly onClose?: () => void;
 }
 
+/**
+ * Turn a raw proxy/ledger error into something a person can read — chiefly by
+ * stripping party ids and rewording the "wrong party" case, which is the one
+ * users actually hit. Only the sender can stop a stream; anyone else gets that.
+ */
+function friendlyCancelError(err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err ?? '');
+  if (/requires the sender party|sender party/i.test(raw)) {
+    return new Error(
+      "Only the person who set up this stream can stop it. You're the recipient here.",
+    );
+  }
+  // Drop any bare party id (localname::<hex fingerprint>) so hashes never surface.
+  const cleaned = raw.replace(/\b[\w-]+::[0-9a-f]{6,}\b/gi, 'the wallet').trim();
+  return new Error(cleaned || 'Something went wrong. Please try again.');
+}
+
 export function CancelDialog({
   sender,
   streamId,
@@ -62,8 +79,7 @@ export function CancelDialog({
       <Modal
         open={open}
         onClose={cancelM.isPending ? () => {} : onClose}
-        title="Cancel this stream?"
-        subtitle={<span className="mono">{streamId}</span>}
+        title="Stop this stream?"
         footer={
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button
@@ -104,8 +120,8 @@ export function CancelDialog({
           </div>
           <div>
             <p style={{ margin: 0, fontSize: 13, color: 'var(--fg-2)' }}>
-              Accrued tokens up to now are released to the recipient. The
-              remaining undrawn balance is refunded to the sender.
+              Anything paid so far stays with the recipient. Whatever hasn't been
+              paid out comes straight back to you.
             </p>
             <p
               style={{
@@ -114,7 +130,7 @@ export function CancelDialog({
                 color: 'var(--fg-4)',
               }}
             >
-              This action is final — the stream cannot be re-activated.
+              This can't be undone — the stream won't restart.
             </p>
           </div>
         </div>
@@ -122,8 +138,8 @@ export function CancelDialog({
         {cancelM.isError && (
           <div style={{ marginTop: 16 }}>
             <ErrorState
-              error={cancelM.error}
-              title="Cancellation failed"
+              error={friendlyCancelError(cancelM.error)}
+              title="Couldn't stop the stream"
               onRetry={handleCancel}
             />
           </div>

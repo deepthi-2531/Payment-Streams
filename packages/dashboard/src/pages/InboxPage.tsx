@@ -1,6 +1,6 @@
 /** Incoming streams + transfers for the connected party. */
 
-import { type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { Link } from 'react-router';
 import {
   Inbox as InboxIcon,
@@ -9,6 +9,9 @@ import {
   HandCoins,
   Loader2,
   CheckCircle2,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
 import { useStreams, useReceivedV1, useAcceptReceivedV1 } from '../hooks/useStreams.js';
@@ -71,6 +74,23 @@ export function InboxPage() {
         }
       />
 
+      {(incomingQ.isPending || receivedQ.isPending) && <Skeleton.Row count={3} height={120} />}
+
+      {/* Incoming streams first — the recurring payments set up to you. */}
+      {incomingCount > 0 && (
+        <div style={{ marginBottom: 18 }}>
+          <SectionHeader title="Incoming streams" count={incomingCount} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {incoming.map((stream) => (
+              <IncomingCard
+                key={`${stream.config.sender}:${stream.config.streamId}`}
+                stream={stream}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
       {pending.length > 0 && (
         <div style={{ marginBottom: 18 }}>
           <SectionHeader title="Offers awaiting your acceptance" count={pending.length} />
@@ -82,16 +102,7 @@ export function InboxPage() {
         </div>
       )}
 
-      {received.length > 0 && (
-        <div style={{ marginBottom: 18 }}>
-          <SectionHeader title="Received" count={received.length} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {received.map((r) => (
-              <ReceivedTransferRow key={r.updateId} transfer={r} />
-            ))}
-          </div>
-        </div>
-      )}
+      {received.length > 0 && <ReceivedSection received={received} />}
 
       {receivedQ.isError && (
         <ErrorState
@@ -109,8 +120,6 @@ export function InboxPage() {
         />
       )}
 
-      {(incomingQ.isPending || receivedQ.isPending) && <Skeleton.Row count={3} height={120} />}
-
       {nothing && (
         <div className="card" style={{ padding: 36, textAlign: 'center' }}>
           <InboxIcon
@@ -122,19 +131,118 @@ export function InboxPage() {
           </p>
         </div>
       )}
+    </div>
+  );
+}
 
-      {incomingCount > 0 && (
-        <>
-          <SectionHeader title="Incoming streams" count={incomingCount} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {incoming.map((stream) => (
-              <IncomingCard
-                key={`${stream.config.sender}:${stream.config.streamId}`}
-                stream={stream}
-              />
-            ))}
-          </div>
-        </>
+/**
+ * The list of CC already delivered to this party. It grows without bound over
+ * time, so it gets a text filter (match on amount or the on-chain id) and simple
+ * paging. Newest first.
+ */
+const RECEIVED_PAGE_SIZE = 8;
+
+function ReceivedSection({ received }: { readonly received: readonly V1ReceivedTransfer[] }) {
+  const [query, setQuery] = useState('');
+  const [page, setPage] = useState(0);
+
+  const sorted = useMemo(
+    () => [...received].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()),
+    [received],
+  );
+  const q = query.trim().toLowerCase();
+  const filtered = useMemo(
+    () =>
+      q
+        ? sorted.filter(
+            (r) =>
+              r.amount.toLowerCase().includes(q) || r.updateId.toLowerCase().includes(q),
+          )
+        : sorted,
+    [sorted, q],
+  );
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / RECEIVED_PAGE_SIZE));
+  const clampedPage = Math.min(page, pageCount - 1);
+  const start = clampedPage * RECEIVED_PAGE_SIZE;
+  const pageItems = filtered.slice(start, start + RECEIVED_PAGE_SIZE);
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <SectionHeader title="Received" count={received.length} />
+
+      <div style={{ position: 'relative', marginBottom: 10, maxWidth: 320 }}>
+        <Search
+          size={13}
+          style={{
+            position: 'absolute',
+            left: 10,
+            top: '50%',
+            transform: 'translateY(-50%)',
+            color: 'var(--fg-4)',
+            pointerEvents: 'none',
+          }}
+        />
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setPage(0);
+          }}
+          placeholder="Filter by amount…"
+          style={{
+            width: '100%',
+            background: 'var(--bg-elev)',
+            border: '1px solid var(--line-2)',
+            borderRadius: 'var(--r-sm)',
+            padding: '7px 10px 7px 30px',
+            fontSize: 12.5,
+            color: 'var(--fg)',
+            outline: 'none',
+          }}
+        />
+      </div>
+
+      {filtered.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--fg-4)', padding: '8px 2px' }}>
+          No received transfers match “{query}”.
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {pageItems.map((r) => (
+            <ReceivedTransferRow key={r.updateId} transfer={r} />
+          ))}
+        </div>
+      )}
+
+      {pageCount > 1 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            gap: 12,
+            marginTop: 12,
+          }}
+        >
+          <span style={{ fontSize: 11.5, color: 'var(--fg-4)' }}>
+            Page {clampedPage + 1} of {pageCount}
+          </span>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => setPage((p) => Math.max(0, p - 1))}
+            disabled={clampedPage === 0}
+          >
+            <ChevronLeft size={13} /> Prev
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))}
+            disabled={clampedPage >= pageCount - 1}
+          >
+            Next <ChevronRight size={13} />
+          </button>
+        </div>
       )}
     </div>
   );

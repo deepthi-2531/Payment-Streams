@@ -1,34 +1,21 @@
 /**
  * StreamsTable — card-wrapped stream list.
  *
- * One row per stream with mono stream id, party hints, flow-bar progress,
- * status, vesting, settlement badges, and a link to the detail page.
+ * One row per stream: who's paying whom, progress, amount, and status.
+ * The stream id and internal settlement mode live on the detail page, not here.
  */
 
 import { Link } from 'react-router';
 import { ArrowUpRight, ListOrdered } from 'lucide-react';
 import type { CSSProperties } from 'react';
 import type { Stream } from '@canton-streams/sdk/browser';
-import { SettlementMode, StreamStatus } from '@canton-streams/sdk/browser';
+import { StreamStatus } from '@canton-streams/sdk/browser';
 import { StatusBadge } from '../common/StatusBadge.js';
-
-function partyHint(partyId: string): string {
-  const sep = partyId.indexOf('::');
-  if (sep > 0) return partyId.slice(0, Math.min(sep, 20));
-  return partyId.length > 20 ? partyId.slice(0, 16) + '…' : partyId;
-}
-
-const SETTLEMENT_LABELS: Record<string, string> = {
-  [SettlementMode.NumericLegacy]: 'Legacy',
-  [SettlementMode.UtilityHoldingCustody]: 'CIP Custody',
-  [SettlementMode.TokenStandardCustody]: 'Token Standard',
-  [SettlementMode.LocalAssetCustody]: 'Local Asset',
-  [SettlementMode.Delegated]: 'Delegated',
-};
+import { fmtAmount, displayName, instrumentLabel } from '../../lib/format.js';
 
 const rowStyle: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: '1.4fr 1fr 220px 110px 110px auto',
+  gridTemplateColumns: '1.6fr 1fr 150px 110px auto',
   alignItems: 'center',
   gap: 16,
   padding: '14px 18px',
@@ -73,10 +60,9 @@ export function StreamsTable({ streams }: StreamsTableProps) {
           letterSpacing: '0.08em',
         }}
       >
-        <div>Stream id / parties</div>
+        <div>Payment</div>
         <div>Progress</div>
-        <div>Amount</div>
-        <div>Settlement</div>
+        <div style={{ textAlign: 'right' }}>Amount</div>
         <div>Status</div>
         <div />
       </div>
@@ -92,9 +78,6 @@ function StreamRow({ stream, isLast }: { readonly stream: Stream; readonly isLas
   const dep = Number(stream.config.totalDeposited.toString());
   const wd = Number(stream.state.totalWithdrawn.toString());
   const pct = dep > 0 ? Math.min(1, wd / dep) : 0;
-  const settlementLabel =
-    SETTLEMENT_LABELS[stream.config.settlementMode ?? SettlementMode.TokenStandardCustody] ??
-    'Unknown';
   const instrumentId = stream.config.instrumentRef?.instrumentId;
   const flowBarClass = stream.state.status === StreamStatus.Active ? 'flow-bar' : 'flow-bar static';
 
@@ -107,16 +90,16 @@ function StreamRow({ stream, isLast }: { readonly stream: Stream; readonly isLas
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="mono" style={{ fontSize: 12.5, fontWeight: 500 }}>
-            {stream.config.streamId.slice(0, 14)}…
-          </span>
-          <span className="badge muted" style={{ fontSize: 10 }}>
-            {stream.config.vestingMode.mode}
-          </span>
-        </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 3 }}>
-          {partyHint(stream.config.sender)} → {partyHint(stream.config.recipient)}
+        <div
+          style={{
+            fontSize: 13,
+            fontWeight: 500,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          {displayName(stream.config.sender)} → {displayName(stream.config.recipient)}
         </div>
       </div>
 
@@ -124,33 +107,20 @@ function StreamRow({ stream, isLast }: { readonly stream: Stream; readonly isLas
         <div className={flowBarClass}>
           <div className="fill" style={{ width: `${pct * 100}%` }} />
         </div>
-        <div
-          className="mono"
-          style={{
-            fontSize: 10.5,
-            color: 'var(--fg-4)',
-            marginTop: 4,
-          }}
-        >
-          {(pct * 100).toFixed(1)}%
+        <div style={{ fontSize: 10.5, color: 'var(--fg-4)', marginTop: 4 }}>
+          {(pct * 100).toFixed(0)}% paid
         </div>
       </div>
 
       <div style={{ textAlign: 'right' }}>
-        <div className="mono" style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>
-          {fmt(dep)}
+        <div style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}>
+          {fmtAmount(dep)}
         </div>
         {instrumentId && (
-          <div className="mono" style={{ fontSize: 10.5, color: 'var(--fg-4)', marginTop: 2 }}>
-            {instrumentId}
+          <div style={{ fontSize: 10.5, color: 'var(--fg-4)', marginTop: 2 }}>
+            {instrumentLabel(instrumentId)}
           </div>
         )}
-      </div>
-
-      <div>
-        <span className="badge info" style={{ fontSize: 10.5 }}>
-          {settlementLabel}
-        </span>
       </div>
 
       <div>
@@ -160,12 +130,4 @@ function StreamRow({ stream, isLast }: { readonly stream: Stream; readonly isLas
       <ArrowUpRight size={14} style={{ color: 'var(--fg-4)' }} />
     </Link>
   );
-}
-
-function fmt(n: number, decimals = 2): string {
-  if (Number.isNaN(n)) return '—';
-  return n.toLocaleString('en-US', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
 }

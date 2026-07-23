@@ -8,13 +8,19 @@ import { WithdrawButton } from './WithdrawButton.js';
 import { CancelDialog } from './CancelDialog.js';
 import { useAccrual } from '../../hooks/useAccrual.js';
 import { useStreamHistory } from '../../hooks/useStreams.js';
+import { useAuth } from '../../store/auth.js';
 import { fmtCc, displayName } from '../../lib/format.js';
 
 const sectionTitle: CSSProperties = { fontSize: 13, fontWeight: 500, color: 'var(--fg)', marginBottom: 14 };
 
 export function StreamDetail({ stream }: { stream: Stream }) {
+  const { party } = useAuth();
   const balances = useAccrual(stream);
   const { config, state } = stream;
+  // Only the recipient can withdraw the vested amount; only the sender can stop
+  // the stream. Showing the wrong control just leads to a "wrong party" error.
+  const isSender = party != null && party === config.sender;
+  const isRecipient = party != null && party === config.recipient;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -57,13 +63,15 @@ export function StreamDetail({ stream }: { stream: Stream }) {
       {/* Activity */}
       <ActivityHistory sender={config.sender} streamId={config.streamId} />
 
-      {/* Actions */}
-      {state.status === 'Active' && (
+      {/* Actions — only the ones the connected party can actually perform */}
+      {state.status === 'Active' && (isRecipient || (isSender && config.cancellable)) && (
         <div className="card" style={{ padding: 20 }}>
           <div style={sectionTitle}>Actions</div>
           <div style={{ display: 'flex', gap: 12 }}>
-            <WithdrawButton stream={stream} />
-            {config.cancellable && <CancelDialog sender={config.sender} streamId={config.streamId} />}
+            {isRecipient && <WithdrawButton stream={stream} />}
+            {isSender && config.cancellable && (
+              <CancelDialog sender={config.sender} streamId={config.streamId} />
+            )}
           </div>
         </div>
       )}
