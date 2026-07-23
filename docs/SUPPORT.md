@@ -14,7 +14,7 @@ and executor packages) and the `canton-streams` DAR. See
 
 | Version line | Status | Notes |
 | --- | --- | --- |
-| `1.0.0-rc.1` | Release candidate | Current evaluation line. npm packages use `1.0.0-rc.1`; the `canton-streams` DAR uses numeric version `1.0.0`. |
+| `1.0.0-rc.1` | Release candidate | Current evaluation line. npm packages use `1.0.0-rc.1`; the `canton-streams` DAR uses numeric version `1.3.0`. |
 | `0.2.x` | Maintenance | Previous evaluation line. Use the latest `1.0.0` release candidate for new integrations. |
 | `< 0.2.0` | Not supported | Pre-release lines receive no fixes. |
 

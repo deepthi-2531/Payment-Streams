@@ -245,21 +245,21 @@ Renew a `RenewableTerm` stream for the next period.
 
 ## Pending requests (inbox)
 
-### `GET /api/pending`
+### `GET /api/stream-requests`
 
-List inbound pending stream requests addressed to the caller.
+List pending stream requests visible to the caller.
 
 **Query parameters:**
 
 | Param | Type | Description |
 |---|---|---|
-| `direction` | string | `incoming` (default) or `outgoing` |
+| `sender` | string | Filter by sender party id (scoped to the caller) |
+| `recipient` | string | Filter by recipient party id (scoped to the caller) |
+| `assetType` | string | Filter by asset type |
 
 **Response — `200 OK`:** array of pending-request objects with the request id, proposer party, target party, and proposed `config`.
 
-### `POST /api/pending/:requestId/reject`
-
-Reject an incoming stream request.
+The `POST /api/streams/:sender/:streamId/accept` and `/reject` routes are reserved for the future V2 `StreamAdminRequest` template and return `404` (`request_not_found`) by design today: the dashboard creates a `StreamAdmin` directly, so there is no intermediate request contract to accept or reject at this layer.
 
 ## Policies
 
@@ -267,48 +267,17 @@ Reject an incoming stream request.
 
 List `DelegatedPolicy` contracts visible to the caller (typically as sender, recipient, or executor).
 
-### `POST /api/policies/:policyId/execute`
+### `POST /api/policies/:contractId/revoke`
 
-Execute one bounded action under a `DelegatedPolicy`. Caller must be the executor. Bounds (rate limit, expiry, scope, action allow-list, cooldown) are enforced on-ledger.
+Revoke a `DelegatedPolicy`. Caller must be the policy sender.
 
-### `GET /api/policies/:policyId/log`
+### `GET /api/execution-logs`
 
-Get the append-only `ExecutionLog` for a policy.
+List the append-only `ExecutionLog` audit entries visible to the caller.
 
 ## Adoption metrics
 
-### `GET /api/metrics/adoption`
-
-Aggregated adoption metrics computed from per-asset Scan endpoints (configured in `config/asset-registry.json`).
-
-**Query parameters:**
-
-| Param | Type | Description |
-|---|---|---|
-| `since` | string (ISO 8601) | Earliest event timestamp |
-| `until` | string (ISO 8601) | Latest event timestamp (default: now) |
-| `excludeParties` | string (CSV) | Party ids to exclude from aggregate metrics |
-
-**Response — `200 OK`:**
-
-```json
-{
-  "distinctExternalParties": 42,
-  "distinctStreams": 318,
-  "cumulativeNotional": {
-    "CC": "1280000.0",
-    "USDCx": "950000.0"
-  },
-  "ccBurned": "8420.0",
-  "daysContinuous": 30,
-  "byAsset": [
-    { "asset": "CC", "streams": 200, "burn": "5210.0" },
-    { "asset": "USDCx", "streams": 118, "burn": "3210.0" }
-  ]
-}
-```
-
-The same calculation can be run offline via `scripts/query-adoption-metrics.mjs --asset-registry config/asset-registry.json --since <date>`.
+Aggregated adoption metrics are computed offline (not exposed as a REST route) via `scripts/query-adoption-metrics.mjs --asset-registry config/asset-registry.json --since <date>`, which reads the per-asset Scan endpoints configured in `config/asset-registry.json`.
 
 ## Errors
 
@@ -318,7 +287,7 @@ All error responses use the same shape:
 {
   "error": "Human-readable summary",
   "reason": "machine_readable_code",
-  "details": { /* optional context */ }
+  "correlationId": "<operation>-<id>"  // present on all 5xx responses, for log correlation
 }
 ```
 
@@ -326,13 +295,23 @@ Common reason codes:
 
 | Code | HTTP | Meaning |
 |---|---|---|
+| `missing_token` | 401 | No `Authorization: Bearer <token>` header |
+| `token_expired` | 401 | JWT has expired |
+| `invalid_signature` | 401 | JWT signature verification failed (jwt mode) |
+| `invalid_token` | 401 | JWT could not be verified |
 | `missing_party` | 400 | JWT did not carry a `party`/`sub` claim |
-| `unauthorized` | 401 | JWT signature invalid (jwt mode) |
 | `forbidden` | 403 | Caller not authorized for this action on this stream |
-| `not_found` | 404 | Stream / request not found |
-| `conflict` | 409 | State precondition violated (e.g. accept after expiry) |
-| `dar_not_vetted` | 503 | Required package is uploaded but not vetted on the synchronizer |
-| `interactive_submission_unavailable` | 503 | Interactive-submission endpoint is unreachable |
+| `not_found` / `stream_not_found` / `request_not_found` | 404 | Stream / request not found |
+| `self_stream` | 400 | Stream sender and recipient are the same party |
+| `settlement_mismatch` | 422 | Settled amount did not match the expected accrual |
+| `deposit_undelivered` | 422 | Escrow deposit holding was not delivered on-ledger |
+| `escrow_cap_exceeded` | 409 | Deposit would exceed the aggregate custody cap (`ESCROW_MAX_TOTAL_CC`) |
+| `escrow_pool_insolvent` | 409 | Pre-release solvency interlock tripped (custody pool below owed) |
+| `undisclosed_custody` | 403 | Co-hosted operator-custodial money leg blocked unless `ESCROW_DISCLOSED_CUSTODY` is set |
+| `undisclosed_custody_probe_failed` | 502 | Could not probe whether the payer is co-hosted on the operator participant (fail-closed) |
+| `store_lock_timeout` | 503 | Single-writer store lock could not be acquired |
+| `request_error` | 4xx | Malformed or otherwise rejected client request |
+| `internal_error` | 5xx | Unexpected server error (see `correlationId` in logs) |
 
 ## Versioning
 

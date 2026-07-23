@@ -19,8 +19,8 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync, statSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { acquireStoreLock, releaseStoreLock } from './store-lock.js';
 import { requireAmount, requirePartyId, requireId } from './validation.js';
 import {
   settleCycle,
@@ -28,7 +28,7 @@ import {
   ledger,
   prepareSettleCommand,
   prepareSettleCommandV2,
-  verifyDeliveryOnScan,
+  verifyHoldingDeliveryOnScan,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
@@ -247,6 +247,13 @@ const dec = (x: string | number): string => Number(x).toFixed(10);
 const remainingOf = (e: EscrowAgreement): number =>
   Math.max(0, Number(e.totalDeposited) - Number(e.released));
 
+/** True while any release is a still-active pending offer (advanced `released`
+ * but not yet accepted). Such an escrow must not be marked completed: if the
+ * offer expires the funds revert to custody and the payer must still be able to
+ * refund them, but a completed escrow is skipped by refund and the streamer. */
+const hasPendingRelease = (e: EscrowAgreement): boolean =>
+  (e.ledger ?? []).some((l) => l.kind === 'release' && l.offerStatus === 'active');
+
 /** Total still owed across every active escrow — the floor the custody party
  * must always be able to cover. Shared by the per-action solvency interlock and
  * the continuous drift monitor so both read the same number. */
@@ -257,100 +264,6 @@ const sumOwed = (store: EscrowStore): number =>
 
 function escrowLockFile(config: V1LaneConfig): string {
   return escrowStateFile(config).replace(/\.json$/i, '') + '.lock';
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err: any) {
-    // EPERM means the pid exists but we may not signal it — still alive.
-    return err?.code === 'EPERM';
-  }
-}
-
-/** Age of the current holder, from its recorded timestamp or, if that is
- * unreadable, the lock file's mtime — never Infinity, so an unparseable lock is
- * waited on and only reclaimed once it truly ages out. */
-function lockAgeMs(lockPath: string, holderAt: unknown): number {
-  const at = Number(holderAt);
-  if (Number.isFinite(at) && at > 0) return Date.now() - at;
-  try {
-    return Date.now() - statSync(lockPath).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-
-/** Acquire an exclusive on-disk lock for the escrow store, returning a token the
- * holder must present to release it. The in-process mutationLock only serializes
- * one Node process; two processes sharing the store (a second replica, or the old
- * instance during the slow SIGTERM->SIGKILL window on redeploy) would each read a
- * stale snapshot and could double-release. This lockfile makes the whole
- * load->mutate->save critical section single-writer across processes on one host.
- *
- * The lock is created by writing a fully-formed record to a private temp file and
- * hard-linking it into place: link is atomic and fails if the target exists, so
- * the lock is never observed empty (no steal-mid-write race). A held lock is
- * reclaimed only when its holder pid is dead, or it has aged past staleMs (which a
- * genuine mutation never reaches) — a live, in-progress holder is waited on, never
- * overtaken. */
-async function acquireEscrowLock(lockPath: string, staleMs: number): Promise<string> {
-  const token = `${process.pid}:${randomUUID()}`;
-  const tmp = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
-  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), token }));
-  const start = Date.now();
-  try {
-    for (;;) {
-      try {
-        linkSync(tmp, lockPath);
-        return token;
-      } catch (err: any) {
-        if (err?.code !== 'EEXIST') throw err;
-        let holder: { pid?: number; at?: number } = {};
-        try {
-          holder = JSON.parse(readFileSync(lockPath, 'utf8'));
-        } catch {
-          /* unreadable — fall through to the mtime-based age check */
-        }
-        const aged = lockAgeMs(lockPath, holder.at) > staleMs;
-        const dead = typeof holder.pid === 'number' ? !pidAlive(holder.pid) || aged : aged;
-        if (dead) {
-          try {
-            unlinkSync(lockPath);
-          } catch {
-            /* another waiter cleared it first */
-          }
-          continue;
-        }
-        if (Date.now() - start > staleMs) {
-          throw new V1LaneError(
-            503,
-            'escrow_lock_timeout',
-            `could not acquire the escrow store lock within ${staleMs}ms; another instance is holding it`,
-          );
-        }
-        await new Promise((r) => setTimeout(r, 50));
-      }
-    }
-  } finally {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      /* temp already gone */
-    }
-  }
-}
-
-/** Release a lock only if we still hold it: if it was reclaimed as stale and now
- * belongs to another process, leave that process's lock in place. */
-function releaseEscrowLock(lockPath: string, token: string): void {
-  try {
-    const holder = JSON.parse(readFileSync(lockPath, 'utf8'));
-    if (holder.token === token) unlinkSync(lockPath);
-  } catch {
-    /* missing or unreadable — nothing of ours to release */
-  }
 }
 
 /** Minimal synthetic agreement so `settleCycle` can fire a sender→receiver
@@ -713,11 +626,11 @@ export class EscrowLane {
     // Generous enough to outlast a real release round-trip; a dead holder is
     // reclaimed immediately by pid, so this only bounds an unreadable-pid lock.
     const staleMs = Math.max(120000, (this.config.escrowTickSeconds + 60) * 1000);
-    const token = await acquireEscrowLock(lockPath, staleMs);
+    const token = await acquireStoreLock(lockPath, staleMs);
     try {
       return await fn();
     } finally {
-      releaseEscrowLock(lockPath, token);
+      releaseStoreLock(lockPath, token);
     }
   }
 
@@ -889,12 +802,14 @@ export class EscrowLane {
           throw new V1LaneError(409, 'funding_reused', 'fundingTransferId already backs another escrow');
         }
       }
-      // Verify the deposit committed on-chain — payer -> escrow party in CC for at
-      // least the requested amount — and take the verified on-chain amount as the
-      // funded total, so a forged or too-small id can't mint an over-funded escrow.
-      const verified = await verifyDeliveryOnScan(this.config, fundingTransferId, {
-        sender: originalPayer,
-        receiver: this.config.escrowParty,
+      // Verify the deposit actually DELIVERED CC into the escrow party — a created
+      // holding it owns, not merely a transfer authorization — for at least the
+      // requested amount, and take the verified on-chain amount as the funded
+      // total. Requiring delivery (not a transfer spec) stops a locked, still-
+      // withdrawable transfer instruction from being recorded as a funded deposit,
+      // which would phantom-inflate the pool's owed balance and freeze it.
+      const verified = await verifyHoldingDeliveryOnScan(this.config, fundingTransferId, {
+        recipient: this.config.escrowParty,
         minAmount: Number(totalDeposit),
       });
       depositAmount = dec(verified.amount);
@@ -1003,7 +918,12 @@ export class EscrowLane {
 
     const remaining = remainingOf(e);
     if (remaining <= 0) {
-      e.status = 'completed';
+      // Only settle to completed once every release has actually delivered. A
+      // still-active pending offer keeps the escrow open so its funds can be
+      // refunded if the offer later expires; push the next check out one cadence
+      // so it isn't rewritten (and re-locked) every tick while it waits.
+      if (!hasPendingRelease(e)) e.status = 'completed';
+      else e.nextDueAt = new Date(Date.now() + e.cadenceSeconds * 1000).toISOString();
       saveEscrows(this.config, store);
       return e;
     }
@@ -1056,7 +976,10 @@ export class EscrowLane {
       authorizationBasis: `standing deposit mandate (no per-cycle signature); escrow ${escrowId}`,
       at: e.lastReleaseAt,
     });
-    if (remainingOf(e) <= 0) e.status = 'completed';
+    // Complete only when nothing remains AND every release delivered. If this
+    // cycle landed as a pending offer, it isn't delivered yet, so the escrow
+    // stays active until reconcile confirms the accept (or reopens on expiry).
+    if (remainingOf(e) <= 0 && !hasPendingRelease(e)) e.status = 'completed';
     saveEscrows(this.config, store);
     return e;
   }
@@ -1228,13 +1151,21 @@ export class EscrowLane {
         if (l.offerStatus !== next) {
           // A release offer that reverted (expired, swept back to escrow) returns
           // its funds to custody, so undo its advance of `released` — otherwise
-          // `remaining` under-counts and the funds are stranded.
+          // `remaining` under-counts and the funds are stranded. Reopen the escrow
+          // if that release had prematurely completed it, so refund can recover.
           if (next === 'expired' && l.kind === 'release') {
             e.released = dec(Math.max(0, Number(e.released) - Number(l.amount)));
+            if (e.status === 'completed') e.status = 'active';
           }
           l.offerStatus = next;
           mutated = true;
         }
+      }
+      // Once the offers reconcile, an escrow that owes nothing and has no pending
+      // release is done — complete it so the streamer stops revisiting it.
+      if (e.status === 'active' && remainingOf(e) <= 0 && !hasPendingRelease(e)) {
+        e.status = 'completed';
+        mutated = true;
       }
       if (mutated) saveEscrows(this.config, store);
     }

@@ -210,13 +210,14 @@ instead of opening a broken popup.
 
 ## Wallets
 
-Canton Payment Streams supports two wallet layers through the same dashboard
+Canton Payment Streams supports three wallet layers through the same dashboard
 contract.
 
 | Layer | Best for | Notes |
 | --- | --- | --- |
 | `dapp-sdk` | LocalNet, Amulet, standards testing | Default. Connects to a CIP-103 wallet gateway. |
 | `partylayer` | Hosted multi-wallet UX | Lets users choose wallets such as 5N Loop or Console through PartyLayer. |
+| `combined` | Hosted deployments needing both | Single picker merging PartyLayer wallets and discovered dapp-sdk wallets; used in the live testnet deployment. |
 
 For local standards testing, use the Splice Amulet wallet through a CIP-103
 gateway. For hosted dApps, PartyLayer is the reference multi-wallet layer.

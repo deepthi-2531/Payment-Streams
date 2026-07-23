@@ -75,6 +75,24 @@ const DEFAULT_TIMEOUT_MS = 30_000;
  * SigningProvider adapter holds one of these and delegates method
  * calls.
  */
+/** The gateway carries the access token and prepared transaction hashes, so a
+ * plaintext http:// endpoint would leak them on the wire. Require https except
+ * for a loopback host (a local dev gateway). */
+function assertSecureGatewayUrl(url: string): void {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    throw new Error(`invalid gateway URL: ${url}`);
+  }
+  const loopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
+  if (u.protocol !== 'https:' && !loopback) {
+    throw new Error(
+      `gateway URL must use https (got ${u.protocol}//${u.hostname}); only a loopback host may use http.`,
+    );
+  }
+}
+
 export class JsonRpcTransport {
   private nextId = 1;
 
@@ -85,7 +103,9 @@ export class JsonRpcTransport {
      * so logs show which provider's wire call failed.
      */
     private readonly kind?: SigningProviderKind,
-  ) {}
+  ) {
+    assertSecureGatewayUrl(connection.gatewayUrl);
+  }
 
   /**
    * Send a single JSON-RPC request. Resolves with the `result` field

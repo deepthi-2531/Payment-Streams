@@ -69,7 +69,7 @@ This gives the proxy a least-privilege service principal: it can read any party'
 ```bash
 # Upload
 daml ledger upload-dar --host acme-validator --port 5001 \
-  packages/daml/main/.daml/dist/canton-streams-1.0.0.dar
+  packages/daml/main/.daml/dist/canton-streams-1.3.0.dar
 
 # Vet on the synchronizer (see docs/DEPLOYMENT.md for the console snippet)
 
@@ -101,7 +101,8 @@ CANTON_STREAMS_PACKAGE_ID=<package-hash>
 PROXY_STARTUP_REQUIRE_VETTED_PACKAGES=1
 PROXY_STARTUP_REQUIRE_INTERACTIVE_SUBMISSION_ENDPOINT=1
 
-PROXY_TRANSFER_EVENTS_ENABLED=1
+PROXY_TOKEN_STANDARD_AUTOWITHDRAW_ENABLED=true
+PROXY_AUTO_WITHDRAW_SUBSCRIBER_MODE=true
 PROXY_SERVICE_USER_ID=streams-service
 
 ALLOWED_ORIGINS=https://app.acme.example.com
@@ -195,7 +196,7 @@ On accept, the funding `AllocationFactory_Allocate(committed=True)` settles atom
 
 ## Step 6 — Watch the stream advance
 
-The proxy's `TransferEventsV2` subscriber exercises `Allocation_Settle` automatically as funds accrue (configurable cadence; default: per accrual minute).
+When enabled, the proxy's auto-withdraw subscriber advances settlement as funds accrue (opt-in worker; poll cadence defaults to 10 seconds, configurable via `PROXY_TOKEN_STANDARD_AUTOWITHDRAW_POLL_INTERVAL_MS`). This worker is off unless `PROXY_TOKEN_STANDARD_AUTOWITHDRAW_ENABLED=true`, and is not active in the current live deployment.
 
 Employees see their balance tick up in real time in AcmeCo's dashboard. They can withdraw to their main wallet at any time:
 
@@ -206,7 +207,7 @@ await fetch(`/api/streams/${treasuryParty}/${streamId}/withdraw`, {
 });
 ```
 
-Or skip the manual withdraw entirely — the proxy already settles on-chain on each accrual interval; the recipient's wallet holding balance updates automatically.
+If the auto-withdraw worker is enabled, on-chain settlement advances on each poll interval and the recipient's wallet holding balance updates automatically. That worker is opt-in and disabled in the current live deployment, so the manual `POST .../withdraw` above remains the reliable path.
 
 ## Step 7 — Adoption metrics + reporting
 

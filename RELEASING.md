@@ -43,12 +43,12 @@ still align (`pnpm --filter @canton-streams/sdk test`).
 
 ## Canonical Repository Metadata
 
-If this checkout is becoming the public upstream repository, add the canonical `repository`, `homepage`, and `bugs` URLs to:
+The canonical `repository`, `homepage`, and `bugs` URLs are already set in both publishable manifests:
 
 - `packages/sdk/package.json`
 - `packages/cli/package.json`
 
-Those URLs are intentionally not guessed in this repo, because publishing incorrect package metadata is worse than leaving it unset temporarily.
+Before publishing, verify they still point at the correct upstream repository and update them if the canonical location changes, since publishing incorrect package metadata is worse than leaving it unset.
 
 ## Tag-Driven npm Releases
 

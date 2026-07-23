@@ -55,6 +55,13 @@ gateway); probe pre-flight warns on it and hard-fails on mainnet until set.
 The CC DSO party is a documented reference value; confirm it against your
 target network's Scan before a mainnet run.
 
+Point `walletGatewayUrl` at an `https` gateway (loopback hosts excepted) — it
+carries the app bearer token and prepared hashes. The proxy rejects a plaintext
+`http` wallet-gateway URL (from `CANTON_STREAMS_WALLET_GATEWAY_URL` /
+`WALLET_GATEWAY_URL`) at startup; set `PROXY_ALLOW_INSECURE_WALLET_URL=true` to
+lift that check on a trusted private network. The SDK signing layer enforces the
+same `https` rule but permits `http` only for a loopback host, with no override.
+
 ---
 
 ## Generating the registry

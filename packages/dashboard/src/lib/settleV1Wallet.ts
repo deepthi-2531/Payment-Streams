@@ -297,10 +297,21 @@ export async function settleV1ViaWallet(
     return offer ? { settled: false, reason: 'pending_acceptance', pending: offer } : null;
   };
 
+  // Before the wallet signs, make the proxy prove it prepared a transfer FROM the
+  // connected payer — the signer must be the payer, not some other party the
+  // proxy substituted. Mirrors the accept/withdraw/claim guards below. (Binding
+  // the receiver and amount too would need the recipient threaded into this call;
+  // until then the wallet popup remains the receiver/amount gate.)
+  if (prepared.actAs !== payerParty) {
+    throw new Error(
+      `Prepared settle must be signed by ${payerParty}, but the proxy prepared it for ${prepared.actAs}.`,
+    );
+  }
+
   // 3. The payer's WALLET signs + submits through its own participant.
   let res: unknown;
   try {
-    res = await submitAndWait([prepared.command!], prepared.actAs!, {
+    res = await submitAndWait([prepared.command!], prepared.actAs, {
       disclosedContracts: prepared.disclosedContracts,
     });
   } catch (submitErr) {

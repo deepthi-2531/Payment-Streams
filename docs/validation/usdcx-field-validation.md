@@ -81,9 +81,12 @@ and confirm its `admin` equals the registry `adminParty` for that network.
 Blocked on: a sender party funded with USDCx on the target network, plus
 the resolved issuer endpoints from §3. When both exist, run exactly this:
 
-1. **Fill the registry entry.** Replace the four placeholder values in the
-   `usdcx` entry of `config/asset-registry.json` (and mirror into
-   `scripts/asset-registry-seeds.json`).
+1. **Fill the registry entry.** Replace the remaining placeholder value
+   (`walletGatewayUrl`, which is operator-specific) in the `usdcx` entry of
+   `config/asset-registry.json` (and mirror into
+   `scripts/asset-registry-seeds.json`). The admin/`adminParty`,
+   `tokenStandardApiUrl` and `scanEndpointUrl` are already committed real
+   values (see §3).
 2. **Pre-flight (no writes):**
 
    ```bash
@@ -95,8 +98,10 @@ the resolved issuer endpoints from §3. When both exist, run exactly this:
 
    Expected: the "Asset registry override" block prints
    `instrumentId=USDCx` and the resolved admin party; pre-flight reports
-   **zero placeholder warnings** and `✓ pre-flight passed`, then exits
-   before any ledger write.
+   a single placeholder warning for the operator-specific `walletGatewayUrl`
+   (a warning, not an error, on `--target testnet`) and `✓ pre-flight passed`,
+   then exits before any ledger write. Zero placeholder warnings only holds
+   once `walletGatewayUrl` is filled.
 3. **Record opening balances.** Sum the sender's and recipient's owned
    USDCx holdings (concrete-template ACS query with the package-name id —
    interface queries hit the JSON API 200-element cap; both lessons carry
