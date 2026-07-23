@@ -105,19 +105,6 @@ export function ConnectFlow() {
             CS
           </div>
           <span style={{ fontSize: 16, fontWeight: 500 }}>Canton Streams</span>
-          <span
-            className="mono"
-            style={{
-              fontSize: 10,
-              color: 'var(--fg-4)',
-              marginLeft: 6,
-              padding: '2px 6px',
-              border: '1px solid var(--line)',
-              borderRadius: 4,
-            }}
-          >
-            v1.0.0-rc.1
-          </span>
         </div>
 
         <div style={{ maxWidth: 460 }}>

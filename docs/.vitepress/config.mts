@@ -79,7 +79,7 @@ export default defineConfig({
           { text: 'Threat Model', link: '/THREAT-MODEL' },
         ],
       },
-      { text: 'v1.0.0-rc.1', link: '/changelog' },
+      { text: 'Changelog', link: '/changelog' },
     ],
 
     sidebar: [
