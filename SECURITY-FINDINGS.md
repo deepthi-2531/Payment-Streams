@@ -59,12 +59,20 @@ fix did not. All are fixed and deployed.
 | PC4 | Release not idempotent across a crash | Fixed (live) | The per-cycle transfer uses a deterministic command id, so a crash between the committed transfer and the persisted state deduplicates on-ledger instead of paying twice on restart. |
 | PC5 | Recipient auto-accept could blind-sign an omitted echo | Fixed (live) | The auto-accept signer refuses unless the wallet gateway echoes the action and the exact offer it prepared; an omitted field is treated as unverified and rejected. |
 
-Lower-severity items in the same pass: the CC holding is now matched by module
-and entity (not just a trailing name); an absent tracked-offer id and an
-unrecognized party-hosting response both fail closed. Deferred, non-blocking:
-dashboard direct-settle receiver/amount binding and https-only client transport;
-weaker on-ledger dedup on two index templates (pending a DAR re-vet); and two
-reverse-proxy/container header hardening items.
+Lower-severity items also addressed in this pass: the CC holding is matched by
+module and entity (not just a trailing name); an absent tracked-offer id and an
+unrecognized party-hosting response both fail closed; the wallet gateway URL must
+be https (loopback excepted); the dashboard direct-settle now checks the proxy
+prepared the transfer for the connected payer as signer; and the nginx
+static-asset location repeats the security headers it would otherwise drop.
+
+Deferred, non-blocking follow-ups: binding the receiver and amount on the
+dashboard direct-settle (needs the recipient threaded through the wallet call);
+stronger on-ledger dedup on the two operator-written index templates
+(`RecordRelease` / `RecordCycle`), which is index-only and pending a DAR re-vet
+where both are redesigned together; and the container DAR-pin manifest build
+context. The hosted-wallet auto-accept path these touch is disabled in the
+current deployment.
 
 ## Low
 
