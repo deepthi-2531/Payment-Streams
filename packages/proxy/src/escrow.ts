@@ -592,6 +592,52 @@ export class EscrowLane {
     return run;
   }
 
+  /** Live free CC balance held by the shared escrow custody party. */
+  private async poolFreeBalance(): Promise<number> {
+    const AMULET = '#splice-amulet:Splice.Amulet:Amulet';
+    const { offset } = await ledger(this.config, 'GET', '/v2/state/ledger-end');
+    const rows: any[] = await ledger(this.config, 'POST', '/v2/state/active-contracts', {
+      filter: {
+        filtersByParty: {
+          [this.config.escrowParty]: {
+            cumulative: [
+              { identifierFilter: { TemplateFilter: { value: { templateId: AMULET, includeCreatedEventBlob: false } } } },
+            ],
+          },
+        },
+      },
+      verbose: false,
+      activeAtOffset: offset,
+    });
+    let bal = 0;
+    for (const r of rows) {
+      const v = (r.contractEntry?.JsActiveContract?.createdEvent?.createArgument?.amount ?? {})?.initialAmount;
+      if (v !== undefined) bal += Number(v);
+    }
+    return bal;
+  }
+
+  /** Refuse to move funds out of the shared custody party if doing so would dip
+   * into balance owed to OTHER active escrows: the party must hold at least the
+   * sum of every active escrow's remaining. Enforced before every release and
+   * refund, so one escrow can never spend another's deposit. This is a solvency
+   * interlock over the commingled party, not literal per-escrow sub-accounts
+   * (which would need separate parties or an on-ledger lock). */
+  private async assertPoolSolvent(store: EscrowStore): Promise<void> {
+    const owed = Object.values(store.escrows)
+      .filter((x) => x.status === 'active')
+      .reduce((s, x) => s + remainingOf(x), 0);
+    if (owed <= 0) return;
+    const pool = await this.poolFreeBalance();
+    if (pool + 1e-6 < owed) {
+      throw new V1LaneError(
+        409,
+        'escrow_pool_insolvent',
+        `escrow custody balance ${pool.toFixed(4)} CC is below the ${owed.toFixed(4)} CC owed across active escrows; halting to protect other depositors`,
+      );
+    }
+  }
+
   /** Public escrow config — the deposit target a wallet needs to fund an escrow. */
   info(): {
     escrowParty: string;
@@ -768,6 +814,7 @@ export class EscrowLane {
     const cycleNo = e.releases.length + 1;
     const scheduledDueAt = e.nextDueAt; // baseline for cadence-adherence
 
+    await this.assertPoolSolvent(store);
     const res = await settleCycle(
       this.config,
       leg(this.config.escrowParty, e.recipient, `${escrowId}:release`),
@@ -832,6 +879,7 @@ export class EscrowLane {
     let refundTransferId = 'none';
     let refundPending: string | undefined;
     if (remaining > 0) {
+      await this.assertPoolSolvent(store);
       const res = await settleCycle(
         this.config,
         leg(this.config.escrowParty, e.originalPayer, `${escrowId}:refund`),
