@@ -55,8 +55,8 @@ debug-config.mjs
 docs/reports/
 
 # Internal security audits (raw finding ids + reproduction detail) — the
-# published, redacted register is SECURITY-FINDINGS.md + AUDIT-SCOPE.md at the
-# repo root. Keep the dated working audits local.
+# published, redacted register is docs/SECURITY-FINDINGS.md +
+# docs/AUDIT-SCOPE.md. Keep the dated working audits local.
 docs/SECURITY-AUDIT-*.md
 docs/SECURITY-POSTFIX-*.md
 docs/SECURITY-PRECOMMIT-*.md
