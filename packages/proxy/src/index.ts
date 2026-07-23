@@ -125,6 +125,11 @@ import {
   markCancelledFlowAdminViaJson,
 } from './v2-write.js';
 import { getSupportedAssets } from './assets.js';
+import {
+  EscrowLane,
+  startEscrowStreamer,
+  ensureEscrowPreapproval,
+} from './escrow.js';
 
 // ---------------------------------------------------------------------------
 // Configuration from environment
@@ -155,9 +160,15 @@ assertAuthConfigSafe(authConfig);
  * template / TransferFactory interface ids, operator/user id) with the spec's
  * defaults. Parallel to the SDK-backed V2 /api/streams group.
  */
-const v1Lane = new V1LaneService(parseV1LaneConfig(process.env));
+const v1LaneConfig = parseV1LaneConfig(process.env);
+const v1Lane = new V1LaneService(v1LaneConfig);
+/** Operator-custodied escrow lane — the "sign once" path for wallets that
+ * cannot vet the streams DAR. Holds deposited funds in a dedicated escrow party
+ * and streams them out on a schedule. Inert unless ESCROW_PARTY is set. */
+const escrowLane = new EscrowLane(v1LaneConfig);
 let startupReadiness: ReadinessReport | null = null;
 let stopAutoWithdrawWorker: (() => void) | null = null;
+let stopEscrowStreamer: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Express app
@@ -2261,12 +2272,107 @@ async function start(): Promise<void> {
       console.log(`  Synchronizer: ${CANTON_SYNCHRONIZER_ID}`);
     }
     logAuthConfig(authConfig);
+    if (v1LaneConfig.escrowParty) {
+      const op = v1LaneConfig.escrowParty.split('::')[0];
+      void ensureEscrowPreapproval(v1LaneConfig)
+        .then((ok) =>
+          console.log(`  Escrow party (${op}) preapproval: ${ok ? 'ready' : 'not set — deposits may pend'}`),
+        )
+        .catch((err) => console.log(`  Escrow preapproval check failed: ${(err as Error).message}`));
+      stopEscrowStreamer = startEscrowStreamer(escrowLane, v1LaneConfig);
+      console.log(`  Escrow streamer: on (tick ${v1LaneConfig.escrowTickSeconds}s, party ${op})`);
+    } else {
+      console.log('  Escrow lane: off (set ESCROW_PARTY to enable)');
+    }
   });
 }
+
+// ---------------------------------------------------------------------------
+// Operator-custodied escrow lane — the "sign once" path for wallets that cannot
+// vet the streams DAR. The payer deposits the full amount into the escrow party
+// once; the operator streams it out to the payee on a schedule and refunds any
+// unspent balance on stop. Custodial by construction — the operator holds the
+// funds mid-flight (see docs/SETTLEMENT-DESIGN.md).
+// ---------------------------------------------------------------------------
+
+/** Create an escrow: deposit (or record a wallet-signed deposit) + start streaming. */
+app.post('/api/v1/escrows', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const payer =
+      (body['payerParty'] as string | undefined) ??
+      (body['payer'] as string | undefined) ??
+      auth.party;
+    // Only the payer may fund an escrow from their own wallet.
+    enforceRole(auth.party, getRequiredRole('create'), payer);
+    const created = await escrowLane.createEscrow({
+      escrowId: body['escrowId'] as string | undefined,
+      originalPayer: payer,
+      recipient:
+        (body['recipientParty'] as string | undefined) ??
+        (body['recipient'] as string | undefined) ??
+        '',
+      ratePerCycle: String(body['ratePerCycle'] ?? ''),
+      cadenceSeconds: Number(body['cadenceSeconds'] ?? 86400),
+      totalDeposit: String(body['totalDeposit'] ?? body['totalDeposited'] ?? ''),
+      fundingTransferId: body['fundingTransferId'] as string | undefined,
+    });
+    res.status(201).json(serializeForJson(created));
+  } catch (err) {
+    handleError(res, err, 'createEscrow');
+  }
+});
+
+/** List escrows where the caller is the payer or recipient. */
+app.get('/api/v1/escrows', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'query', authConfig);
+    res.json(serializeForJson(escrowLane.listEscrows(auth.party)));
+  } catch (err) {
+    handleError(res, err, 'listEscrows');
+  }
+});
+
+/** Escrow detail (payer or recipient only). */
+app.get('/api/v1/escrows/:id', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'query', authConfig);
+    res.json(serializeForJson(escrowLane.getEscrow(req.params['id']!, auth.party)));
+  } catch (err) {
+    handleError(res, err, 'getEscrow');
+  }
+});
+
+/** Manually release one cycle now (normally the streamer does this on schedule). */
+app.post('/api/v1/escrows/:id/release', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    escrowLane.getEscrow(req.params['id']!, auth.party); // authorize: payer or recipient
+    const out = await escrowLane.releaseEscrowOnce(req.params['id']!);
+    res.json(serializeForJson(out));
+  } catch (err) {
+    handleError(res, err, 'releaseEscrow');
+  }
+});
+
+/** Stop the escrow and refund the unspent balance to the payer. Payer only. */
+app.post('/api/v1/escrows/:id/refund', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const esc = escrowLane.getEscrow(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', esc.originalPayer);
+    const out = await escrowLane.refundEscrow(req.params['id']!);
+    res.json(serializeForJson(out));
+  } catch (err) {
+    handleError(res, err, 'refundEscrow');
+  }
+});
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopAutoWithdrawWorker?.();
+    stopEscrowStreamer?.();
   });
 }
 

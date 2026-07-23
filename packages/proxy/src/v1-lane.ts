@@ -77,6 +77,19 @@ export interface V1LaneConfig {
   streamAdminTemplateId: string;
   /** Operator-signed direct-transfer index template id (StreamRecord). */
   streamRecordTemplateId: string;
+  /** Operator-custodied escrow party — holds deposited funds and streams them
+   * out. Empty disables the escrow lane. */
+  escrowParty: string;
+  /** OperatorEscrow template id (operator-signed custodial escrow record). */
+  operatorEscrowTemplateId: string;
+  /** Splice validator app API base, e.g. http://127.0.0.1:5003/api/validator —
+   * used to set up the escrow party's TransferPreapproval. */
+  validatorApiUrl: string;
+  /** Validator app JWT audience + HS256 secret for its wallet API. */
+  validatorAuthAudience: string;
+  validatorAuthSecret: string;
+  /** Escrow streamer tick interval in seconds (auto-release cadence check). */
+  escrowTickSeconds: number;
   /** TransferFactory interface id on the TransferFactory_Transfer exercise. */
   transferFactoryInterfaceId: string;
   /** v2 TransferFactory interface id (v2 direct-delivery money leg). */
@@ -123,6 +136,15 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
       'STREAM_RECORD_TEMPLATE_ID',
       '#canton-streams:CantonStreams.Stream.StreamRecord:StreamRecord',
     ),
+    escrowParty: get('ESCROW_PARTY'),
+    operatorEscrowTemplateId: get(
+      'OPERATOR_ESCROW_TEMPLATE_ID',
+      '#canton-streams:CantonStreams.Stream.OperatorEscrow:OperatorEscrow',
+    ),
+    validatorApiUrl: get('VALIDATOR_API_URL').replace(/\/+$/, ''),
+    validatorAuthAudience: get('VALIDATOR_AUTH_AUDIENCE'),
+    validatorAuthSecret: get('VALIDATOR_AUTH_SECRET'),
+    escrowTickSeconds: Number(get('ESCROW_STREAM_TICK_SECONDS', '30')),
     transferFactoryInterfaceId: get(
       'TRANSFER_FACTORY_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory',
@@ -283,7 +305,7 @@ export class V1LaneError extends Error {
 // HTTP helpers (ported verbatim from interest-stream-scheduler.mjs:108-140)
 // ---------------------------------------------------------------------------
 
-async function ledger(
+export async function ledger(
   config: V1LaneConfig,
   method: string,
   path: string,
@@ -335,7 +357,7 @@ function choiceContextValues(ctx: any): { values: Record<string, unknown> } {
 }
 
 let submitCounter = 0;
-async function submit(
+export async function submit(
   config: V1LaneConfig,
   tag: string,
   actAs: string[],
@@ -1328,7 +1350,7 @@ async function prepareInstructionActionCommand(
 }
 
 /** Model 1: the proxy forms AND submits the transfer (payer hosted here). */
-async function settleCycle(
+export async function settleCycle(
   config: V1LaneConfig,
   agreement: V1Agreement,
   amount: number,
