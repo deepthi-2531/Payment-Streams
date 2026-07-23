@@ -47,32 +47,36 @@ not reproduction steps against the live system.
 
 ## Pre-commit hardening (concurrency + escrow custody)
 
-A pre-commit sweep of the settlement subsystem found further defects outside the
-settlement-recording paths — some the same root cause reaching where an earlier
-fix did not. All are fixed and deployed.
+A pre-commit review of the settlement subsystem identified the following findings
+outside the settlement-recording paths; several shared a root cause with an
+earlier fix that had not reached these paths. Each finding was remediated and the
+remediation verified against the live environment.
 
 | ID | Title | Status | Control |
 |----|-------|--------|---------|
-| PC1 | Whole-store read-modify-write serialized only per stream | Fixed (live) | Every mutation of the proxy's V1 state store now passes through one process-wide lock plus a cross-process lockfile (shared with the escrow store); the store write is atomic. Two streams can no longer race the single file and clobber a settled total or status — which could otherwise re-open a paid cycle or revert a stop. The previously unlocked withdraw-record path is included. |
+| PC1 | Whole-store read-modify-write serialized only per stream | Fixed (live) | Every mutation of the proxy's V1 state store passes through one process-wide lock plus a cross-process lockfile (shared with the escrow store); the store write is atomic. Two streams can no longer race the single file and clobber a settled total or status — which could otherwise re-open a paid cycle or revert a stop. The previously unlocked withdraw-record path is included. |
 | PC2 | Escrow deposit trusted a locked, undelivered transfer | Fixed (live) | A funding deposit is recorded only when the committed update actually created the configured CC as a holding owned by the escrow party, not merely a transfer authorization. A locked, still-withdrawable offer can no longer be recorded as a funded deposit and freeze the pool by inflating its owed balance. |
 | PC3 | Final-cycle pending release could strand a refund | Fixed (live) | An escrow is marked completed only when every release has delivered; a release that lands as a pending offer keeps it open, and an offer that later expires reverts its advance and reopens the escrow so the payer's refund can still recover the funds. |
 | PC4 | Release not idempotent across a crash | Fixed (live) | The per-cycle transfer uses a deterministic command id, so a crash between the committed transfer and the persisted state deduplicates on-ledger instead of paying twice on restart. |
 | PC5 | Recipient auto-accept could blind-sign an omitted echo | Fixed (live) | The auto-accept signer refuses unless the wallet gateway echoes the action and the exact offer it prepared; an omitted field is treated as unverified and rejected. |
 
-Lower-severity items also addressed in this pass: the CC holding is matched by
-module and entity (not just a trailing name); an absent tracked-offer id and an
-unrecognized party-hosting response both fail closed; the wallet gateway URL must
-be https (loopback excepted); the dashboard direct-settle now checks the proxy
-prepared the transfer for the connected payer as signer; and the nginx
-static-asset location repeats the security headers it would otherwise drop.
+The following lower-severity findings were additionally identified and remediated
+during this review: the CC holding template is matched by module and entity
+rather than by a trailing name; an absent tracked-offer identifier and an
+unrecognized party-hosting response are rejected (fail-closed); the wallet gateway
+URL is required to use HTTPS, with a loopback exception; the dashboard
+direct-settle path verifies that the prepared transfer names the connected payer
+as signer; and the reverse proxy re-emits its security headers on static-asset
+responses.
 
-Deferred, non-blocking follow-ups: binding the receiver and amount on the
-dashboard direct-settle (needs the recipient threaded through the wallet call);
-stronger on-ledger dedup on the two operator-written index templates
-(`RecordRelease` / `RecordCycle`), which is index-only and pending a DAR re-vet
-where both are redesigned together; and the container DAR-pin manifest build
-context. The hosted-wallet auto-accept path these touch is disabled in the
-current deployment.
+The following items were assessed as non-blocking and deferred: binding the
+receiver and amount on the dashboard direct-settle path, which requires the
+recipient to be threaded through the wallet call; stronger on-ledger
+deduplication on the two operator-written index templates (`RecordRelease` and
+`RecordCycle`), which is index-only and scheduled for the next DAR re-vet, where
+both templates are to be redesigned together; and the container DAR-pin manifest
+build context. The hosted-wallet auto-accept path affected by these items is
+disabled in the current deployment.
 
 ## Low
 
