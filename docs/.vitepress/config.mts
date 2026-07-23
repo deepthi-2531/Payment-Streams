@@ -108,6 +108,8 @@ export default defineConfig({
         collapsed: false,
         items: [
           { text: 'Threat Model', link: '/THREAT-MODEL' },
+          { text: 'Security Findings', link: '/SECURITY-FINDINGS' },
+          { text: 'Audit Scope', link: '/AUDIT-SCOPE' },
         ],
       },
       {
