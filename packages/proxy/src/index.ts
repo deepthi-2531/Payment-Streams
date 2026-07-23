@@ -2295,6 +2295,36 @@ async function start(): Promise<void> {
 // funds mid-flight (see docs/SETTLEMENT-DESIGN.md).
 // ---------------------------------------------------------------------------
 
+/** Public escrow config — the deposit target + instrument a wallet needs. */
+app.get('/api/v1/escrow-info', (_req, res) => {
+  try {
+    res.json(serializeForJson(escrowLane.info()));
+  } catch (err) {
+    handleError(res, err, 'escrowInfo');
+  }
+});
+
+/** Model-2: form the payer→escrow deposit for the payer's WALLET to sign. */
+app.post('/api/v1/escrows/prepare-deposit', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const payer =
+      (body['payerParty'] as string | undefined) ??
+      (body['payer'] as string | undefined) ??
+      auth.party;
+    enforceRole(auth.party, getRequiredRole('create'), payer);
+    const prepared = await escrowLane.prepareDeposit({
+      payer,
+      totalDeposit: String(body['totalDeposit'] ?? body['totalDeposited'] ?? ''),
+      holdings: body['holdings'] as { cid: string; amount: number }[] | undefined,
+    });
+    res.json(serializeForJson(prepared));
+  } catch (err) {
+    handleError(res, err, 'prepareEscrowDeposit');
+  }
+});
+
 /** Create an escrow: deposit (or record a wallet-signed deposit) + start streaming. */
 app.post('/api/v1/escrows', async (req, res) => {
   try {

@@ -24,9 +24,13 @@ import {
   settleCycle,
   submit,
   ledger,
+  prepareSettleCommand,
+  prepareSettleCommandV2,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
+  type HoldingInput,
+  type PreparedSettle,
 } from './v1-lane.js';
 
 // ---------------------------------------------------------------------------
@@ -302,6 +306,45 @@ export class EscrowLane {
     if (!this.enabled) {
       throw new V1LaneError(503, 'escrow_disabled', 'Escrow lane is not configured (ESCROW_PARTY unset)');
     }
+  }
+
+  /** Public escrow config — the deposit target a wallet needs to fund an escrow. */
+  info(): {
+    escrowParty: string;
+    instrumentAdmin: string;
+    instrumentId: string;
+    tickSeconds: number;
+  } {
+    return {
+      escrowParty: this.config.escrowParty,
+      instrumentAdmin: this.config.ccAdminParty,
+      instrumentId: this.config.instrumentId,
+      tickSeconds: this.config.escrowTickSeconds,
+    };
+  }
+
+  /** Form (no submit) the payer→escrow deposit transfer for the payer's WALLET to
+   * sign on its own participant. Used when the payer is not hosted here (a Loop
+   * wallet): the wallet submits this, then POST /escrows records the escrow with
+   * the resulting updateId as `fundingTransferId`. */
+  async prepareDeposit(input: {
+    payer: string;
+    totalDeposit: string;
+    holdings?: HoldingInput[];
+  }): Promise<PreparedSettle> {
+    this.requireEnabled();
+    if (!input.payer) throw new V1LaneError(400, 'missing_payer', 'payer required');
+    const amount = Number(input.totalDeposit);
+    if (!(amount > 0)) throw new V1LaneError(400, 'invalid_deposit', 'totalDeposit must be > 0');
+    const prepareFn =
+      this.config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+    return prepareFn(
+      this.config,
+      leg(input.payer, this.config.escrowParty, `deposit-${Date.now()}`),
+      amount,
+      0,
+      input.holdings,
+    );
   }
 
   /** Stand up an escrow: (deposit if needed) → create OperatorEscrow → schedule. */

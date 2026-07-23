@@ -993,7 +993,7 @@ function selectClaimRecord(
  * its own participant, so the proxy can't read them); otherwise they are read
  * from this participant's ACS (model 1: a payer this participant hosts).
  */
-async function prepareSettleCommand(
+export async function prepareSettleCommand(
   config: V1LaneConfig,
   agreement: V1Agreement,
   amount: number,
