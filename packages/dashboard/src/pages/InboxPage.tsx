@@ -20,16 +20,10 @@ import {
   SectionHeader,
 } from '../components/common/index.js';
 import { PartyChip } from '../components/primitives/PartyChip.js';
-import { VestingBadge } from '../components/primitives/VestingBadge.js';
-import { SettlementBadge } from '../components/primitives/SettlementBadge.js';
 import { WalletApprovalControl } from '../components/streams/WalletApprovalControl.js';
+import { fmtCc, fmtAmount, displayName, instrumentLabel } from '../lib/format.js';
 import type { Stream } from '@canton-streams/sdk/browser';
 import type { V1ReceivedPendingOffer, V1ReceivedTransfer } from '../api/client.js';
-
-/** Amulet is Canton Coin — show the familiar ticker in the recipient view. */
-function instrumentLabel(id: string): string {
-  return id === 'Amulet' ? 'CC' : id;
-}
 
 export function InboxPage() {
   const { party, isAuthenticated } = useAuth();
@@ -155,54 +149,12 @@ function IncomingCard({ stream }: { readonly stream: Stream }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <PartyChip identity={{ handle: sender.split('::')[0] ?? sender, party: sender }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--fg-4)',
-              marginBottom: 2,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-          >
-            <ArrowDownLeft size={11} /> From ·{' '}
-            <span className="mono" style={{ color: 'var(--fg-3)' }}>
-              {config.streamId}
-            </span>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', marginBottom: 2, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <ArrowDownLeft size={11} /> From {displayName(sender)}
           </div>
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'baseline',
-              gap: 8,
-            }}
-          >
-            <span
-              className="mono"
-              style={{
-                fontSize: 18,
-                fontWeight: 500,
-                color: 'var(--fg)',
-                letterSpacing: '-0.02em',
-              }}
-            >
-              {config.totalDeposited.toString()}
-            </span>
-            {config.instrumentRef && (
-              <span
-                className="mono"
-                style={{ fontSize: 12, color: 'var(--fg-3)' }}
-              >
-                {config.instrumentRef.instrumentId}
-              </span>
-            )}
+          <div style={{ fontSize: 18, fontWeight: 500, color: 'var(--fg)' }}>
+            {fmtAmount(config.totalDeposited.toString())} {config.instrumentRef ? instrumentLabel(config.instrumentRef.instrumentId) : 'CC'}
           </div>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-end' }}>
-          <VestingBadge vesting={config.vestingMode.mode} />
-          {config.settlementMode && (
-            <SettlementBadge mode={config.settlementMode} />
-          )}
         </div>
       </div>
 
@@ -254,31 +206,11 @@ function ReceivedOfferCard({ offer }: { readonly offer: V1ReceivedPendingOffer }
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <PartyChip identity={{ handle: sender.split('::')[0] ?? sender, party: sender }} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div
-            style={{
-              fontSize: 12,
-              color: 'var(--fg-4)',
-              marginBottom: 2,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-          >
-            <ArrowDownLeft size={11} /> Offer from ·{' '}
-            <span className="mono" style={{ color: 'var(--fg-3)' }}>
-              {sender.split('::')[0] ?? sender}
-            </span>
+          <div style={{ fontSize: 12, color: 'var(--fg-4)', marginBottom: 2, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <ArrowDownLeft size={11} /> {displayName(sender)} wants to send you
           </div>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-            <span
-              className="mono"
-              style={{ fontSize: 18, fontWeight: 500, color: 'var(--fg)', letterSpacing: '-0.02em' }}
-            >
-              {Number(offer.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })}
-            </span>
-            <span className="mono" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
-              {instrumentLabel(offer.instrumentId)}
-            </span>
+          <div style={{ fontSize: 18, fontWeight: 500, color: 'var(--fg)' }}>
+            {fmtCc(offer.amount)}
           </div>
         </div>
         {offer.expired ? (
@@ -361,8 +293,8 @@ function ReceivedTransferRow({ transfer }: { readonly transfer: V1ReceivedTransf
       }}
     >
       <CheckCircle2 size={16} style={{ color: 'var(--accent, #2e9e6b)', flexShrink: 0 }} />
-      <span className="mono" style={{ fontSize: 15, fontWeight: 500, color: 'var(--fg)' }}>
-        {Number(transfer.amount).toLocaleString(undefined, { maximumFractionDigits: 4 })} CC
+      <span style={{ fontSize: 15, fontWeight: 500, color: 'var(--fg)' }}>
+        {fmtCc(transfer.amount)}
       </span>
       <span style={{ fontSize: 12, color: 'var(--fg-4)' }}>
         received · {new Date(transfer.at).toLocaleString()}

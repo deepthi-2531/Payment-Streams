@@ -1,10 +1,6 @@
 /**
- * V1StreamsPage — list of proxy V1 streams (GET /api/v1/streams).
- *
- * Distinct from the V2 `StreamsPage`: the V1 lane has its own data shape
- * (`V1StreamView`) and its own settle-cycle lifecycle, so it gets its own
- * list rather than a filter on the V2 table. Each row links to the V1
- * detail page keyed by `agreementId`.
+ * Streams list — a person's recurring payments (paid straight from their wallet
+ * each period). Rows lead with the counterparty and amount, not internal ids.
  */
 
 import { useMemo, useState } from 'react';
@@ -12,13 +8,9 @@ import { Link } from 'react-router';
 import { Zap, Search, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { useStreamsV1 } from '../hooks/useStreams.js';
 import { useAuth } from '../store/auth.js';
-import { partyShort } from '../components/primitives/PartyChip.js';
 import { LaneSwitch } from '../components/streams/LaneSwitch.js';
-import {
-  Skeleton,
-  ErrorState,
-  PageHeader,
-} from '../components/common/index.js';
+import { Skeleton, ErrorState, PageHeader } from '../components/common/index.js';
+import { fmtCc, displayName } from '../lib/format.js';
 import type { V1StreamView } from '../api/client.js';
 
 export function V1StreamsPage() {
@@ -30,76 +22,53 @@ export function V1StreamsPage() {
     if (!streamsQ.data) return [];
     if (!search.trim()) return [...streamsQ.data];
     const q = search.trim().toLowerCase();
-    return streamsQ.data.filter((s) => {
-      const haystack =
-        `${s.agreement.agreementId} ${s.agreement.payerParty} ${s.agreement.recipientParty}`.toLowerCase();
-      return haystack.includes(q);
-    });
+    return streamsQ.data.filter((s) =>
+      `${s.agreement.payerParty} ${s.agreement.recipientParty}`.toLowerCase().includes(q),
+    );
   }, [streamsQ.data, search]);
 
   return (
     <div style={{ paddingTop: 28 }}>
       <PageHeader
         title="Streams"
-        subtitle="Direct-delivery (V1) lane. Settle draws one cycle from the payer's wallet."
+        subtitle="Recurring payments sent straight from your wallet each period."
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <LaneSwitch lane="v1" kind="streams" />
             <Link to="/v1/create" className="btn btn-primary">
-              <Zap size={14} /> New V1 stream
+              <Zap size={14} /> New stream
             </Link>
           </div>
         }
       />
 
-      {/* Search */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          background: 'var(--bg-elev)',
-          border: '1px solid var(--line-2)',
-          borderRadius: 'var(--r-md)',
-          padding: '6px 10px',
-          minWidth: 220,
-          maxWidth: 320,
-          marginBottom: 18,
+          display: 'flex', alignItems: 'center', gap: 6,
+          background: 'var(--bg-elev)', border: '1px solid var(--line-2)', borderRadius: 'var(--r-md)',
+          padding: '6px 10px', minWidth: 220, maxWidth: 320, marginBottom: 18,
         }}
       >
         <Search size={12} style={{ color: 'var(--fg-4)' }} />
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search id or party…"
-          style={{
-            background: 'transparent',
-            border: 'none',
-            outline: 'none',
-            fontSize: 12.5,
-            color: 'var(--fg)',
-            width: '100%',
-          }}
+          placeholder="Search by name…"
+          style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: 12.5, color: 'var(--fg)', width: '100%' }}
         />
       </div>
 
       {streamsQ.isPending && <Skeleton.Row count={5} height={64} />}
 
       {streamsQ.isError && (
-        <ErrorState
-          error={streamsQ.error}
-          title="Could not load V1 streams"
-          onRetry={() => streamsQ.refetch()}
-        />
+        <ErrorState error={streamsQ.error} title="Could not load streams" onRetry={() => streamsQ.refetch()} />
       )}
 
       {streamsQ.data && visible.length === 0 && !streamsQ.isPending && (
         <div className="card" style={{ padding: 36, textAlign: 'center' }}>
-          <p style={{ margin: '0 0 14px', color: 'var(--fg-3)', fontSize: 13 }}>
-            No V1 streams yet.
-          </p>
+          <p style={{ margin: '0 0 14px', color: 'var(--fg-3)', fontSize: 13 }}>No streams yet.</p>
           <Link to="/v1/create" className="btn btn-primary" style={{ display: 'inline-flex' }}>
-            <Zap size={14} /> Create your first V1 stream
+            <Zap size={14} /> Create your first stream
           </Link>
         </div>
       )}
@@ -124,79 +93,48 @@ function V1Row({
   readonly party: string | null;
   readonly last: boolean;
 }) {
-  const { agreement, state, due } = view;
+  const { agreement, state } = view;
   const outgoing = party != null && agreement.payerParty === party;
   const counterparty = outgoing ? agreement.recipientParty : agreement.payerParty;
+  const per = agreement.cadence === 'hourly' ? 'hour' : agreement.cadence === 'minute' ? 'minute' : agreement.cadence === 'second' ? 'second' : 'day';
 
   return (
     <Link
       to={`/v1/streams/${encodeURIComponent(agreement.agreementId)}`}
+      title={agreement.agreementId}
       style={{
-        display: 'grid',
-        gridTemplateColumns: '1.4fr 1.6fr 1fr 1fr auto',
-        alignItems: 'center',
-        gap: 14,
-        padding: '14px 18px',
-        textDecoration: 'none',
-        color: 'inherit',
+        display: 'grid', gridTemplateColumns: '1.6fr 1.2fr 1fr auto', alignItems: 'center', gap: 14,
+        padding: '14px 18px', textDecoration: 'none', color: 'inherit',
         borderBottom: last ? 'none' : '1px solid var(--line)',
       }}
     >
-      {/* Stream id + direction */}
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {outgoing ? (
-            <ArrowUpRight size={13} style={{ color: 'var(--warn)' }} />
-          ) : (
-            <ArrowDownLeft size={13} style={{ color: 'var(--accent)' }} />
-          )}
-          <span
-            className="mono"
-            style={{
-              fontSize: 12.5,
-              color: 'var(--fg)',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-            title={agreement.agreementId}
-          >
-            {agreement.agreementId}
+      {/* Counterparty */}
+      <div style={{ minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        {outgoing ? (
+          <ArrowUpRight size={15} style={{ color: 'var(--warn)', flexShrink: 0 }} />
+        ) : (
+          <ArrowDownLeft size={15} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        )}
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 13.5, color: 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {outgoing ? 'To ' : 'From '}{displayName(counterparty)}
+          </div>
+          <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>
+            {agreement.status === 'stopped' ? 'stopped' : 'active'}
           </span>
         </div>
-        <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>
-          {agreement.cadence} · {agreement.arrearsPolicy}
-        </span>
-      </div>
-
-      {/* Counterparty */}
-      <div style={{ minWidth: 0 }}>
-        <span style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
-          {outgoing ? 'to ' : 'from '}
-          {counterparty.split('::')[0]}
-        </span>
-        <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-4)' }}>
-          {partyShort(counterparty)}…
-        </span>
       </div>
 
       {/* Rate */}
       <div>
-        <span className="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>
-          {agreement.ratePerPeriod} <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>CC</span>
-        </span>
-        <span style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-4)' }}>
-          per {agreement.cadence === 'hourly' ? 'hour' : 'day'}
-        </span>
+        <span style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtCc(agreement.ratePerPeriod)}</span>
+        <span style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-4)' }}>per {per}</span>
       </div>
 
-      {/* Settled cycles */}
+      {/* Payments sent */}
       <div>
         <span className="badge accent" style={{ fontSize: 11 }}>
-          {state.cycles} {state.cycles === 1 ? 'cycle' : 'cycles'}
-        </span>
-        <span style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-4)', marginTop: 4 }}>
-          due {due}
+          {state.cycles} {state.cycles === 1 ? 'payment' : 'payments'}
         </span>
       </div>
 

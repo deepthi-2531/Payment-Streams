@@ -1,26 +1,25 @@
 /**
- * EscrowDetailPage — one operator-custodied stream (GET /api/v1/escrows/:id).
+ * EscrowDetailPage — one Vault stream.
  *
- * Custodial, so the audit view is first-class: an analytics strip that separates
- * streamed / delivered / pending / refunded, an append-only flow ledger of every
- * leg (from → to, on-chain anchor, who initiated it), and an on-demand
- * reconciliation against the chain (OperatorEscrow + balances + offer status).
+ * Leads with who's being paid and how much has gone out, in plain language. The
+ * on-chain audit trail (payment history + reconciliation) is kept but tucked
+ * behind a toggle so the default view stays simple.
  */
 
-import { useParams, Link } from 'react-router';
-import { Lock, ArrowLeft, ShieldAlert, ExternalLink, ArrowRight, Scale } from 'lucide-react';
-import { useEscrow, useRefundEscrow, useEscrowInfo, useReconcileEscrow } from '../hooks/useEscrows.js';
-import { useAuth } from '../store/auth.js';
 import { useState } from 'react';
-import { partyShort } from '../components/primitives/PartyChip.js';
+import { useParams, Link } from 'react-router';
+import { ArrowLeft, ShieldCheck, ExternalLink, ArrowRight, ChevronDown, ChevronRight } from 'lucide-react';
+import { useEscrow, useRefundEscrow, useReconcileEscrow } from '../hooks/useEscrows.js';
+import { useAuth } from '../store/auth.js';
 import { Skeleton, ErrorState, PageHeader } from '../components/common/index.js';
-import { explorerUpdateUrl, isVerifiableUpdateId } from '../lib/scanLink.js';
+import { explorerUpdateUrl, isVerifiableUpdateId, explorerName } from '../lib/scanLink.js';
+import { fmtCc, displayName, fmtWhen } from '../lib/format.js';
 import type { EscrowView, EscrowLedgerEntry } from '../api/client.js';
 
 const STATUS: Record<EscrowView['status'], { label: string; cls: string }> = {
-  active: { label: 'Streaming', cls: 'accent' },
+  active: { label: 'Paying out', cls: 'accent' },
   completed: { label: 'Completed', cls: 'accent' },
-  refunded: { label: 'Refunded', cls: '' },
+  refunded: { label: 'Stopped', cls: '' },
 };
 
 export function EscrowDetailPage() {
@@ -28,7 +27,7 @@ export function EscrowDetailPage() {
   const escrowQ = useEscrow(id);
 
   return (
-    <div style={{ paddingTop: 28, maxWidth: 860 }}>
+    <div style={{ paddingTop: 28, maxWidth: 820 }}>
       <Link
         to="/v1/escrows"
         style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--fg-3)', textDecoration: 'none', marginBottom: 12 }}
@@ -48,10 +47,10 @@ export function EscrowDetailPage() {
 function EscrowDetail({ view }: { view: EscrowView }) {
   const { party } = useAuth();
   const refund = useRefundEscrow();
-  const infoQ = useEscrowInfo();
   const [error, setError] = useState<string | null>(null);
 
   const isPayer = party != null && view.originalPayer === party;
+  const counterparty = isPayer ? view.recipient : view.originalPayer;
   const s = view.summary;
   const pct = Number(s.totalIn) > 0 ? Math.min(100, Math.round((Number(s.totalStreamed) / Number(s.totalIn)) * 100)) : 0;
   const status = STATUS[view.status];
@@ -68,63 +67,54 @@ function EscrowDetail({ view }: { view: EscrowView }) {
   return (
     <>
       <PageHeader
-        title="Vault stream"
-        subtitle={view.escrowId}
+        title={`${isPayer ? 'To' : 'From'} ${displayName(counterparty)}`}
+        subtitle={`${fmtCc(view.ratePerCycle)} every ${cadenceLabel(view.cadenceSeconds)}`}
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className={`badge ${status.cls}`} style={{ fontSize: 12 }}>{status.label}</span>
             {isPayer && view.status === 'active' && (
               <button className="btn btn-ghost" disabled={refund.isPending} onClick={doRefund}>
-                {refund.isPending ? 'Refunding…' : 'Stop & refund'}
+                {refund.isPending ? 'Stopping…' : 'Stop & get refund'}
               </button>
             )}
           </div>
         }
       />
 
-      <div className="card" style={{ padding: 13, marginBottom: 18, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
-        <ShieldAlert size={16} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
-        <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-          The deposit is held in the vault and paid out to the recipient on schedule — the payer signed
-          once. The payer can stop it anytime, and whatever hasn't been paid out is refunded.
-        </div>
+      {/* Money summary */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
+        <Metric label="Funded" value={fmtCc(s.totalIn)} />
+        <Metric label="Paid out" value={fmtCc(s.totalDelivered)} tone="good" />
+        {Number(s.totalPending) > 0 && <Metric label="Awaiting acceptance" value={fmtCc(s.totalPending)} tone="warn" />}
+        {Number(s.totalRefunded) > 0 && <Metric label="Returned to you" value={fmtCc(s.totalRefunded)} />}
+        <Metric label="Still in vault" value={fmtCc(s.remaining)} />
       </div>
-
-      {/* Analytics strip — streamed / delivered / pending / refunded / remaining. */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 10, marginBottom: 18 }}>
-        <Metric label="Deposited" value={fmtCC(s.totalIn)} />
-        <Metric label="Streamed" value={fmtCC(s.totalStreamed)} accent />
-        <Metric label="Delivered" value={fmtCC(s.totalDelivered)} tone="good" />
-        <Metric label="Pending" value={fmtCC(s.totalPending)} tone={Number(s.totalPending) > 0 ? 'warn' : undefined} />
-        <Metric label="Refunded" value={fmtCC(s.totalRefunded)} />
-        <Metric label="Remaining" value={fmtCC(s.remaining)} />
-      </div>
-
-      {Number(s.totalRefundPending) > 0 && (
-        <div className="card" style={{ padding: 10, marginBottom: 18, borderColor: 'var(--warn)', fontSize: 12, color: 'var(--warn)' }}>
-          Refund of {fmtCC(s.totalRefundPending)} left the vault but is awaiting the payer's acceptance
-          (not yet in the payer's wallet).
-        </div>
-      )}
 
       {/* Progress */}
       <div className="card" style={{ padding: 16, marginBottom: 18 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11.5, color: 'var(--fg-4)', marginBottom: 8 }}>
-          <span>{view.ratePerCycle} CC every {cadenceLabel(view.cadenceSeconds)} · {s.cyclesReleased} released ({s.cyclesDelivered} delivered / {s.cyclesPending} pending)</span>
-          <span>{pct}% streamed{view.status === 'active' ? ` · next ${fmt(view.nextDueAt)}` : ''}</span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--fg-4)', marginBottom: 8 }}>
+          <span>{s.cyclesDelivered} payment{s.cyclesDelivered === 1 ? '' : 's'} sent{s.cyclesPending > 0 ? ` · ${s.cyclesPending} awaiting acceptance` : ''}</span>
+          <span>{pct}% paid{view.status === 'active' ? ` · next ${fmtWhen(view.nextDueAt)}` : ''}</span>
         </div>
         <div style={{ height: 8, borderRadius: 4, background: 'var(--line-2)', overflow: 'hidden' }}>
           <div style={{ width: `${pct}%`, height: '100%', background: view.status === 'refunded' ? 'var(--fg-4)' : 'var(--accent)' }} />
         </div>
       </div>
 
-      {/* Parties */}
+      {/* Who + how it's held */}
       <div className="card" style={{ padding: 16, marginBottom: 18 }}>
-        <SectionTitle icon={<Lock size={11} />}>Parties</SectionTitle>
-        <Row label="Payer (source)" value={view.originalPayer} me={isPayer} />
-        <Row label="Recipient (destination)" value={view.recipient} me={party === view.recipient} />
-        {infoQ.data && <Row label="Operator vault (custodian)" value={infoQ.data.escrowParty} />}
+        <Row label={isPayer ? 'From (you)' : 'From'} value={displayName(view.originalPayer)} full={view.originalPayer} me={isPayer} />
+        <Row label={isPayer ? 'To' : 'To (you)'} value={displayName(view.recipient)} full={view.recipient} me={party === view.recipient} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 0 0', fontSize: 11.5, color: 'var(--fg-4)' }}>
+          <ShieldCheck size={13} style={{ color: 'var(--accent)' }} /> Funds held safely by CC Streams while the stream runs.
+        </div>
       </div>
+
+      {Number(s.totalRefundPending) > 0 && (
+        <div className="card" style={{ padding: 10, marginBottom: 18, borderColor: 'var(--warn)', fontSize: 12, color: 'var(--warn)' }}>
+          A refund of {fmtCc(s.totalRefundPending)} is on its way back to you — accept it in your wallet to receive it.
+        </div>
+      )}
 
       {error && (
         <div className="card" style={{ padding: 12, marginBottom: 18, borderColor: 'var(--warn)', fontSize: 12, color: 'var(--warn)' }}>
@@ -132,152 +122,124 @@ function EscrowDetail({ view }: { view: EscrowView }) {
         </div>
       )}
 
-      {/* Flow ledger — append-only audit trail of every value leg. */}
-      <div className="card" style={{ padding: 16, marginBottom: 18 }}>
-        <SectionTitle icon={<Lock size={11} />}>Flow ledger</SectionTitle>
-        {view.ledger.length === 0 ? (
-          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg-4)' }}>No legs recorded yet.</p>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <div style={{ display: 'grid', gap: 2, minWidth: 640 }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '28px 90px 1fr 96px 120px 90px 60px', gap: 8, padding: '0 0 6px', fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-4)' }}>
-                <span>#</span><span>Leg</span><span>From → To</span><span style={{ textAlign: 'right' }}>Amount</span><span>Delivery</span><span>By</span><span>Proof</span>
-              </div>
-              {view.ledger.map((l) => (
-                <LedgerRow key={l.eventId} l={l} />
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Reconciliation against the chain. */}
-      <ReconcileCard escrowId={view.escrowId} live={view.status === 'active'} />
+      {/* Payment history + verification, collapsed by default */}
+      <PaymentHistory view={view} />
     </>
   );
 }
 
-function LedgerRow({ l }: { l: EscrowLedgerEntry }) {
-  const kindTone = l.kind === 'deposit' ? 'good' : l.kind === 'refund' ? 'warn' : 'accent';
-  const delivered = l.delivery === 'direct' || l.offerStatus === 'accepted';
-  const deliveryLabel = l.delivery === 'direct'
-    ? 'delivered'
-    : l.offerStatus === 'accepted'
-      ? 'accepted'
-      : l.offerStatus === 'withdrawn'
-        ? 'withdrawn'
-        : l.offerStatus === 'expired'
-          ? 'expired'
-          : 'offer pending';
-  return (
-    <div
-      style={{ display: 'grid', gridTemplateColumns: '28px 90px 1fr 96px 120px 90px 60px', gap: 8, alignItems: 'center', padding: '8px 0', borderTop: '1px solid var(--line)', fontSize: 12 }}
-      title={l.authorizationBasis ?? l.reasonCode ?? ''}
-    >
-      <span className="mono" style={{ color: 'var(--fg-4)', fontSize: 11 }}>{l.seq}</span>
-      <span className={`badge ${kindTone === 'accent' ? 'accent' : ''}`} style={{ fontSize: 10.5, color: kindTone === 'good' ? 'var(--good, var(--accent))' : kindTone === 'warn' ? 'var(--warn)' : undefined }}>
-        {l.direction === 'in' ? '↓ ' : '↑ '}{l.kind}
-      </span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, color: 'var(--fg-2)' }}>
-        <span title={l.from}>{l.from.split('::')[0]}</span>
-        <ArrowRight size={11} style={{ color: 'var(--fg-4)', flexShrink: 0 }} />
-        <span title={l.to}>{l.to.split('::')[0]}</span>
-      </span>
-      <span className="mono" style={{ textAlign: 'right', color: 'var(--fg)' }}>{Number(Number(l.amount).toFixed(10))}</span>
-      <span style={{ fontSize: 11, color: delivered ? 'var(--good, var(--accent))' : l.delivery === 'pending_offer' ? 'var(--warn)' : 'var(--fg-3)' }}>
-        {deliveryLabel}
-      </span>
-      <span style={{ fontSize: 11, color: 'var(--fg-4)' }} title={l.initiatedBy === 'streamer' ? 'automated release, no per-cycle signature' : ''}>
-        {l.initiatedBy}
-      </span>
-      <span>{l.updateId && isVerifiableUpdateId(l.updateId) ? (
-        <a href={explorerUpdateUrl(l.updateId)} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, color: 'var(--accent)', textDecoration: 'none' }}>
-          Scan <ExternalLink size={10} />
-        </a>
-      ) : <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>—</span>}</span>
-    </div>
-  );
-}
+function PaymentHistory({ view }: { view: EscrowView }) {
+  const [open, setOpen] = useState(false);
+  const reconQ = useReconcileEscrow(view.escrowId, open);
+  const verified = reconQ.data ? reconQ.data.checks.every((c) => c.ok) : null;
 
-function ReconcileCard({ escrowId, live }: { escrowId: string; live: boolean }) {
-  const reconQ = useReconcileEscrow(escrowId, true);
-  const r = reconQ.data;
   return (
     <div className="card" style={{ padding: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-        <SectionTitle icon={<Scale size={11} />}>Reconciliation (off-ledger vs chain)</SectionTitle>
-        <button className="btn btn-ghost" style={{ fontSize: 11, padding: '3px 8px' }} onClick={() => reconQ.refetch()} disabled={reconQ.isFetching}>
-          {reconQ.isFetching ? 'Checking…' : 'Re-check'}
-        </button>
-      </div>
-      {reconQ.isPending && <p style={{ margin: 0, fontSize: 12, color: 'var(--fg-4)' }}>Reconciling…</p>}
-      {reconQ.isError && <p style={{ margin: 0, fontSize: 12, color: 'var(--warn)' }}>Could not reconcile right now.</p>}
-      {r && (
-        <>
-          <div style={{ display: 'grid', gap: 6, marginBottom: 12 }}>
-            {r.checks.map((c) => (
-              <div key={c.name} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12 }}>
-                <span className="badge" style={{ fontSize: 10, color: c.ok ? 'var(--good, var(--accent))' : 'var(--warn)', flexShrink: 0 }}>
-                  {c.ok ? '✓ ok' : '✗ break'}
-                </span>
-                <span style={{ color: 'var(--fg-3)' }}>{c.detail}</span>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11.5, color: 'var(--fg-3)' }}>
-            <span>On-ledger OperatorEscrow.released: <strong className="mono" style={{ color: 'var(--fg)' }}>{r.onLedger.operatorReleased ?? '—'}</strong></span>
-            <span>Deposited: <strong className="mono" style={{ color: 'var(--fg)' }}>{r.onLedger.operatorTotalDeposited ?? '—'}</strong></span>
-            <span title="Commingled — the escrow party may custody more than one escrow.">
-              Escrow party balance: <strong className="mono" style={{ color: 'var(--fg)' }}>{Number(Number(r.onLedger.escrowFreeBalance).toFixed(4))} CC</strong> {r.onLedger.commingled && <span style={{ color: 'var(--fg-4)' }}>(commingled)</span>}
-            </span>
-            <span>Offers tracked: <strong style={{ color: 'var(--fg)' }}>{r.offers.length}</strong> ({r.offers.filter((o) => o.status === 'active').length} awaiting accept)</span>
-          </div>
-          {live && (
-            <p style={{ margin: '10px 0 0', fontSize: 11, color: 'var(--fg-4)' }}>
-              Auto-re-checks every 15s while streaming — pending offers flip to delivered as the recipient accepts.
-            </p>
+      <button
+        onClick={() => setOpen((o) => !o)}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--fg)' }}
+      >
+        {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
+        <span style={{ fontSize: 13.5, fontWeight: 500 }}>Payment history</span>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: verified === false ? 'var(--warn)' : 'var(--accent)' }}>
+          <ShieldCheck size={13} /> {verified === false ? 'Check needed' : 'Verified on-chain'}
+        </span>
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 14 }}>
+          {view.ledger.length === 0 ? (
+            <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg-4)' }}>No payments yet.</p>
+          ) : (
+            <div style={{ display: 'grid', gap: 2 }}>
+              {view.ledger.map((l) => (
+                <LedgerRow key={l.eventId} l={l} />
+              ))}
+            </div>
           )}
-        </>
+          {reconQ.data && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--line)', display: 'grid', gap: 5 }}>
+              {reconQ.data.checks.map((c) => (
+                <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11.5, color: 'var(--fg-4)' }}>
+                  <span style={{ color: c.ok ? 'var(--accent)' : 'var(--warn)' }}>{c.ok ? '✓' : '✗'}</span>
+                  {checkLabel(c.name)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
 }
 
-// --- small presentational helpers ---
-
-function Metric({ label, value, accent, tone }: { label: string; value: string; accent?: boolean; tone?: 'good' | 'warn' }) {
-  const color = tone === 'good' ? 'var(--good, var(--accent))' : tone === 'warn' ? 'var(--warn)' : accent ? 'var(--accent)' : 'var(--fg)';
+function LedgerRow({ l }: { l: EscrowLedgerEntry }) {
+  const kind = l.kind === 'deposit' ? 'Funded' : l.kind === 'refund' ? 'Returned' : 'Payment';
+  const delivered = l.delivery === 'direct' || l.offerStatus === 'accepted';
+  const state =
+    l.delivery === 'direct' ? 'sent'
+      : l.offerStatus === 'accepted' ? 'received'
+        : l.offerStatus === 'withdrawn' ? 'canceled'
+          : l.offerStatus === 'expired' ? 'expired'
+            : 'awaiting acceptance';
+  const by = l.initiatedBy === 'streamer' ? 'Automatic' : l.initiatedBy === 'operator' ? 'Manual' : 'You';
   return (
-    <div className="card" style={{ padding: '10px 12px' }}>
-      <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-4)' }}>{label}</div>
-      <div className="mono" style={{ fontSize: 14, color, marginTop: 4 }}>{value}</div>
-    </div>
-  );
-}
-
-function SectionTitle({ children, icon }: { children: React.ReactNode; icon?: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--fg-4)' }}>
-      {icon} {children}
-    </div>
-  );
-}
-
-function Row({ label, value, me }: { label: string; value: string; me?: boolean }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', fontSize: 12.5 }}>
-      <span style={{ color: 'var(--fg-4)' }}>{label}</span>
-      <span className="mono" style={{ color: 'var(--fg-2)' }} title={value}>
-        {value.split('::')[0]}::{partyShort(value)}… {me && <span className="badge" style={{ fontSize: 10, marginLeft: 4 }}>you</span>}
+    <div
+      style={{ display: 'grid', gridTemplateColumns: '84px 1fr auto 96px 64px', gap: 10, alignItems: 'center', padding: '9px 0', borderTop: '1px solid var(--line)', fontSize: 12.5 }}
+    >
+      <span style={{ color: 'var(--fg-3)' }}>{kind}</span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, color: 'var(--fg-2)' }}>
+        <span title={l.from}>{displayName(l.from)}</span>
+        <ArrowRight size={11} style={{ color: 'var(--fg-4)', flexShrink: 0 }} />
+        <span title={l.to}>{displayName(l.to)}</span>
+      </span>
+      <span style={{ color: 'var(--fg)' }}>{fmtCc(l.amount)}</span>
+      <span style={{ fontSize: 11, color: delivered ? 'var(--accent)' : l.delivery === 'pending_offer' ? 'var(--warn)' : 'var(--fg-3)' }} title={`${by} · ${fmtWhen(l.at)}`}>
+        {state}
+      </span>
+      <span>
+        {l.updateId && isVerifiableUpdateId(l.updateId) ? (
+          <a href={explorerUpdateUrl(l.updateId)} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, color: 'var(--accent)', textDecoration: 'none' }} title={`View on ${explorerName()}`}>
+            View <ExternalLink size={10} />
+          </a>
+        ) : <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>—</span>}
       </span>
     </div>
   );
 }
 
-function fmtCC(raw: string): string {
-  const n = Number(raw);
-  if (!isFinite(n)) return `${raw} CC`;
-  return `${Number(n.toFixed(10))} CC`;
+function checkLabel(name: string): string {
+  switch (name) {
+    case 'chainReachable': return 'Confirmed against the network';
+    case 'releasedMatchesOnLedger': return 'Paid-out total matches the network';
+    case 'depositMatchesOnLedger': return 'Funded amount matches the network';
+    case 'valueConservation': return 'Every coin accounted for';
+    case 'escrowSolvency': return 'Vault holds what it owes';
+    case 'operatorEscrowResolved': return 'On-chain record found';
+    case 'pendingOffersTracked': return 'Pending payments tracked';
+    default: return name;
+  }
+}
+
+function Metric({ label, value, tone }: { label: string; value: string; tone?: 'good' | 'warn' }) {
+  const color = tone === 'good' ? 'var(--accent)' : tone === 'warn' ? 'var(--warn)' : 'var(--fg)';
+  return (
+    <div className="card" style={{ padding: '12px 14px' }}>
+      <div style={{ fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--fg-4)' }}>{label}</div>
+      <div style={{ fontSize: 17, color, marginTop: 4 }}>{value}</div>
+    </div>
+  );
+}
+
+function Row({ label, value, full, me }: { label: string; value: string; full: string; me?: boolean }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', fontSize: 12.5 }}>
+      <span style={{ color: 'var(--fg-4)' }}>{label}</span>
+      <span style={{ color: 'var(--fg-2)' }} title={full}>
+        {value} {me && <span className="badge" style={{ fontSize: 10, marginLeft: 4 }}>you</span>}
+      </span>
+    </div>
+  );
 }
 
 function cadenceLabel(seconds: number): string {
@@ -285,9 +247,4 @@ function cadenceLabel(seconds: number): string {
   if (seconds % 3600 === 0) return seconds === 3600 ? 'hour' : `${seconds / 3600} hours`;
   if (seconds % 60 === 0) return seconds === 60 ? 'minute' : `${seconds / 60} minutes`;
   return `${seconds}s`;
-}
-
-function fmt(iso: string): string {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? iso : d.toLocaleString();
 }

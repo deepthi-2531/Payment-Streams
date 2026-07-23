@@ -30,6 +30,9 @@ export function LaneSwitch({
 }) {
   const navigate = useNavigate();
   const { canCreateCustodyStream } = useAuth();
+  // Only one delivery mode is available (e.g. a Loop wallet) → a single-option
+  // dropdown is pure clutter, so hide the switch entirely.
+  if (!canCreateCustodyStream) return null;
   return (
     <label
       style={{
