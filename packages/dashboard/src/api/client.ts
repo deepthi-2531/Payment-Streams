@@ -431,6 +431,24 @@ export class CantonStreamsApi {
   ): Promise<{ requestContractId: string; streamId: string }> {
     if (this.isHostedWalletSession()) {
       const party = await this.readHostedParty();
+      // Fail fast: a custodial wallet's WRITE path (submit-and-wait) can hang
+      // forever without settling when the participant lacks our DAR, so the
+      // create spins indefinitely. A READ reliably rejects with
+      // PACKAGE_NAMES_NOT_FOUND — probe first and surface an actionable error
+      // steering to direct delivery instead of hanging.
+      try {
+        await queryActiveContracts([HOSTED_TID_CREATE_REQUEST], party);
+      } catch (probeErr) {
+        if (this.isDarNotDeployedError(probeErr)) {
+          throw new Error(
+            "This wallet's participant does not have the Canton Streams app deployed, " +
+              'so custody streams cannot be created here. Use Direct delivery instead — ' +
+              'it sends a token-standard transfer from your wallet each cycle and needs ' +
+              'no streams DAR.',
+          );
+        }
+        // A non-DAR read failure is not fatal to the create — fall through.
+      }
       try {
         const command = {
           CreateCommand: {

@@ -672,9 +672,9 @@ const presetChipStyle: CSSProperties = {
 const SETTLEMENT_OPTIONS = [
   {
     id: SettlementMode.TokenStandardCustody,
-    label: 'Token Standard V2 custody',
-    blurb: 'CIP-56 V2 AllocationRequest signed through the Amulet wallet.',
-    tag: 'V2 only',
+    label: 'Custody (advanced)',
+    blurb: 'Allocation-backed custody, signed through the Amulet wallet. Needs the streams DAR on your participant.',
+    tag: 'Advanced',
     disabled: false,
   },
 ] as const;
@@ -730,8 +730,8 @@ function StepSettlement() {
     <>
       <StepHeader
         number="3"
-        title="Settlement & custody"
-        subtitle="New streams use the CIP-0112 AllocationRequest path only."
+        title="Delivery & custody"
+        subtitle="Direct delivery is the default; custody is an advanced allocation-backed option."
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -827,15 +827,15 @@ function StepSettlement() {
           <span
             style={{ display: 'block', fontSize: 13.5, fontWeight: 500, color: 'var(--fg)' }}
           >
-            Direct delivery (V1) — settles immediately
+            Direct delivery — settles immediately (recommended)
           </span>
           <span style={{ display: 'block', fontSize: 12, color: 'var(--fg-3)', marginTop: 4 }}>
-            No funding lock. Each settle draws one cycle from your wallet via the
-            registry transfer factory. Opens the V1 create form.
+            No funding lock. Each settle sends one cycle from your wallet via the
+            token-standard transfer factory. Opens the direct-delivery create form.
           </span>
         </span>
         <span className="badge accent" style={{ fontSize: 10.5 }}>
-          V1 →
+          Default →
         </span>
       </button>
 
