@@ -31,18 +31,23 @@
 -- as a dependency (a consistent token-standard DAR set). See
 -- `docs/SETTLEMENT-DESIGN.md`.
 --
--- ## Deployment status — the non-custodial guarantee is not yet enforced
+-- ## Custody depends on where the payer is hosted
 --
--- As currently deployed, `RecordPull`/`PullCycle` are not wired into the proxy:
--- the money leg runs through `settleCycle`, a `TransferFactory_Transfer`
--- submitted with `actAs = [payer]` under the shared operator ledger token. For a
--- payer co-hosted on the operator's participant, whoever holds that token can
--- submit any transfer as the payer, so the rate/cap/cadence bounds above and
--- unilateral revocation are honored off-ledger by the operator, not enforced
--- on-ledger. Until the in-choice pull gates the money leg (or the payer is hosted
--- on their own participant), treat this model as operator-trusted, not
--- non-custodial. The bullets describe the template's intended authority, not the
--- current runtime.
+-- The money leg runs through `settleCycle`, a `TransferFactory_Transfer`
+-- submitted with `actAs = [payer]`. Whether the operator can exceed the mandate
+-- therefore depends on topology:
+--
+--   * In the current co-hosted test setup the payer shares the operator's
+--     participant, so the operator's ledger token can act as the payer and the
+--     rate/cap/cadence bounds and revocation are honored off-ledger by the
+--     operator, not enforced on-ledger. Do not call this non-custodial.
+--   * In the intended topology the payer is on their own participant (operator =
+--     escrow, receiver on a separate node). The payer's authority is then not
+--     available to the operator, so Canton enforces the mandate bounds and
+--     revocation on-ledger and the model is genuinely non-custodial.
+--
+-- The `RecordPull`/`PullCycle` in-choice variant is an alternative that enforces
+-- the bounds even under co-hosting; it is not wired today.
 module CantonStreams.Stream.StreamMandate where
 
 import DA.Time (addRelTime, seconds)
