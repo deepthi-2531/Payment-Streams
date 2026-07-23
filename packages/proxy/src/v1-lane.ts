@@ -840,6 +840,8 @@ export function dueAmount(agreement: V1Agreement, settled: number, nowMs: number
 export interface SettleResult {
   ref: string;
   updateId: string;
+  /** transfer.executeBefore — a pending offer's on-ledger acceptance deadline. */
+  executeBefore?: string;
   /** Set when the transfer committed as a pending (undelivered) offer — a
    * `TransferInstruction` the receiver must accept (no pre-approval). */
   pendingInstructionCid?: string;
@@ -1374,7 +1376,12 @@ export async function settleCycle(
   const tree = res.transactionTree ?? res.transaction ?? res;
   const updateId = tree?.updateId ?? res?.updateId ?? 'n/a';
   const pendingInstructionCid = findCreatedInstructionCid(JSON.stringify(tree ?? res));
-  return { ref: prepared.ref, updateId, ...(pendingInstructionCid ? { pendingInstructionCid } : {}) };
+  return {
+    ref: prepared.ref,
+    updateId,
+    executeBefore: prepared.executeBefore,
+    ...(pendingInstructionCid ? { pendingInstructionCid } : {}),
+  };
 }
 
 /**

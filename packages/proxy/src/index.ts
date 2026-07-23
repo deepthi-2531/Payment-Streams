@@ -2379,10 +2379,20 @@ app.post('/api/v1/escrows/:id/release', async (req, res) => {
   try {
     const auth = await authorizeRequest(req, 'create', authConfig);
     escrowLane.getEscrow(req.params['id']!, auth.party); // authorize: payer or recipient
-    const out = await escrowLane.releaseEscrowOnce(req.params['id']!);
+    const out = await escrowLane.releaseEscrowOnce(req.params['id']!, 'operator');
     res.json(serializeForJson(out));
   } catch (err) {
     handleError(res, err, 'releaseEscrow');
+  }
+});
+
+/** Reconcile the audit trail against the chain (OperatorEscrow + balances + offers). */
+app.get('/api/v1/escrows/:id/reconcile', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'query', authConfig);
+    res.json(serializeForJson(await escrowLane.reconcile(req.params['id']!, auth.party)));
+  } catch (err) {
+    handleError(res, err, 'reconcileEscrow');
   }
 });
 
