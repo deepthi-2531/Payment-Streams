@@ -913,6 +913,40 @@ export class CantonStreamsApi {
     );
   }
 
+  // --- Operator-custodied escrow ---
+
+  /** The escrow party + instrument a wallet needs to fund an escrow deposit. */
+  async escrowInfo(): Promise<EscrowInfo> {
+    return this.request<EscrowInfo>('GET', '/api/v1/escrow-info');
+  }
+
+  /** Form the payer→escrow deposit for the payer's wallet to sign (model 2). */
+  async prepareEscrowDeposit(body: {
+    payerParty?: string;
+    totalDeposit: string;
+    holdings?: { cid: string; amount: number }[];
+  }): Promise<EscrowPreparedDeposit> {
+    return this.request<EscrowPreparedDeposit>('POST', '/api/v1/escrows/prepare-deposit', body);
+  }
+
+  /** Create an escrow: deposit (proxy or wallet-signed) + start streaming. */
+  async createEscrow(params: CreateEscrowParams): Promise<EscrowView> {
+    return this.request<EscrowView>('POST', '/api/v1/escrows', params);
+  }
+
+  async listEscrows(): Promise<EscrowView[]> {
+    return this.request<EscrowView[]>('GET', '/api/v1/escrows');
+  }
+
+  async getEscrow(id: string): Promise<EscrowView> {
+    return this.request<EscrowView>('GET', `/api/v1/escrows/${encodeURIComponent(id)}`);
+  }
+
+  /** Refund the unspent balance to the payer and close the escrow (payer only). */
+  async refundEscrow(id: string): Promise<EscrowView> {
+    return this.request<EscrowView>('POST', `/api/v1/escrows/${encodeURIComponent(id)}/refund`, {});
+  }
+
   /** Model 2 phase 1: form (no submit) the next cycle's transfer so the payer's
    * wallet can submit it through its own participant. */
   async prepareSettleV1(id: string, body: V1PrepareSettleParams): Promise<V1PreparedSettle> {
@@ -1210,6 +1244,68 @@ export interface V1StreamView {
 export interface V1SettleParams {
   readonly force?: boolean;
   readonly amount?: string;
+}
+
+// --- Operator-custodied escrow (proxy /api/v1/escrows group) ---
+
+export type EscrowStatus = 'active' | 'completed' | 'refunded';
+
+export interface EscrowReleaseRecord {
+  readonly at: string;
+  readonly amount: string;
+  readonly updateId: string;
+  /** Set when the cycle landed as a pending offer (payee has no preapproval). */
+  readonly pending?: boolean;
+}
+
+/** One operator-custodied stream: the payer deposited `totalDeposited` into the
+ * operator-controlled escrow party once, and the operator streams `ratePerCycle`
+ * to the payee every `cadenceSeconds` until the deposit is exhausted. */
+export interface EscrowView {
+  readonly escrowId: string;
+  readonly originalPayer: string;
+  readonly recipient: string;
+  readonly ratePerCycle: string;
+  readonly cadenceSeconds: number;
+  readonly totalDeposited: string;
+  readonly released: string;
+  readonly fundingTransferId: string;
+  readonly operatorEscrowCid?: string;
+  readonly status: EscrowStatus;
+  readonly createdAt: string;
+  readonly nextDueAt: string;
+  readonly lastReleaseAt?: string;
+  readonly releases: readonly EscrowReleaseRecord[];
+}
+
+export interface EscrowInfo {
+  readonly escrowParty: string;
+  readonly instrumentAdmin: string;
+  readonly instrumentId: string;
+  readonly tickSeconds: number;
+}
+
+export interface CreateEscrowParams {
+  readonly escrowId?: string;
+  /** Defaults to the caller party; must equal it. */
+  readonly payerParty?: string;
+  readonly recipient: string;
+  readonly ratePerCycle: string;
+  readonly cadenceSeconds: number;
+  readonly totalDeposit: string;
+  /** When the payer's WALLET signed the deposit itself, its updateId. Omit to
+   * have the proxy submit the deposit (hosted/dev payer only). */
+  readonly fundingTransferId?: string;
+}
+
+/** A payer→escrow deposit transfer formed by the proxy for the wallet to sign. */
+export interface EscrowPreparedDeposit {
+  readonly ref: string;
+  readonly amount: string;
+  readonly executeBefore: string;
+  readonly actAs: string;
+  readonly command: unknown;
+  readonly disclosedContracts: readonly unknown[];
 }
 
 export interface V1SettleResult {
