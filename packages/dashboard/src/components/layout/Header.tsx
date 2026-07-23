@@ -11,7 +11,7 @@
 import type { CSSProperties } from 'react';
 import { useLocation } from 'react-router';
 import { Icons } from '../primitives/Icons.js';
-import { useHealth, networkLabelFromHost } from '../../hooks/useHealth.js';
+import { useHealth } from '../../hooks/useHealth.js';
 
 const ROUTE_LABELS: Readonly<Record<string, string>> = {
   '/': 'Dashboard',
@@ -35,9 +35,6 @@ export function Header() {
   const location = useLocation();
   const health = useHealth();
 
-  const networkLabel = health.isError
-    ? 'canton:disconnected'
-    : networkLabelFromHost(health.data?.canton?.host);
   const networkOk = !health.isError && health.data?.status === 'ok';
 
   return (
@@ -51,20 +48,10 @@ export function Header() {
         </span>
       </div>
 
-      {/* Network chip — driven by useHealth */}
-      <div
-        className={networkOk ? 'badge accent' : 'badge'}
-        style={{ paddingLeft: 6 }}
-        title={
-          health.data?.canton
-            ? `${health.data.canton.host}:${health.data.canton.port}`
-            : 'Proxy unreachable'
-        }
-      >
+      {/* Connection status — plain pill, no host:port */}
+      <div className={networkOk ? 'badge accent' : 'badge'} style={{ paddingLeft: 6 }}>
         {networkOk && <span className="pulse" />}
-        <span className="mono" style={{ fontSize: 10.5 }}>
-          {networkLabel}
-        </span>
+        <span style={{ fontSize: 11 }}>{networkOk ? 'Connected' : 'Offline'}</span>
       </div>
 
       {/* Search placeholder */}

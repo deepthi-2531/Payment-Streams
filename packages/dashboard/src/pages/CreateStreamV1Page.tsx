@@ -16,7 +16,7 @@ export function CreateStreamV1Page() {
     <div style={{ paddingTop: 28 }}>
       <PageHeader
         title="Create a stream"
-        subtitle="Direct delivery — the default. Set a per-cycle amount in Canton Coin; each Settle sends it from your wallet to the recipient via a token-standard transfer. Nothing is locked up front, and it works with any wallet."
+        subtitle="Set an amount and how often — it's sent straight from your wallet each time. Nothing is locked up front."
         actions={<LaneSwitch lane="v1" kind="create" />}
       />
 

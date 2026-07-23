@@ -12,10 +12,10 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router';
 import { Lock, ArrowLeft, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
-import { useCreateEscrow, useEscrowInfo } from '../hooks/useEscrows.js';
+import { useCreateEscrow } from '../hooks/useEscrows.js';
 import { useCantonCoinBalance } from '../hooks/useCantonCoinBalance.js';
-import { partyShort } from '../components/primitives/PartyChip.js';
 import { PageHeader } from '../components/common/index.js';
+import { fmtCc, displayName } from '../lib/format.js';
 
 const CADENCES = [
   { label: 'Every minute', seconds: 60 },
@@ -27,7 +27,6 @@ export function CreateEscrowPage() {
   const { party } = useAuth();
   const navigate = useNavigate();
   const createEscrow = useCreateEscrow();
-  const infoQ = useEscrowInfo();
   const cc = useCantonCoinBalance();
 
   const [recipient, setRecipient] = useState('');
@@ -96,35 +95,34 @@ export function CreateEscrowPage() {
       </div>
 
       <div className="card" style={{ padding: 20, display: 'grid', gap: 16 }}>
-        <Field label="Payer (you)">
-          <div className="mono" style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
-            {party ? partyShort(party) + '…' : 'Not connected'}
+        <Field label="From (you)">
+          <div style={{ fontSize: 12.5, color: 'var(--fg-2)' }} title={party ?? undefined}>
+            {party ? displayName(party) : 'Not connected'}
           </div>
           <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 3 }}>
-            Wallet balance: {cc.isLoading ? '…' : `${cc.display ?? cc.value ?? '?'} CC`}
+            Balance: {cc.isLoading ? '…' : fmtCc(cc.value ?? cc.display)}
           </div>
         </Field>
 
-        <Field label="Recipient party id">
+        <Field label="Recipient">
           <input
             value={recipient}
             onChange={(e) => setRecipient(e.target.value)}
-            placeholder="party::1220…"
-            className="mono"
+            placeholder="Recipient's wallet address"
             style={inputStyle}
           />
           {recipient.trim() && !validRecipient && (
             <div style={{ fontSize: 11, color: 'var(--warn)', marginTop: 4 }}>
-              Enter a full party id (contains "::").
+              That doesn't look like a full wallet address.
             </div>
           )}
         </Field>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <Field label="Rate per cycle (CC)">
+          <Field label="Amount per payment (CC)">
             <input value={rate} onChange={(e) => setRate(e.target.value)} type="number" min="0" step="0.01" style={inputStyle} />
           </Field>
-          <Field label="Cadence">
+          <Field label="How often">
             <select
               value={cadenceSeconds}
               onChange={(e) => setCadenceSeconds(Number(e.target.value))}
@@ -140,12 +138,11 @@ export function CreateEscrowPage() {
         <Field label="Total deposit (CC)">
           <input value={totalDeposit} onChange={(e) => setTotalDeposit(e.target.value)} type="number" min="0" step="0.01" style={inputStyle} />
           <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 6 }}>
-            Funds{' '}
+            Covers{' '}
             <strong style={{ color: 'var(--fg)' }}>
-              {cycles > 0 ? `${cycles} ${cycles === 1 ? 'cycle' : 'cycles'}` : '—'}
+              {cycles > 0 ? `${cycles} ${cycles === 1 ? 'payment' : 'payments'}` : '—'}
             </strong>{' '}
-            of {rateNum > 0 ? rateNum : '—'} CC
-            {infoQ.data ? ` · released every ${infoQ.data.tickSeconds}s or your cadence, whichever is longer` : ''}.
+            of {rateNum > 0 ? fmtCc(rateNum) : '—'}.
           </div>
         </Field>
 
@@ -157,7 +154,7 @@ export function CreateEscrowPage() {
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>
-            <Lock size={14} /> {createEscrow.isPending ? 'Depositing…' : `Deposit ${depositNum || ''} CC & start`}
+            <Lock size={14} /> {createEscrow.isPending ? 'Funding…' : `Fund ${depositNum ? fmtCc(depositNum) : ''} & start`}
           </button>
           <Link to="/v1/escrows" className="btn btn-ghost">Cancel</Link>
         </div>
