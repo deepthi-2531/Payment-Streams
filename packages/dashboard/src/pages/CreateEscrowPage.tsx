@@ -86,12 +86,12 @@ export function CreateEscrowPage() {
       >
         <ShieldAlert size={18} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 12.5, color: 'var(--fg-2)', lineHeight: 1.55 }}>
-          <strong style={{ color: 'var(--fg)' }}>This is a custodial stream.</strong> Your full deposit
-          moves into an operator-controlled escrow party up front, and the operator holds it while it
-          streams to the recipient. You sign once. You can stop the stream and refund the unspent
-          balance to yourself at any time. Prefer to keep custody? Use a{' '}
-          <Link to="/v1/create" style={{ color: 'var(--accent)' }}>direct-delivery stream</Link>{' '}
-          instead (you approve each cycle from your own wallet).
+          <strong style={{ color: 'var(--fg)' }}>Deposit once — then it runs on its own.</strong> You put
+          the full amount into the vault and approve it a single time. From there the operator pays the
+          recipient on your schedule, so you don't have to sign off on every payment. Changed your mind?
+          Stop anytime and whatever hasn't been paid out comes straight back to you. Prefer to keep the
+          funds in your own wallet and approve each payment yourself? Use a{' '}
+          <Link to="/v1/create" style={{ color: 'var(--accent)' }}>direct-delivery stream</Link> instead.
         </div>
       </div>
 

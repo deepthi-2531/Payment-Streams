@@ -85,8 +85,8 @@ function EscrowDetail({ view }: { view: EscrowView }) {
       <div className="card" style={{ padding: 13, marginBottom: 18, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
         <ShieldAlert size={16} style={{ color: 'var(--warn)', flexShrink: 0, marginTop: 1 }} />
         <div style={{ fontSize: 12, color: 'var(--fg-3)', lineHeight: 1.5 }}>
-          Vault stream — your deposit is held in the operator vault (an escrow party) while it streams
-          to the recipient (custodial). The payer can stop it any time and the unspent balance is refunded.
+          The deposit is held in the vault and paid out to the recipient on schedule — the payer signed
+          once. The payer can stop it anytime, and whatever hasn't been paid out is refunded.
         </div>
       </div>
 
