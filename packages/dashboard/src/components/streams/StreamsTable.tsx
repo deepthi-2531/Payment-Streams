@@ -68,7 +68,11 @@ export function StreamsTable({ streams }: StreamsTableProps) {
       </div>
 
       {streams.map((stream, i) => (
-        <StreamRow key={stream.config.streamId} stream={stream} isLast={i === streams.length - 1} />
+        <StreamRow
+          key={`${stream.config.sender}:${stream.config.streamId}`}
+          stream={stream}
+          isLast={i === streams.length - 1}
+        />
       ))}
     </div>
   );

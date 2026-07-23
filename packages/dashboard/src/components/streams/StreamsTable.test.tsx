@@ -17,9 +17,17 @@ import {
 } from '@canton-streams/sdk/browser';
 import { StreamsTable } from './StreamsTable.js';
 
-function mkStream(over: Partial<Stream> = {}): Stream {
+type Over = {
+  contractId?: string;
+  config?: Partial<Stream['config']>;
+  state?: Partial<Stream['state']>;
+};
+
+function mkStream(over: Over = {}): Stream {
+  const { config: cfgOver, state: stOver, ...rest } = over;
   return {
     contractId: 'cid-1',
+    ...rest,
     config: {
       streamId: 'stream-001-very-long-id',
       sender: 'alice::1220abcdef',
@@ -31,15 +39,14 @@ function mkStream(over: Partial<Stream> = {}): Stream {
       assetType: AssetType.GlobalCip56,
       settlementMode: SettlementMode.UtilityHoldingCustody,
       cancellable: true,
-      ...over.config,
+      ...cfgOver,
     },
     state: {
       totalWithdrawn: new Decimal(250),
       status: StreamStatus.Active,
       renewalCount: 0,
-      ...over.state,
+      ...stOver,
     },
-    ...over,
   } as Stream;
 }
 
@@ -53,33 +60,45 @@ describe('<StreamsTable />', () => {
     expect(screen.getByText(/no streams found/i)).toBeInTheDocument();
   });
 
-  it('renders header + one row per stream', () => {
-    const streams = [mkStream(), mkStream({ contractId: 'cid-2' })];
+  it('renders the header and one row per stream', () => {
+    const streams = [
+      mkStream(),
+      mkStream({ contractId: 'cid-2', config: { streamId: 'stream-002-very-long-id' } }),
+    ];
     render(
       <MemoryRouter>
         <StreamsTable streams={streams} />
       </MemoryRouter>,
     );
 
-    // Header
-    expect(screen.getByText('Stream id / parties')).toBeInTheDocument();
+    // Header — people and money, not raw ids or an internal settlement mode.
+    expect(screen.getByText('Payment')).toBeInTheDocument();
     expect(screen.getByText('Progress')).toBeInTheDocument();
-    expect(screen.getByText('Settlement')).toBeInTheDocument();
+    expect(screen.getByText('Amount')).toBeInTheDocument();
+    expect(screen.getByText('Status')).toBeInTheDocument();
 
-    // Two rows linking to the detail page
+    // Two rows linking to the detail page.
     const links = screen.getAllByRole('link');
     expect(links.length).toBe(2);
     expect(links[0]?.getAttribute('href')).toMatch(/\/streams\//);
   });
 
-  it('shows the truncated stream id + vesting badge on each row', () => {
+  it('shows readable names and amounts, not raw ids or jargon', () => {
     render(
       <MemoryRouter>
         <StreamsTable streams={[mkStream()]} />
       </MemoryRouter>,
     );
-    // First 14 chars + ellipsis
-    expect(screen.getByText(/stream-001-ver/)).toBeInTheDocument();
-    expect(screen.getByText(VestingMode.Linear)).toBeInTheDocument();
+
+    // Human short-names, the amount, and progress/status.
+    expect(screen.getByText(/alice\s*→\s*bob/)).toBeInTheDocument();
+    expect(screen.getByText('1000')).toBeInTheDocument();
+    expect(screen.getByText(/25% paid/)).toBeInTheDocument();
+    expect(screen.getByText('Streaming')).toBeInTheDocument();
+
+    // The raw stream id, vesting-mode jargon, and settlement label are gone.
+    expect(screen.queryByText(/stream-001/)).toBeNull();
+    expect(screen.queryByText(VestingMode.Linear)).toBeNull();
+    expect(screen.queryByText('CIP Custody')).toBeNull();
   });
 });
