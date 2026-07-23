@@ -66,12 +66,12 @@ const config = {
   appUrl: env("APP_URL", "http://127.0.0.1:3300").replace(/\/$/, ""),
   authSecret:
     env("AMM_AUTH_JWT_SECRET") ||
-    readEnvValueFromFile(env("AUTH_SECRET_FILE", env("OPS_ENV_FILE", "/etc/bitdynamics/ops.env")), "AMM_AUTH_JWT_SECRET"),
+    readEnvValueFromFile(env("AUTH_SECRET_FILE", env("OPS_ENV_FILE", "/etc/canton-streams/ops.env")), "AMM_AUTH_JWT_SECRET"),
   subject: env("APP_SUBJECT", "Streams Sender"),
   party: env("APP_PARTY"),
   role: env("APP_ROLE", "user"),
-  audience: env("AMM_AUTH_CODE_AUDIENCE", "bitdynamics-app"),
-  issuer: env("AMM_AUTH_CODE_ISSUER", "bitdynamics"),
+  audience: env("AMM_AUTH_CODE_AUDIENCE", "canton-streams-app"),
+  issuer: env("AMM_AUTH_CODE_ISSUER", "canton-streams"),
   ttlSeconds: Number(env("APP_TOKEN_TTL_SECONDS", "3600")),
   toParty: env("TO_PARTY"),
   symbol: env("SYMBOL", "USDCx"),

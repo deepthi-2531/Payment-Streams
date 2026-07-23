@@ -54,6 +54,14 @@ debug-config.mjs
 # Internal reports (third-party operational detail; not for publication)
 docs/reports/
 
+# Internal security audits (raw finding ids + reproduction detail) — the
+# published, redacted register is SECURITY-FINDINGS.md + AUDIT-SCOPE.md at the
+# repo root. Keep the dated working audits local.
+docs/SECURITY-AUDIT-*.md
+docs/SECURITY-POSTFIX-*.md
+docs/SECURITY-PRECOMMIT-*.md
+docs/SECURITY-REAUDIT-*.md
+
 # Runtime state files
 .proxy-settlement-journal.json
 .executor-guard
