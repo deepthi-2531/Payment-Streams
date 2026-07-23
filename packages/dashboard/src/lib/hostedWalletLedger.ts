@@ -143,6 +143,33 @@ export function formatHostedTemplateId(
 }
 
 /**
+ * Read the connected wallet's current ledger-end offset — the snapshot point a
+ * v2 ACS query must be pinned to. Returns 0 if the wallet can't answer (older
+ * adapters); the caller degrades a failed read to an empty list.
+ */
+async function walletLedgerEndOffset(
+  wc: NonNullable<typeof walletClient.ledgerApi>,
+): Promise<number> {
+  try {
+    const raw = await wc({ requestMethod: 'get', resource: '/v2/state/ledger-end' });
+    const parsed: { offset?: number | string } =
+      raw && typeof (raw as LedgerApiResponseWrapper).response === 'string'
+        ? (() => {
+            try {
+              return JSON.parse((raw as LedgerApiResponseWrapper).response!);
+            } catch {
+              return {};
+            }
+          })()
+        : ((raw as { offset?: number | string }) ?? {});
+    const off = Number(parsed.offset);
+    return Number.isFinite(off) && off >= 0 ? off : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Run an ACS query via the active hosted wallet. Returns the
  * decoded `activeContracts` list, or [] if the wallet responded
  * with an empty payload. Throws on transport / wallet rejection
@@ -162,6 +189,11 @@ export async function queryActiveContractsRaw(
   }
   if (templateIds.length === 0) return [];
   const wc = walletClient.ledgerApi!;
+  // A v2 ACS snapshot must be pinned to a real ledger offset. The old hardcoded
+  // '0' is rejected by the participant as an invalid offset, which the Loop
+  // adapter reports as the generic "Failed to get active contracts". Use the
+  // wallet's current ledger end.
+  const activeAtOffset = await walletLedgerEndOffset(wc);
   const body = {
     filter: {
       filtersByParty: {
@@ -173,7 +205,7 @@ export async function queryActiveContractsRaw(
       },
     },
     verbose: false,
-    activeAtOffset: '0',
+    activeAtOffset,
   };
   const raw = await wc({
     requestMethod: 'post',

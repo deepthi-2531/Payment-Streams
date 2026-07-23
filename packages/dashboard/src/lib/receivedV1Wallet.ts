@@ -37,10 +37,39 @@ function deepFind(res: unknown, keys: readonly string[], depth = 0): string | un
   return undefined;
 }
 
+/** True when a wallet ACS read failed because the wallet's participant can't
+ *  serve the query (DAR not vetted there, or the adapter can't do ACS reads) —
+ *  as opposed to a genuine transport failure (network down, unauthorized). We
+ *  degrade the former to an empty incoming list rather than a hard error, since
+ *  the wallet's own balance view is the source of truth for delivered CC. */
+function isWalletReadUnavailable(err: unknown): boolean {
+  const text =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : (() => {
+            try {
+              return JSON.stringify(err);
+            } catch {
+              return String(err);
+            }
+          })();
+  return /Failed to get active contracts|getActiveContracts\(\) failed|PACKAGE_NAMES_NOT_FOUND|package.*not.*found|template.*not.*found|not.*deployed|no.*package|ledgerApi is not available/i.test(
+    text,
+  );
+}
+
 /** Pending incoming offers for a wallet party, read from the wallet's own ACS. */
 export async function listReceivedViaWallet(party: string): Promise<V1ReceivedView> {
   const nowMs = Date.now();
-  const offers = await queryActiveContracts([AMULET_TRANSFER_INSTRUCTION_TID], party);
+  let offers: Awaited<ReturnType<typeof queryActiveContracts>>;
+  try {
+    offers = await queryActiveContracts([AMULET_TRANSFER_INSTRUCTION_TID], party);
+  } catch (err) {
+    if (isWalletReadUnavailable(err)) return { party, pending: [], received: [] };
+    throw err;
+  }
   const pending: V1ReceivedPendingOffer[] = offers
     .map((c) => ({ c, tr: (c.createArguments['transfer'] ?? {}) as Record<string, unknown> }))
     .filter(({ tr }) => tr['receiver'] === party)
