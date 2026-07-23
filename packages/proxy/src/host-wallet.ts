@@ -200,17 +200,20 @@ export function createHostWalletClient(
       );
     }
 
-    // The preparedTransactionHash is opaque, so this signer trusts the gateway to
-    // have prepared exactly the requested transfer_accept for `contractId`. Where
-    // the gateway echoes the action/contractId, verify they match before signing.
-    if (prepared.action && prepared.action !== 'transfer_accept') {
+    // The preparedTransactionHash is opaque, so before signing we require the
+    // gateway to echo back the action and the exact offer it prepared, and they
+    // must match what we asked for. Fail closed: a gateway that OMITS these
+    // fields could otherwise return an arbitrary hash and have the recipient's
+    // key sign it, moving their funds. Absent-or-mismatched is refused.
+    if (prepared.action !== 'transfer_accept') {
       throw new Error(
-        `wallet-gateway prepared a "${prepared.action}", not the requested transfer_accept for ${party}.`,
+        `wallet-gateway did not confirm a transfer_accept action for ${party} (got "${prepared.action ?? 'none'}"); refusing to sign.`,
       );
     }
-    if (prepared.payload?.contractId && prepared.payload.contractId !== contractId) {
+    if (prepared.payload?.contractId !== contractId) {
       throw new Error(
-        `wallet-gateway prepared an accept for a different offer than the intended ${contractId}.`,
+        `wallet-gateway did not confirm the intended offer ${contractId} for ${party} ` +
+          `(got "${prepared.payload?.contractId ?? 'none'}"); refusing to sign.`,
       );
     }
 

@@ -50,7 +50,8 @@
  *     *commands* accept either the name id or a pinned package-hash id.
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
+import { acquireStoreLock, releaseStoreLock } from './store-lock.js';
 
 // ---------------------------------------------------------------------------
 // Configuration (V1 lane env — see the task's envAndIds spec)
@@ -385,6 +386,21 @@ async function partyIsLocal(config: V1LaneConfig, party: string): Promise<boolea
     );
   }
   const local = details.some((d: any) => d?.isLocal === true || d?.is_local === true);
+  // A not-local result must come from a recognized signal — a positive boolean
+  // flag somewhere, or a genuinely empty array (the party isn't known here) — not
+  // from a populated array that simply omits the flag, which we can't interpret.
+  if (!local) {
+    const recognized =
+      details.length === 0 ||
+      details.some((d: any) => typeof (d?.isLocal ?? d?.is_local) === 'boolean');
+    if (!recognized) {
+      throw new V1LaneError(
+        502,
+        'undisclosed_custody_probe_failed',
+        `party hosting flag for ${party} was absent; refusing the operator-authority submission`,
+      );
+    }
+  }
   partyLocalCache.set(party, { local, at: Date.now() });
   return local;
 }
@@ -523,7 +539,12 @@ function transferSpecLeg(t: any, config: V1LaneConfig): DeliveryLeg | null {
 function holdingCreditLeg(node: any, config: V1LaneConfig): DeliveryLeg | null {
   const tid = pickKey(node, ['template_id', 'templateId']);
   if (typeof tid !== 'string') return null;
-  if (tid.split(':').pop() !== config.holdingTemplateId.split(':').pop()) return null;
+  // Match the configured CC holding by module + entity (the last two segments),
+  // not just the trailing name, so a same-named token in a different module can't
+  // be counted as CC. The package qualifier differs (a hash on chain vs a #name
+  // in config), so it is not compared.
+  const templateKey = (id: string): string => id.split(':').slice(-2).join(':');
+  if (templateKey(tid) !== templateKey(config.holdingTemplateId)) return null;
   const args = pickKey(node, ['create_arguments', 'createArguments', 'create_argument']);
   if (!args || typeof args !== 'object') return null;
   const owner = pickKey(args, ['owner']);
@@ -751,6 +772,39 @@ async function verifyConsummationOnScan(
   return { body, amount: best };
 }
 
+/**
+ * Confirm a committed update actually DELIVERED at least `minAmount` of the
+ * configured CC to `recipient` as a created holding — used to verify a funding
+ * deposit into the escrow custody party. Only a created holding counts, never a
+ * transfer-spec (authorization) leg, so a locked-but-undelivered transfer
+ * instruction (a pending offer the sender can still withdraw) can't be recorded
+ * as a funded deposit and phantom-inflate the pool's owed balance. Returns the
+ * on-chain amount delivered.
+ */
+export async function verifyHoldingDeliveryOnScan(
+  config: V1LaneConfig,
+  updateId: string,
+  expected: { recipient: string; minAmount: number },
+): Promise<{ body: string; amount: number }> {
+  const body = await fetchCommittedUpdate(config, updateId);
+  let best: number | null = null;
+  for (const leg of collectDeliveryLegs(body, config)) {
+    if (leg.sender != null) continue;
+    if (!leg.instrumentOk || leg.receiver !== expected.recipient) continue;
+    if (leg.amount + 1e-9 < expected.minAmount) continue;
+    if (best === null || leg.amount > best) best = leg.amount;
+  }
+  if (best === null) {
+    throw new V1LaneError(
+      422,
+      'deposit_undelivered',
+      `update ${updateId} creates no ${config.instrumentId} holding of at least ${expected.minAmount} for ` +
+        `${expected.recipient.split('::')[0]}; refusing to record the deposit.`,
+    );
+  }
+  return { body, amount: best };
+}
+
 /** Confirm a committed update consumed a specific offer contract. Used for a
  * withdraw, which reclaims funds rather than delivering them, so there is nothing
  * to credit — only the tracked offer's consumption to confirm, so a stray update
@@ -761,7 +815,16 @@ async function verifyContractConsumedOnScan(
   cid?: string,
 ): Promise<string> {
   const body = await fetchCommittedUpdate(config, updateId);
-  if (cid && !updateConsumesContract(body, cid)) {
+  // Fail closed: without a tracked offer to bind to there is nothing to confirm,
+  // so refuse rather than accept any committed update.
+  if (!cid) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `no tracked offer contract to bind update ${updateId} to; refusing to record.`,
+    );
+  }
+  if (!updateConsumesContract(body, cid)) {
     throw new V1LaneError(
       422,
       'settlement_mismatch',
@@ -1691,7 +1754,12 @@ export async function settleCycle(
   // (funds locked, NOT delivered) rather than a completed delivery.
   const res = await ledger(config, 'POST', '/v2/commands/submit-and-wait-for-transaction-tree', {
     commands: [prepared.command],
-    commandId: `proxy-v1-xfer-${cycleNo}-${Date.now()}-${++submitCounter}`,
+    // Deterministic per (agreement, cycle) so a crash between the committed
+    // transfer and the persisted state does not re-pay on restart: Canton
+    // deduplicates a replay of the same committed commandId. The agreementId is
+    // the stream id for a direct settle and `${escrowId}:release|deposit` for an
+    // escrow cycle, so each logical cycle has its own stable id.
+    commandId: `proxy-v1-xfer-${agreement.agreementId}-${cycleNo}`,
     actAs: [agreement.payerParty],
     readAs: [],
     ...(config.userId ? { userId: config.userId } : {}),
@@ -2048,7 +2116,16 @@ function loadStore(config: V1LaneConfig): V1Store {
 }
 
 function saveStore(config: V1LaneConfig, store: V1Store): void {
-  writeFileSync(config.stateFile, JSON.stringify(store, null, 2));
+  // Write to a temp file then rename, so a crash mid-write can't truncate the
+  // live store (rename is atomic on the same filesystem).
+  const tmp = `${config.stateFile}.tmp`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, config.stateFile);
+}
+
+/** Lock file guarding the whole V1 store read-modify-write across processes. */
+function v1StoreLockFile(config: V1LaneConfig): string {
+  return config.stateFile.replace(/\.json$/i, '') + '.lock';
 }
 
 function emptyState(): V1StreamState {
@@ -2113,15 +2190,6 @@ export interface SettleOutcome {
 
 export class V1LaneService {
   constructor(private readonly config: V1LaneConfig) {}
-
-  /**
-   * Per-stream settle serialization. settle() reads the JSON state, submits a
-   * transfer, then writes the state back; two concurrent settles for the same
-   * stream would both read cycle N and both pay cycle N+1 (double-pay). We
-   * chain each stream's settles through a single promise so they run strictly
-   * one-at-a-time within this process. One entry per active streamId.
-   */
-  private readonly settleLocks = new Map<string, Promise<unknown>>();
 
   getConfigSummary(): Record<string, unknown> {
     return {
@@ -2201,6 +2269,9 @@ export class V1LaneService {
    * is drawn per cycle by `settle`.
    */
   async createStream(input: CreateV1StreamInput): Promise<V1StreamView> {
+    return this.runLocked('', () => this.createStreamImpl(input));
+  }
+  private async createStreamImpl(input: CreateV1StreamInput): Promise<V1StreamView> {
     if (!input.payerParty) throw new V1LaneError(400, 'missing_payer', 'payerParty is required');
     if (!input.recipientParty) {
       throw new V1LaneError(400, 'missing_recipient', 'recipientParty is required');
@@ -2446,13 +2517,37 @@ export class V1LaneService {
    * read → submit → write sequence runs atomically within this process. A
    * multi-process deployment would still need a shared lock; this proxy owns the
    * V1 state file as a single writer. */
-  private runLocked<T>(streamId: string, fn: () => Promise<T>): Promise<T> {
-    const prev = this.settleLocks.get(streamId) ?? Promise.resolve();
-    // Run after the previous task resolves OR rejects (don't poison the chain).
-    const task = prev.then(fn, fn);
-    // Park a non-rejecting tail so the next caller waits for us either way.
-    this.settleLocks.set(streamId, task.then(() => undefined, () => undefined));
-    return task;
+  // The store is a single whole-file load->mutate->save with awaits (transfers,
+  // ~20s Scan polls) in between, so mutations on DIFFERENT streams must not
+  // interleave either: two would snapshot the same file and last-writer-wins
+  // would clobber the other's settled total / status / history — re-opening a
+  // paid cycle or reverting a stop. Serialize every mutating path globally in
+  // this process, and take a cross-process file lock so a second instance (or a
+  // redeploy overlap) can't race the same file.
+  private storeMutationLock: Promise<unknown> = Promise.resolve();
+  private runLocked<T>(_streamId: string, fn: () => Promise<T>): Promise<T> {
+    const run = this.storeMutationLock.then(
+      () => this.withStoreLock(fn),
+      () => this.withStoreLock(fn),
+    );
+    this.storeMutationLock = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lockPath = v1StoreLockFile(this.config);
+    // Longer than any single mutation, which may hold the lock across a ~20s
+    // Scan verification; a dead holder is reclaimed immediately by pid.
+    const staleMs = 120000;
+    const token = await acquireStoreLock(lockPath, staleMs);
+    try {
+      return await fn();
+    } finally {
+      releaseStoreLock(lockPath, token);
+    }
   }
 
   /**
@@ -2676,6 +2771,21 @@ export class V1LaneService {
       expiresAt: string;
     },
   ): Promise<ReceiverClaimRecord> {
+    return this.runLocked(streamId, () => this.recordReceiverAllocationImpl(streamId, input));
+  }
+  private async recordReceiverAllocationImpl(
+    streamId: string,
+    input: {
+      allocationCid: string;
+      amount: string;
+      ref?: string;
+      cycle: number;
+      executor?: string;
+      allocationUpdateId?: string;
+      unlockAt: string;
+      expiresAt: string;
+    },
+  ): Promise<ReceiverClaimRecord> {
     if (!input.allocationCid) {
       throw new V1LaneError(400, 'missing_allocation_cid', 'allocationCid is required');
     }
@@ -2750,6 +2860,12 @@ export class V1LaneService {
    * Bob's inbox/claim button is driven from this recorded cid.
    */
   async recordReceiverClaim(
+    streamId: string,
+    input: { receiverClaimCid: string; cycle?: number; allocationCid?: string },
+  ): Promise<ReceiverClaimRecord> {
+    return this.runLocked(streamId, () => this.recordReceiverClaimImpl(streamId, input));
+  }
+  private async recordReceiverClaimImpl(
     streamId: string,
     input: { receiverClaimCid: string; cycle?: number; allocationCid?: string },
   ): Promise<ReceiverClaimRecord> {
@@ -3042,6 +3158,9 @@ export class V1LaneService {
    * ledger, so it never invents an offer. Idempotent.
    */
   async recoverPendingOffers(streamId: string): Promise<{ recovered: PendingTransferRecord[] }> {
+    return this.runLocked(streamId, () => this.recoverPendingOffersImpl(streamId));
+  }
+  private async recoverPendingOffersImpl(streamId: string): Promise<{ recovered: PendingTransferRecord[] }> {
     const store = loadStore(this.config);
     const agreement = store.agreements[streamId];
     if (!agreement) {
@@ -3269,6 +3388,12 @@ export class V1LaneService {
   /** Record Alice's withdrawal once Scan confirms it. The offer is reclaimed;
    * settled/cycles are NOT advanced (no money was delivered). */
   async recordWithdrawTransfer(
+    streamId: string,
+    input: { updateId: string; transferInstructionCid?: string; cycle?: number },
+  ): Promise<{ withdrawn: boolean; reason?: string; cycle?: number; updateId?: string }> {
+    return this.runLocked(streamId, () => this.recordWithdrawTransferImpl(streamId, input));
+  }
+  private async recordWithdrawTransferImpl(
     streamId: string,
     input: { updateId: string; transferInstructionCid?: string; cycle?: number },
   ): Promise<{ withdrawn: boolean; reason?: string; cycle?: number; updateId?: string }> {
