@@ -462,7 +462,9 @@ function v1Sleep(ms: number): Promise<void> {
 }
 
 interface DeliveryLeg {
-  sender: string;
+  /** Present only on a transfer-spec leg (the transfer authorization carries it).
+   * A created-holding leg has no sender — the holding only names its owner. */
+  sender?: string;
   receiver: string;
   amount: number;
   instrumentOk: boolean;
@@ -510,8 +512,33 @@ function transferSpecLeg(t: any, config: V1LaneConfig): DeliveryLeg | null {
   };
 }
 
-/** Walk a committed Scan update tree and collect every transfer leg from a
- * decodable transfer spec, wherever it appears. */
+/**
+ * Decode a created CC holding into a credit leg for its owner. When a
+ * pending offer is accepted, the committed update carries no transfer spec — the
+ * money shows up as a freshly-created holding owned by the receiver. Recognising
+ * it lets an accept be verified structurally (by who the holding lands on),
+ * instead of by a text match. There is no sender on a holding leg — the sender is
+ * bound separately, by the offer's own contract id.
+ */
+function holdingCreditLeg(node: any, config: V1LaneConfig): DeliveryLeg | null {
+  const tid = pickKey(node, ['template_id', 'templateId']);
+  if (typeof tid !== 'string') return null;
+  if (tid.split(':').pop() !== config.holdingTemplateId.split(':').pop()) return null;
+  const args = pickKey(node, ['create_arguments', 'createArguments', 'create_argument']);
+  if (!args || typeof args !== 'object') return null;
+  const owner = pickKey(args, ['owner']);
+  if (typeof owner !== 'string') return null;
+  const amtField = pickKey(args, ['amount']);
+  const amount = Number(
+    amtField && typeof amtField === 'object' ? pickKey(amtField, ['initialAmount', 'initial_amount']) : amtField,
+  );
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return { receiver: owner, amount, instrumentOk: true };
+}
+
+/** Walk a committed Scan update tree and collect every value-delivery leg: a
+ * decodable transfer spec (carries both parties) and a created CC holding
+ * (carries only its owner), wherever each appears. */
 function collectDeliveryLegs(updateBody: string, config: V1LaneConfig): DeliveryLeg[] {
   let root: unknown;
   try {
@@ -528,11 +555,48 @@ function collectDeliveryLegs(updateBody: string, config: V1LaneConfig): Delivery
       for (const v of node) stack.push(v);
       continue;
     }
-    const leg = transferSpecLeg(pickKey(node as Record<string, any>, ['transfer']), config);
-    if (leg) legs.push(leg);
+    const spec = transferSpecLeg(pickKey(node as Record<string, any>, ['transfer']), config);
+    if (spec) legs.push(spec);
+    const holding = holdingCreditLeg(node, config);
+    if (holding) legs.push(holding);
     for (const v of Object.values(node)) stack.push(v);
   }
   return legs;
+}
+
+/** True if the committed update CONSUMES `cid` — exercises or archives it — as
+ * opposed to merely creating or referencing it. An accept or a withdraw consumes
+ * the offer; the offer's own creation only creates it. Binding on consumption
+ * (not mere reference) is what stops the offer's creation update — which carries
+ * the same contract id and its transfer authorization — from standing in for the
+ * acceptance that actually delivers. */
+function updateConsumesContract(updateBody: string, cid: string): boolean {
+  let root: unknown;
+  try {
+    root = JSON.parse(updateBody);
+  } catch {
+    return false;
+  }
+  const stack: unknown[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const v of node) stack.push(v);
+      continue;
+    }
+    const n = node as Record<string, any>;
+    for (const key of ['exercised_event', 'exercisedEvent', 'archived_event', 'archivedEvent']) {
+      const ev = n[key];
+      if (ev && typeof ev === 'object' && pickKey(ev, ['contract_id', 'contractId']) === cid) return true;
+    }
+    const et = pickKey(n, ['event_type', 'eventType']);
+    if ((et === 'exercised_event' || et === 'archived_event') && pickKey(n, ['contract_id', 'contractId']) === cid) {
+      return true;
+    }
+    for (const v of Object.values(n)) stack.push(v);
+  }
+  return false;
 }
 
 /**
@@ -575,6 +639,22 @@ export async function verifyDeliveryOnScan(
   updateId: string,
   expected: { sender: string; receiver: string; minAmount: number; agreementRef?: string },
 ): Promise<{ body: string; amount: number }> {
+  const body = await fetchCommittedUpdate(config, updateId);
+  const amount = verifiedDelivery(body, config, expected);
+  if (amount === null) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} committed on chain but delivers no ${config.instrumentId} of at least ${expected.minAmount} from ` +
+        `${expected.sender.split('::')[0]} to ${expected.receiver.split('::')[0]}; refusing to record.`,
+    );
+  }
+  return { body, amount };
+}
+
+/** Fetch a committed update from the global Scan, polling briefly to absorb
+ * ingestion lag, and confirm it echoes the requested id. Returns the raw body. */
+async function fetchCommittedUpdate(config: V1LaneConfig, updateId: string): Promise<string> {
   const url = `${config.registryApiUrl}/api/scan/v2/updates/${encodeURIComponent(updateId)}`;
   const attempts = 8;
   const delayMs = 2500;
@@ -608,16 +688,7 @@ export async function verifyDeliveryOnScan(
     if ((parsed.update_id ?? parsed.updateId) !== updateId) {
       throw new V1LaneError(422, 'settlement_mismatch', `update ${updateId} on Scan does not echo the requested id.`);
     }
-    const amount = verifiedDelivery(text, config, expected);
-    if (amount === null) {
-      throw new V1LaneError(
-        422,
-        'settlement_mismatch',
-        `update ${updateId} committed on chain but delivers no ${config.instrumentId} of at least ${expected.minAmount} from ` +
-          `${expected.sender.split('::')[0]} to ${expected.receiver.split('::')[0]}; refusing to record.`,
-      );
-    }
-    return { body: text, amount };
+    return text;
   }
   throw new V1LaneError(
     422,
@@ -626,17 +697,78 @@ export async function verifyDeliveryOnScan(
   );
 }
 
-/** Verify a stream cycle's transfer: payer -> recipient in the configured CC. */
-async function verifyTransferOnScan(
+/**
+ * Confirm a pending offer was consummated in favour of `recipient`: the committed
+ * update must reference the exact tracked offer contract (so an unrelated update
+ * can't stand in for it) and create at least `minAmount` of the configured CC as a
+ * holding in the recipient's name. Only a created holding counts as delivery — a
+ * transfer-spec leg is the transfer's authorization, which is also present in the
+ * offer's own creation update, so counting it would let that creation update be
+ * replayed as an acceptance for funds that are only locked, never delivered.
+ * Returns the on-chain amount delivered, so the caller credits the ledger rather
+ * than a stored figure.
+ */
+async function verifyConsummationOnScan(
   config: V1LaneConfig,
   updateId: string,
-  agreement: V1Agreement,
+  expected: { trackedCid?: string; recipient: string; minAmount: number },
 ): Promise<{ body: string; amount: number }> {
-  return verifyDeliveryOnScan(config, updateId, {
-    sender: agreement.payerParty,
-    receiver: agreement.recipientParty,
-    minAmount: 0,
-  });
+  // Fail closed: a credit path must bind to a specific offer contract. Without
+  // one it would fall back to receiver+amount only, so an unrelated delivery of
+  // at least the amount to the recipient could consummate the cycle.
+  if (!expected.trackedCid) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `no tracked offer contract to bind update ${updateId} to; refusing to record.`,
+    );
+  }
+  const body = await fetchCommittedUpdate(config, updateId);
+  if (!updateConsumesContract(body, expected.trackedCid)) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} does not consume the tracked offer; refusing to record.`,
+    );
+  }
+  let best: number | null = null;
+  for (const leg of collectDeliveryLegs(body, config)) {
+    // Delivery is a created holding (no sender); a sender-bearing transfer-spec
+    // leg is only the authorization and is present at offer creation too.
+    if (leg.sender != null) continue;
+    if (!leg.instrumentOk || leg.receiver !== expected.recipient) continue;
+    if (leg.amount + 1e-9 < expected.minAmount) continue;
+    if (best === null || leg.amount > best) best = leg.amount;
+  }
+  if (best === null) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} creates no ${config.instrumentId} holding of at least ${expected.minAmount} for ` +
+        `${expected.recipient.split('::')[0]}; refusing to record.`,
+    );
+  }
+  return { body, amount: best };
+}
+
+/** Confirm a committed update consumed a specific offer contract. Used for a
+ * withdraw, which reclaims funds rather than delivering them, so there is nothing
+ * to credit — only the tracked offer's consumption to confirm, so a stray update
+ * can't mark the wrong offer withdrawn. */
+async function verifyContractConsumedOnScan(
+  config: V1LaneConfig,
+  updateId: string,
+  cid?: string,
+): Promise<string> {
+  const body = await fetchCommittedUpdate(config, updateId);
+  if (cid && !updateConsumesContract(body, cid)) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} does not consume the withdrawn offer; refusing to record.`,
+    );
+  }
+  return body;
 }
 
 /**
@@ -2073,6 +2205,12 @@ export class V1LaneService {
     if (!input.recipientParty) {
       throw new V1LaneError(400, 'missing_recipient', 'recipientParty is required');
     }
+    // A payer streaming to itself has no meaning, and it collapses the delivery
+    // check: a refund to the payer is then a holding owned by the recipient too,
+    // so the two become indistinguishable. Reject it up front.
+    if (input.payerParty === input.recipientParty) {
+      throw new V1LaneError(400, 'self_stream', 'payerParty and recipientParty must differ');
+    }
     const ratePerPeriod = input.ratePerCycle ?? input.amount;
     if (!ratePerPeriod) {
       throw new V1LaneError(400, 'missing_rate', 'ratePerCycle (or amount) is required');
@@ -2703,6 +2841,15 @@ export class V1LaneService {
     if (record.claimUpdateId === input.updateId || st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
     }
+    // The allocation's own creation update carries its transfer authorization and
+    // its created contract id, so it must never be claimed as the delivery.
+    if (record.allocationUpdateId && input.updateId === record.allocationUpdateId) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${input.updateId} is the allocation's creation, not its execution; refusing to record.`,
+      );
+    }
     // Reject a cross-stream replay of the same on-chain update.
     if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
       throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
@@ -2711,9 +2858,15 @@ export class V1LaneService {
       return { settled: false, reason: 'already_claimed', cycle: st.cycles };
     }
 
-    await verifyTransferOnScan(this.config, input.updateId, agreement);
-
-    const amount = Number(record.amount);
+    // Bind to the exact allocation being claimed and require the committed update
+    // deliver at least the tracked amount to the recipient; credit the on-chain
+    // amount, never the stored figure off an unrelated transfer.
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+      trackedCid: record.allocationCid || record.receiverClaimCid || input.allocationCid,
+      recipient: agreement.recipientParty,
+      minAmount: Number(record.amount),
+    });
+    const amount = Math.min(Number(record.amount), verifiedAmount);
     st.settled = Number((st.settled + amount).toFixed(10));
     st.cycles = Math.max(st.cycles, record.cycle);
     st.history.push({
@@ -2980,6 +3133,15 @@ export class V1LaneService {
     if (record.finalUpdateId === input.updateId || st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
     }
+    // The offer's own creation update carries its transfer authorization and its
+    // created contract id, so it must never be accepted as the delivery.
+    if (record.createUpdateId && input.updateId === record.createUpdateId) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${input.updateId} is the offer's creation, not its acceptance; refusing to record.`,
+      );
+    }
     // Reject a cross-stream replay of the same on-chain update.
     if (updateIdRecordedElsewhere(store, streamId, input.updateId)) {
       throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
@@ -2988,9 +3150,16 @@ export class V1LaneService {
       return { settled: false, reason: 'already_accepted', cycle: st.cycles };
     }
 
-    await verifyTransferOnScan(this.config, input.updateId, agreement);
-
-    const amount = Number(record.amount);
+    // Bind to the exact pending offer being accepted and require the committed
+    // update deliver at least the tracked amount to the recipient; credit the
+    // on-chain amount, so a dust or unrelated transfer can't mark the cycle
+    // accepted for the full pending figure.
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+      trackedCid: record.transferInstructionCid || input.transferInstructionCid,
+      recipient: agreement.recipientParty,
+      minAmount: Number(record.amount),
+    });
+    const amount = Math.min(Number(record.amount), verifiedAmount);
     st.settled = Number((st.settled + amount).toFixed(10));
     st.cycles = Math.max(st.cycles, record.cycle);
     st.history.push({
@@ -3123,7 +3292,23 @@ export class V1LaneService {
     if (record.status === 'accepted') {
       return { withdrawn: false, reason: 'already_accepted', cycle: record.cycle };
     }
-    await verifyTransferOnScan(this.config, input.updateId, agreement);
+    // The offer's own creation update references the tracked contract too, so it
+    // can't stand in for the withdrawal that consumes it.
+    if (record.createUpdateId && input.updateId === record.createUpdateId) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${input.updateId} is the offer's creation, not its withdrawal; refusing to record.`,
+      );
+    }
+    // A withdraw reclaims the sender's locked funds — nothing is delivered to the
+    // recipient, so nothing is credited. Confirm the committed update actually
+    // consumed this offer, so a stray update can't mark it withdrawn.
+    await verifyContractConsumedOnScan(
+      this.config,
+      input.updateId,
+      record.transferInstructionCid || input.transferInstructionCid,
+    );
     record.status = 'withdrawn';
     record.finalUpdateId = input.updateId;
     saveStore(this.config, store);
