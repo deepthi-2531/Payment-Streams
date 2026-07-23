@@ -189,7 +189,7 @@ async function discoverReceiverClaimCid(party: string, ref: string): Promise<str
  * and decimal amount (summed for the proxy's funding pre-check). Throws a clear,
  * actionable error when the wallet is empty or the rows can't be decoded.
  */
-async function readPayerHoldings(payerParty: string): Promise<Holding[]> {
+export async function readPayerHoldings(payerParty: string): Promise<Holding[]> {
   const rows = await queryActiveContractsRaw([AMULET_TID], payerParty);
   const holdings = rows
     .map(decodeHolding)
@@ -231,7 +231,7 @@ function looksLikeLedgerId(v: unknown): v is string {
 
 /** Find a real on-ledger update id anywhere in the wallet's response, or
  * undefined if there is none (i.e. the submit did NOT demonstrably commit). */
-function extractUpdateId(res: unknown, depth = 0): string | undefined {
+export function extractUpdateId(res: unknown, depth = 0): string | undefined {
   if (!res || typeof res !== 'object' || depth > 4) return undefined;
   const r = res as Record<string, unknown>;
   for (const k of UPDATE_ID_KEYS) {
@@ -247,7 +247,7 @@ function extractUpdateId(res: unknown, depth = 0): string | undefined {
 /** Detect an explicit failure the wallet reported WITHOUT throwing (Loop can
  * resolve `run_transaction` with an `{ error_message }` / `{ status: "failed" }`
  * body). Returns the human message, or undefined when no failure is signalled. */
-function walletSubmitError(res: unknown, depth = 0): string | undefined {
+export function walletSubmitError(res: unknown, depth = 0): string | undefined {
   if (!res || typeof res !== 'object' || depth > 4) return undefined;
   const r = res as Record<string, any>;
   const em =

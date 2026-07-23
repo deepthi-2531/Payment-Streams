@@ -1,0 +1,135 @@
+-- | StreamMandate — the payer's non-custodial, rate-limited, revocable
+-- authorization for the operator to stream to a payee.
+--
+-- This is how a payer funds a stream **without** locking funds in escrow and
+-- **without** approving every cycle by hand. The payer signs the mandate once,
+-- granting the operator the right to pull at most `ratePerCycle` per cycle, no
+-- more often than `cadenceSeconds`, up to an optional `maxTotal`. The operator
+-- records each pull via `RecordPull` (rate-limited + capped at ledger time),
+-- and the corresponding CIP-56 token-standard transfer (payer -> payee) is
+-- executed alongside — the funds never enter this contract or any operator
+-- account.
+--
+-- The authority is strictly bounded and revocable:
+--
+--   * **Non-custodial** — the mandate holds nothing; funds move directly
+--     payer -> payee via standard transfers.
+--   * **Rate-limited** — `RecordPull` refuses more than `ratePerCycle` per
+--     cycle and enforces `cadenceSeconds` between cycles at ledger time.
+--   * **Capped** — an optional `maxTotal` bounds cumulative pulls.
+--   * **Revocable** — the payer archives the mandate (`Revoke`) at any time,
+--     with no operator cooperation, stopping all future pulls immediately.
+--
+-- ## Trust boundary
+--
+-- The mandate binds the operator on-ledger for the parties that co-host it: the
+-- operator cannot `RecordPull` beyond the rate/cap, and the payer can revoke
+-- unilaterally. A fully trust-minimized variant, where `PullCycle` executes the
+-- token-standard `TransferFactory_Transfer` *inside* the choice (so the money
+-- leg itself is gated by the mandate's authority), is the target for
+-- cross-node deployments; it requires binding the transfer-instruction package
+-- as a dependency (a consistent token-standard DAR set). See
+-- `docs/SETTLEMENT-DESIGN.md`.
+module CantonStreams.Stream.StreamMandate where
+
+import DA.Time (addRelTime, seconds)
+import CantonStreams.Interface.Types (StreamId, InstrumentIdV2)
+import CantonStreams.Stream.Time (assertNotInFuture)
+
+template StreamMandate
+  with
+    mandateId : StreamId
+    payer : Party
+      -- ^ Sole signatory. Grants + revokes the authority; funds stay in their
+      -- wallet.
+    operator : Party
+      -- ^ May exercise `RecordPull` within the bounds below.
+    payee : Party
+    instrumentId : InstrumentIdV2
+    ratePerCycle : Decimal
+      -- ^ Maximum amount the operator may pull per cycle.
+    cadenceSeconds : Int
+      -- ^ Minimum seconds between successive pulls.
+    maxTotal : Optional Decimal
+      -- ^ Optional lifetime cap on cumulative pulls.
+    startTime : Time
+    endTime : Optional Time
+    -- ----- mutable state -----
+    totalPulled : Decimal
+    cyclesPulled : Int
+    lastPulledAt : Optional Time
+    active : Bool
+    observers : [Party]
+  where
+    signatory payer
+    observer operator, observers
+
+    ensure ratePerCycle > 0.0
+      && cadenceSeconds > 0
+      && totalPulled >= 0.0
+      && cyclesPulled >= 0
+      && optional True (startTime <) endTime
+
+    -- | Record one pulled cycle. Operator-controlled but bounded on-ledger:
+    -- amount ≤ ratePerCycle, at least `cadenceSeconds` since the last pull,
+    -- within the optional cap, and within the stream's active window — all at
+    -- ledger time. The matching transfer executes alongside this exercise.
+    choice RecordPull : ContractId StreamMandate
+      with
+        amount : Decimal
+        transferId : Text
+          -- ^ updateId of the cycle's on-ledger transfer (verifiable on scan).
+      controller operator
+      do
+        assertMsg "mandate revoked" active
+        assertMsg "amount must be positive and within the per-cycle rate"
+          (amount > 0.0 && amount <= ratePerCycle)
+        now <- getTime
+        assertNotInFuture "now" now
+        assertMsg "before stream start" (now >= startTime)
+        optional (pure ()) (\e -> assertMsg "stream has ended" (now <= e)) endTime
+        case lastPulledAt of
+          None -> pure ()
+          Some t ->
+            assertMsg "too soon since last cycle"
+              (now >= addRelTime t (seconds cadenceSeconds))
+        let newTotal = totalPulled + amount
+        optional (pure ()) (\cap -> assertMsg "exceeds mandate cap" (newTotal <= cap)) maxTotal
+        let _ = transferId  -- recorded in the exercise event for audit linkage
+        create this with
+          totalPulled = newTotal
+          cyclesPulled = cyclesPulled + 1
+          lastPulledAt = Some now
+
+    -- | The payer revokes the mandate. No operator cooperation required.
+    choice Revoke : ()
+      controller payer
+      do pure ()
+
+    nonconsuming choice GetMandateInfo : MandateInfo
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "not authorized to view"
+          (viewer == payer || viewer == operator || viewer `elem` observers)
+        pure MandateInfo with
+          mandateId
+          payer
+          operator
+          payee
+          ratePerCycle
+          totalPulled
+          cyclesPulled
+          active
+
+data MandateInfo = MandateInfo with
+    mandateId : StreamId
+    payer : Party
+    operator : Party
+    payee : Party
+    ratePerCycle : Decimal
+    totalPulled : Decimal
+    cyclesPulled : Int
+    active : Bool
+  deriving (Eq, Show)

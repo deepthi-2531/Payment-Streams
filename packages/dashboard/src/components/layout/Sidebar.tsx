@@ -8,7 +8,6 @@ import { useState, type CSSProperties } from 'react';
 import { NavLink, useLocation } from 'react-router';
 import { Icons } from '../primitives/Icons.js';
 import { Avatar } from '../primitives/Avatar.js';
-import { partyShort } from '../primitives/PartyChip.js';
 import { useAuth } from '../../store/auth.js';
 import { useStreamsV1 } from '../../hooks/useStreams.js';
 
@@ -24,19 +23,14 @@ interface NavDivider {
 }
 type NavEntry = NavItem | NavDivider;
 
+// Kept intentionally short — just the core flows a person needs. Create folds
+// into the "New" buttons on Streams/Vault; the operator surfaces (Flows, Batch,
+// Policies, Executor, Logs) keep their routes for deep-links but are off the rail.
 const NAV: ReadonlyArray<NavEntry> = [
   { route: '/', label: 'Dashboard', icon: 'Dashboard' },
   { route: '/streams', label: 'Streams', icon: 'Stream' },
-  { route: '/create', label: 'Create', icon: 'Plus' },
-  { route: '/flows', label: 'Flows', icon: 'Refresh' },
-  { route: '/batch', label: 'Batch', icon: 'Layers' },
+  { route: '/v1/escrows', label: 'Vault', icon: 'Lock' },
   { route: '/inbox', label: 'Inbox', icon: 'Inbox', badgeKey: 'inbox' },
-  { divider: true },
-  // V1 (direct-delivery) lives under the same Streams/Create tabs via the
-  // in-page lane dropdown; the routes stay registered for deep-links.
-  { route: '/policies', label: 'Policies', icon: 'Shield' },
-  { route: '/executor', label: 'Executor', icon: 'Pulse' },
-  { route: '/execution-logs', label: 'Execution Logs', icon: 'Logs' },
   { divider: true },
   { route: '/settings', label: 'Settings', icon: 'Settings' },
 ];
@@ -81,17 +75,9 @@ export function Sidebar() {
         {/* Brand */}
         <div style={brandStyle}>
           <Icons.Logo size={26} />
-          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.2 }}>
-            <span style={{ fontSize: 14.5, fontWeight: 600, letterSpacing: '-0.01em' }}>
-              CC Streams
-            </span>
-            <span
-              className="mono"
-              style={{ fontSize: 9.5, color: 'var(--fg-4)', letterSpacing: '0.05em' }}
-            >
-              v1.0.0-rc.1
-            </span>
-          </div>
+          <span style={{ fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' }}>
+            CC Streams
+          </span>
         </div>
 
         <div style={{ height: 1, background: 'var(--line)', marginBottom: 8 }} />
@@ -112,15 +98,16 @@ export function Sidebar() {
             }
             const navItem = item as NavItem;
             const Icon = Icons[navItem.icon];
+            const p = location.pathname;
             const isActive =
-              location.pathname === navItem.route ||
-              // "Streams" stays active across its detail routes AND the V1 lane
-              // (which is now reached via the in-page lane dropdown, not a tab).
+              p === navItem.route ||
+              // "Streams" now subsumes the detail routes AND creating a stream
+              // (the "New" buttons), so keep it lit across all of them.
               (navItem.route === '/streams' &&
-                (location.pathname.startsWith('/streams/') ||
-                  location.pathname.startsWith('/v1/streams'))) ||
-              // "Create" stays active on the V1 create route too.
-              (navItem.route === '/create' && location.pathname.startsWith('/v1/create'));
+                (p.startsWith('/streams/') ||
+                  p.startsWith('/v1/streams') ||
+                  p === '/create' ||
+                  p.startsWith('/v1/create')));
             const badge =
               navItem.badgeKey === 'inbox' && pendingCount > 0 ? pendingCount : null;
             return (
@@ -171,7 +158,7 @@ export function Sidebar() {
               marginBottom: 8,
             }}
           >
-            Connected Party
+            Signed in as
           </div>
           {auth.isAuthenticated && auth.party ? (
             <>
@@ -193,12 +180,6 @@ export function Sidebar() {
                     title={auth.party}
                   >
                     {auth.party.split('::')[0]}
-                  </div>
-                  <div
-                    className="mono"
-                    style={{ fontSize: 10.5, color: 'var(--fg-4)' }}
-                  >
-                    {partyShort(auth.party)}…
                   </div>
                 </div>
                 <button
@@ -236,7 +217,7 @@ export function Sidebar() {
                       borderRadius: '50%',
                     }}
                   />{' '}
-                  CIP-103
+                  Connected
                 </span>
               </div>
             </>

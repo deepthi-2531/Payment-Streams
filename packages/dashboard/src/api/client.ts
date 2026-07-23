@@ -431,6 +431,24 @@ export class CantonStreamsApi {
   ): Promise<{ requestContractId: string; streamId: string }> {
     if (this.isHostedWalletSession()) {
       const party = await this.readHostedParty();
+      // Fail fast: a custodial wallet's WRITE path (submit-and-wait) can hang
+      // forever without settling when the participant lacks our DAR, so the
+      // create spins indefinitely. A READ reliably rejects with
+      // PACKAGE_NAMES_NOT_FOUND — probe first and surface an actionable error
+      // steering to direct delivery instead of hanging.
+      try {
+        await queryActiveContracts([HOSTED_TID_CREATE_REQUEST], party);
+      } catch (probeErr) {
+        if (this.isDarNotDeployedError(probeErr)) {
+          throw new Error(
+            "This wallet's participant does not have the Canton Streams app deployed, " +
+              'so custody streams cannot be created here. Use Direct delivery instead — ' +
+              'it sends a token-standard transfer from your wallet each cycle and needs ' +
+              'no streams DAR.',
+          );
+        }
+        // A non-DAR read failure is not fatal to the create — fall through.
+      }
       try {
         const command = {
           CreateCommand: {
@@ -794,6 +812,19 @@ export class CantonStreamsApi {
     return this.request('POST', '/api/flows', params);
   }
 
+  /**
+   * Supported assets for the create-stream / create-flow asset picker. Public
+   * deployment config — admin parties resolved server-side for this network.
+   * Returns `[]` on any error so the picker degrades to Custom-only.
+   */
+  async listAssets(): Promise<SupportedAsset[]> {
+    try {
+      return await this.request<SupportedAsset[]>('GET', '/api/assets');
+    } catch {
+      return [];
+    }
+  }
+
   async topUpFlow(
     sender: string,
     flowId: string,
@@ -880,6 +911,45 @@ export class CantonStreamsApi {
       `/api/v1/streams/${encodeURIComponent(id)}/stop`,
       {},
     );
+  }
+
+  // --- Operator-custodied escrow ---
+
+  /** The escrow party + instrument a wallet needs to fund an escrow deposit. */
+  async escrowInfo(): Promise<EscrowInfo> {
+    return this.request<EscrowInfo>('GET', '/api/v1/escrow-info');
+  }
+
+  /** Form the payer→escrow deposit for the payer's wallet to sign (model 2). */
+  async prepareEscrowDeposit(body: {
+    payerParty?: string;
+    totalDeposit: string;
+    holdings?: { cid: string; amount: number }[];
+  }): Promise<EscrowPreparedDeposit> {
+    return this.request<EscrowPreparedDeposit>('POST', '/api/v1/escrows/prepare-deposit', body);
+  }
+
+  /** Create an escrow: deposit (proxy or wallet-signed) + start streaming. */
+  async createEscrow(params: CreateEscrowParams): Promise<EscrowView> {
+    return this.request<EscrowView>('POST', '/api/v1/escrows', params);
+  }
+
+  async listEscrows(): Promise<EscrowView[]> {
+    return this.request<EscrowView[]>('GET', '/api/v1/escrows');
+  }
+
+  async getEscrow(id: string): Promise<EscrowView> {
+    return this.request<EscrowView>('GET', `/api/v1/escrows/${encodeURIComponent(id)}`);
+  }
+
+  /** Refund the unspent balance to the payer and close the escrow (payer only). */
+  async refundEscrow(id: string): Promise<EscrowView> {
+    return this.request<EscrowView>('POST', `/api/v1/escrows/${encodeURIComponent(id)}/refund`, {});
+  }
+
+  /** Reconcile the audit trail against the chain (OperatorEscrow + balances + offers). */
+  async reconcileEscrow(id: string): Promise<EscrowReconciliation> {
+    return this.request<EscrowReconciliation>('GET', `/api/v1/escrows/${encodeURIComponent(id)}/reconcile`);
   }
 
   /** Model 2 phase 1: form (no submit) the next cycle's transfer so the payer's
@@ -1034,6 +1104,31 @@ export class CantonStreamsApi {
       body,
     );
   }
+
+  /** Ledger-backed incoming view for the connected party: pending offers +
+   * delivered CC, read straight from the participant. Unlike listStreamsV1
+   * (proxy JSON store), this surfaces EVERY transfer to the party — including
+   * raw-registry and wallet-sent ones the proxy never tracked. */
+  async listReceivedV1(): Promise<V1ReceivedView> {
+    return this.request<V1ReceivedView>('GET', '/api/v1/received');
+  }
+
+  /** Recipient (hosted / dev-mode): accept a pending incoming offer by contract
+   * id. The proxy submits TransferInstruction_Accept as the connected party. */
+  async acceptReceivedV1(transferInstructionCid: string): Promise<V1ReceivedAcceptResult> {
+    return this.request<V1ReceivedAcceptResult>('POST', '/api/v1/received/accept', {
+      transferInstructionCid,
+    });
+  }
+
+  /** Recipient (wallet party NOT hosted on the proxy's participant, e.g. a Loop
+   * party): build the TransferInstruction_Accept command + disclosures so the
+   * caller's own wallet can sign and submit it. */
+  async prepareAcceptReceivedV1(transferInstructionCid: string): Promise<V1ReceivedPreparedAccept> {
+    return this.request<V1ReceivedPreparedAccept>('POST', '/api/v1/received/prepare-accept', {
+      transferInstructionCid,
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,6 +1251,156 @@ export interface V1SettleParams {
   readonly amount?: string;
 }
 
+// --- Operator-custodied escrow (proxy /api/v1/escrows group) ---
+
+export type EscrowStatus = 'active' | 'completed' | 'refunded';
+
+export interface EscrowReleaseRecord {
+  readonly at: string;
+  readonly amount: string;
+  readonly updateId: string;
+  /** Set when the cycle landed as a pending offer (payee has no preapproval). */
+  readonly pending?: boolean;
+}
+
+/** One operator-custodied stream: the payer deposited `totalDeposited` into the
+ * operator-controlled escrow party once, and the operator streams `ratePerCycle`
+ * to the payee every `cadenceSeconds` until the deposit is exhausted. */
+// --- Audit / flow ledger ---
+
+export type EscrowLegKind = 'deposit' | 'release' | 'refund';
+export type EscrowLegDirection = 'in' | 'out';
+export type EscrowDelivery = 'direct' | 'pending_offer';
+export type EscrowOfferStatus = 'active' | 'accepted' | 'withdrawn' | 'expired';
+export type EscrowInitiator = 'payer' | 'streamer' | 'operator';
+
+/** One append-only leg of value moving through the escrow — the audit row. */
+export interface EscrowLedgerEntry {
+  readonly seq: number;
+  readonly eventId: string;
+  readonly kind: EscrowLegKind;
+  readonly direction: EscrowLegDirection;
+  readonly from: string;
+  readonly to: string;
+  readonly custodian: string;
+  readonly amount: string;
+  readonly instrumentAdmin: string;
+  readonly instrumentId: string;
+  readonly cycleNo?: number;
+  readonly scheduledDueAt?: string;
+  readonly updateId?: string;
+  readonly contractCid?: string;
+  readonly transferInstructionCid?: string;
+  readonly offerExpiresAt?: string;
+  readonly delivery: EscrowDelivery;
+  readonly offerStatus?: EscrowOfferStatus;
+  readonly acceptUpdateId?: string;
+  readonly acceptedAt?: string;
+  readonly initiatedBy: EscrowInitiator;
+  readonly authorizationBasis?: string;
+  readonly reasonCode?: string;
+  readonly at: string;
+  readonly recordTime?: string;
+}
+
+/** Computed roll-up — streamed / delivered / pending / refunded / remaining. */
+export interface EscrowSummary {
+  readonly totalIn: string;
+  readonly totalStreamed: string;
+  readonly totalDelivered: string;
+  readonly totalPending: string;
+  readonly totalRefunded: string;
+  readonly totalRefundPending: string;
+  readonly remaining: string;
+  readonly cyclesReleased: number;
+  readonly cyclesDelivered: number;
+  readonly cyclesPending: number;
+  readonly firstReleaseAt?: string;
+  readonly lastReleaseAt?: string;
+}
+
+/** Result of reconciling the audit trail against the chain. */
+export interface EscrowReconciliation {
+  readonly at: string;
+  readonly escrowId: string;
+  readonly offLedger: {
+    readonly totalStreamed: string;
+    readonly totalDelivered: string;
+    readonly totalPending: string;
+    readonly totalRefunded: string;
+    readonly remaining: string;
+  };
+  readonly onLedger: {
+    readonly operatorEscrowCid?: string;
+    readonly operatorReleased?: string;
+    readonly operatorTotalDeposited?: string;
+    readonly operatorStatus?: string;
+    readonly escrowFreeBalance: string;
+    readonly commingled: boolean;
+  };
+  readonly offers: ReadonlyArray<{
+    readonly seq: number;
+    readonly kind: EscrowLegKind;
+    readonly cycleNo?: number;
+    readonly transferInstructionCid: string;
+    readonly amount: string;
+    readonly to: string;
+    readonly status: EscrowOfferStatus;
+  }>;
+  readonly checks: ReadonlyArray<{ readonly name: string; readonly ok: boolean; readonly detail: string }>;
+}
+
+export interface EscrowView {
+  readonly escrowId: string;
+  readonly originalPayer: string;
+  readonly recipient: string;
+  readonly ratePerCycle: string;
+  readonly cadenceSeconds: number;
+  readonly totalDeposited: string;
+  readonly released: string;
+  readonly fundingTransferId: string;
+  readonly operatorEscrowCid?: string;
+  readonly status: EscrowStatus;
+  readonly createdAt: string;
+  readonly nextDueAt: string;
+  readonly lastReleaseAt?: string;
+  readonly releases: readonly EscrowReleaseRecord[];
+  /** Append-only audit/flow ledger. */
+  readonly ledger: readonly EscrowLedgerEntry[];
+  /** Computed audit roll-up. */
+  readonly summary: EscrowSummary;
+}
+
+export interface EscrowInfo {
+  readonly escrowParty: string;
+  readonly instrumentAdmin: string;
+  readonly instrumentId: string;
+  readonly tickSeconds: number;
+}
+
+export interface CreateEscrowParams {
+  readonly escrowId?: string;
+  /** Defaults to the caller party; must equal it. */
+  readonly payerParty?: string;
+  readonly recipient: string;
+  readonly ratePerCycle: string;
+  readonly cadenceSeconds: number;
+  readonly totalDeposit: string;
+  /** When the payer's WALLET signed the deposit itself, its updateId. Omit to
+   * have the proxy submit the deposit (hosted/dev payer only). */
+  readonly fundingTransferId?: string;
+}
+
+/** A payer→escrow deposit transfer formed by the proxy for the wallet to sign. */
+export interface EscrowPreparedDeposit {
+  readonly ref: string;
+  readonly amount: string;
+  readonly executeBefore: string;
+  readonly actAs: string;
+  readonly command: unknown;
+  readonly disclosedContracts: readonly unknown[];
+}
+
 export interface V1SettleResult {
   readonly settled: boolean;
   readonly cycle?: number;
@@ -1167,6 +1412,46 @@ export interface V1SettleResult {
   /** Present when a settle landed as a pending offer (recipient has no
    * pre-approval). `settled` is false in that case — the recipient must accept. */
   readonly pending?: V1PendingTransferRecord;
+}
+
+/** A pending incoming offer (AmuletTransferInstruction) the connected party may
+ * accept — read from the ledger, so not tied to any proxy stream record. */
+export interface V1ReceivedPendingOffer {
+  readonly transferInstructionCid: string;
+  readonly amount: string;
+  readonly sender: string;
+  readonly instrumentId: string;
+  readonly requestedAt?: string;
+  readonly executeBefore?: string;
+  /** True once the accept-by deadline has passed — Accept is no longer possible. */
+  readonly expired: boolean;
+}
+
+/** CC already delivered to the connected party (an accepted incoming transfer). */
+export interface V1ReceivedTransfer {
+  readonly updateId: string;
+  readonly amount: string;
+  readonly at: string;
+}
+
+/** Ledger-backed incoming view returned by GET /api/v1/received. */
+export interface V1ReceivedView {
+  readonly party: string;
+  readonly pending: readonly V1ReceivedPendingOffer[];
+  readonly received: readonly V1ReceivedTransfer[];
+}
+
+export interface V1ReceivedAcceptResult {
+  readonly updateId: string;
+  readonly amount: string;
+  readonly sender: string;
+}
+
+/** The prepared TransferInstruction_Accept for a wallet party to sign+submit. */
+export interface V1ReceivedPreparedAccept {
+  readonly command: unknown;
+  readonly disclosedContracts: readonly unknown[];
+  readonly actAs: string;
 }
 
 /** Model 2 — prepare-settle request. `holdings` are the payer's spendable
@@ -1404,6 +1689,16 @@ export interface RawFlow {
   cumulativePausedMicros: number;
   lastSettlementReference?: string;
   numIterations: number;
+}
+
+/** One supported asset returned by GET /api/assets. */
+export interface SupportedAsset {
+  key: string;
+  displayName: string;
+  instrumentAdmin: string;
+  instrumentId: string;
+  standard: string;
+  note?: string;
 }
 
 /** Create-flow request body (POST /api/flows). */

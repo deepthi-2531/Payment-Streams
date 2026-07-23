@@ -45,6 +45,14 @@ interface AuthContextValue {
   // Dev-mode fallback (no real wallet)
   readonly devMode: boolean;
   readonly setDevCredentials: (token: string, party: string) => void;
+
+  /** True when the acting party is hosted on a participant that vets the
+   * canton-streams DAR (dev/proxy-hosted parties such as streamsbob, and
+   * dapp-SDK/SWK parties on the operator's validator). False for a live
+   * custodial multi-wallet (Loop) whose participant can't run our DAR — the
+   * custody create lane would fail there, so the UI routes it to direct
+   * delivery instead. */
+  readonly canCreateCustodyStream: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -220,6 +228,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAuthenticated = hostedWalletAuth || Boolean(token && party);
 
+  // A live custodial multi-wallet (Loop) routes ledger access through its own
+  // participant, which does NOT vet our canton-streams DAR — so it cannot create
+  // the V2 custody stream (a signatory contract needs the package vetted on the
+  // payer's own participant). Such wallets get Direct delivery + Vault instead.
+  // Dev/proxy-hosted parties and dapp-SDK/SWK parties run on the operator's
+  // validator, which does vet the DAR, so they keep the V2 custody lane.
+  //
+  // (We used to read-probe the DAR on the wallet's participant, but an ACS read
+  // for an unvetted template returns empty rather than erroring, so the probe
+  // reported a false "vetted" and offered a lane that fails at create time.)
+  const isCustodialWallet =
+    walletConnected &&
+    walletClient.capabilities.hostedMultiWallet &&
+    walletClient.capabilities.ledgerApi;
+
+  const canCreateCustodyStream = devMode || !isCustodialWallet;
+
   const value: AuthContextValue = useMemo(
     () => ({
       token,
@@ -238,6 +263,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       },
       devMode,
       setDevCredentials,
+      canCreateCustodyStream,
     }),
     [
       token,
@@ -252,6 +278,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       disconnect,
       devMode,
       setDevCredentials,
+      canCreateCustodyStream,
     ],
   );
 

@@ -55,7 +55,13 @@ export default defineConfig({
 
     nav: [
       { text: 'Overview', link: '/overview' },
-      { text: 'Architecture', link: '/ARCHITECTURE' },
+      {
+        text: 'Architecture',
+        items: [
+          { text: 'System Architecture', link: '/ARCHITECTURE' },
+          { text: 'Streaming Settlement Design', link: '/SETTLEMENT-DESIGN' },
+        ],
+      },
       {
         text: 'Guides',
         items: [
@@ -92,7 +98,10 @@ export default defineConfig({
       {
         text: 'Architecture',
         collapsed: false,
-        items: [{ text: 'System Architecture', link: '/ARCHITECTURE' }],
+        items: [
+          { text: 'System Architecture', link: '/ARCHITECTURE' },
+          { text: 'Streaming Settlement Design', link: '/SETTLEMENT-DESIGN' },
+        ],
       },
       {
         text: 'Security',

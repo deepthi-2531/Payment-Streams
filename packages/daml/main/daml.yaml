@@ -1,11 +1,15 @@
 sdk-version: 3.4.10
 name: canton-streams
 source: daml
-# Bumped 1.0.0 -> 1.1.0: this release changes lifecycle choice bodies
-# (cancellation priced at ledger time; mandatory schedule cap on the V2
-# operator settlement path). Template signatures/payloads are unchanged, so
-# this is a smart-contract-upgrade-compatible successor of 1.0.0.
-version: 1.1.0
+# Bumped 1.2.0 -> 1.3.0: adds `OperatorEscrow` — the operator-custodied
+# streaming escrow (operator is sole signatory and holds the deposited funds;
+# payer/payee are fields, not stakeholders) for wallets that cannot vet this
+# DAR. Existing templates are unchanged, so this is a smart-contract-upgrade-
+# compatible successor of 1.2.0 (additive vetting, no unvet).
+#
+# 1.2.0 added `StreamRecord` (operator-signed direct-transfer index) and
+# `StreamMandate` (the payer's rate-limited, revocable pull authorization).
+version: 1.3.0
 dependencies:
   - daml-prim
   - daml-stdlib

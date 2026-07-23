@@ -1,15 +1,20 @@
 /**
- * LaneSwitch — flip between the two settlement lanes from a single "Streams" /
- * "Create" entry point, instead of separate nav tabs.
+ * LaneSwitch — flip between the two delivery modes from a single "Streams" /
+ * "Create" entry point, instead of separate nav tabs. Both are token-standard
+ * V2 under the hood; they differ in how funds move:
  *
- *   • Token Standard (V2): the CIP-56 AllocationRequest lane (/streams, /create)
- *   • Direct delivery (V1): the TransferFactory lane (/v1/streams, /v1/create)
+ *   • Direct delivery (default): a token-standard transfer per cycle from the
+ *     payer's wallet (/v1/streams, /v1/create). Works with any wallet.
+ *   • Custody (advanced): an allocation-backed StreamAdmin (/streams, /create).
+ *     Requires the canton-streams DAR on the payer's participant, so it is not
+ *     offered to custodial wallets (Loop) whose participant can't run it.
  *
- * Selecting a lane just navigates to that lane's route; each lane keeps its own
- * page + data source, but the user sees one tab with a dropdown.
+ * Selecting a mode just navigates to that route; each keeps its own page + data
+ * source, but the user sees one tab with a dropdown.
  */
 
 import { useNavigate } from 'react-router';
+import { useAuth } from '../../store/auth.js';
 
 const ROUTES = {
   streams: { v2: '/streams', v1: '/v1/streams' },
@@ -24,6 +29,10 @@ export function LaneSwitch({
   readonly kind: 'streams' | 'create';
 }) {
   const navigate = useNavigate();
+  const { canCreateCustodyStream } = useAuth();
+  // Only one delivery mode is available (e.g. a Loop wallet) → a single-option
+  // dropdown is pure clutter, so hide the switch entirely.
+  if (!canCreateCustodyStream) return null;
   return (
     <label
       style={{
@@ -34,9 +43,9 @@ export function LaneSwitch({
         color: 'var(--fg-3)',
         whiteSpace: 'nowrap',
       }}
-      title="Switch settlement lane"
+      title="Switch delivery mode"
     >
-      Lane
+      Delivery
       <select
         value={lane}
         onChange={(e) => navigate(ROUTES[kind][e.target.value as 'v1' | 'v2'])}
@@ -50,8 +59,10 @@ export function LaneSwitch({
           cursor: 'pointer',
         }}
       >
-        <option value="v2">Token Standard (V2)</option>
-        <option value="v1">Direct delivery (V1)</option>
+        <option value="v1">Direct delivery (default)</option>
+        {/* Custody needs the streams DAR on the payer's participant — hide it
+            from wallets that can't run it so they don't hit a doomed create. */}
+        {canCreateCustodyStream && <option value="v2">Custody (advanced)</option>}
       </select>
     </label>
   );

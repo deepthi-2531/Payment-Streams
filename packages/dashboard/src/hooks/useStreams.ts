@@ -26,6 +26,7 @@ import {
   acceptTransferV1ViaWallet,
   withdrawTransferV1ViaWallet,
 } from '../lib/settleV1Wallet.js';
+import { listReceivedViaWallet, acceptReceivedViaWallet } from '../lib/receivedV1Wallet.js';
 
 /**
  * Delay in ms before refetching after a mutation.
@@ -222,6 +223,52 @@ export function useStreamV1(id: string) {
     queryFn: () => client!.getStreamV1(id),
     enabled: !!client && !!id,
     refetchInterval: 10_000,
+  });
+}
+
+/** Ledger-backed incoming view for the connected party: pending offers awaiting
+ * accept + CC already delivered. Read straight from the participant, so it
+ * surfaces EVERY transfer to the party — including raw-registry and wallet-sent
+ * ones the proxy store never tracked (which `useStreamsV1` cannot show). */
+export function useReceivedV1() {
+  const client = useCantonClient();
+  const { party, devMode } = useAuth();
+  // A wallet party (e.g. Loop) is hosted on ITS OWN participant, not the proxy's,
+  // so the proxy's /api/v1/received sees nothing for it — read via the wallet's
+  // ledgerApi instead. A dev-mode/hosted party (streamsbob) uses the proxy, which
+  // hosts it. `isHostedLedgerAvailable` only reports adapter capabilities, so gate
+  // on `!devMode` to avoid routing a dev session to a dead wallet.
+  const useWallet = !devMode && isHostedLedgerAvailable() && !!party;
+
+  return useQuery({
+    queryKey: ['received-v1', useWallet ? `wallet:${party}` : 'proxy'],
+    queryFn: () => (useWallet ? listReceivedViaWallet(party!) : client!.listReceivedV1()),
+    enabled: !!client && (!useWallet || !!party),
+    refetchInterval: 12_000,
+  });
+}
+
+/** Accept a pending incoming offer by contract id. A hosted / dev-mode recipient
+ * (e.g. streamsbob) has the proxy submit TransferInstruction_Accept on its
+ * participant; a wallet party (e.g. Loop) has the proxy build the command and
+ * the wallet sign+submit it. Either way the delivered CC then moves out of
+ * `pending` on the next refetch. */
+export function useAcceptReceivedV1() {
+  const client = useCantonClient();
+  const queryClient = useQueryClient();
+  const { party, devMode } = useAuth();
+
+  return useMutation({
+    mutationFn: (transferInstructionCid: string) => {
+      if (!devMode && isHostedLedgerAvailable() && party) {
+        return acceptReceivedViaWallet(client!, party, transferInstructionCid);
+      }
+      return client!.acceptReceivedV1(transferInstructionCid);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['received-v1'] });
+      queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
+    },
   });
 }
 

@@ -62,3 +62,6 @@ docs/reports/
 # Private docs — excluded from the public repo
 docs/submissions/
 docs/ADOPTION-PLAN.md
+
+# Local Daml .lib backups
+*.srcbuilt-bak/

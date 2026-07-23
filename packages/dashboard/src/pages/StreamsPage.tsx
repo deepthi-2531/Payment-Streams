@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { Link } from 'react-router';
+import { Link, Navigate } from 'react-router';
 import { Plus, SlidersHorizontal, Search } from 'lucide-react';
 import { StreamStatus } from '@canton-streams/sdk/browser';
 import { usePendingStreamRequests, useStreams } from '../hooks/useStreams.js';
@@ -25,7 +25,7 @@ type DirectionFilter = 'all' | 'in' | 'out';
 type StatusFilter = '' | StreamStatus;
 
 export function StreamsPage() {
-  const { party } = useAuth();
+  const { party, canCreateCustodyStream } = useAuth();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('');
   const [directionFilter, setDirectionFilter] = useState<DirectionFilter>('all');
   const [search, setSearch] = useState('');
@@ -49,6 +49,10 @@ export function StreamsPage() {
       return true;
     });
   }, [streamsQ.data, directionFilter, search, party]);
+
+  // A wallet that can't run the custody lane has no streams here — its real
+  // streams are the direct-delivery ones. Send it straight there.
+  if (!canCreateCustodyStream) return <Navigate to="/v1/streams" replace />;
 
   return (
     <div style={{ paddingTop: 28 }}>

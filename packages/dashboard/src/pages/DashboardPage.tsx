@@ -16,6 +16,7 @@ import {
 } from '../components/common/index.js';
 import type { WalletHolding } from '../lib/walletHoldings.js';
 import { AssetGlyph } from '../components/primitives/AssetGlyph.js';
+import { displayName, instrumentLabel } from '../lib/format.js';
 
 export function DashboardPage() {
   const { party } = useAuth();
@@ -87,10 +88,6 @@ export function DashboardPage() {
         subtitle={
           <span>
             {activeStreams.length} active stream{activeStreams.length === 1 ? '' : 's'}
-            {' · '}
-            <span className="mono" style={{ color: 'var(--fg-2)' }}>
-              {streams?.length ?? 0} total
-            </span>
           </span>
         }
         actions={
@@ -301,7 +298,6 @@ export function DashboardPage() {
                 totalDeposited={s.config.totalDeposited.toString()}
                 totalWithdrawn={s.state.totalWithdrawn.toString()}
                 asset={s.config.instrumentRef?.instrumentId ?? 'numeric'}
-                vestingMode={s.config.vestingMode.mode}
                 status={s.state.status}
                 isLast={i === Math.min(5, activeStreams.length - 1)}
               />
@@ -335,7 +331,6 @@ function AssetCard({
         }}
       >
         <span
-          className="mono"
           style={{
             fontSize: 12,
             fontWeight: 500,
@@ -343,7 +338,7 @@ function AssetCard({
             letterSpacing: '0.04em',
           }}
         >
-          {asset}
+          {instrumentLabel(asset)}
         </span>
         <span className="badge accent">
           <span className="badge-dot" />
@@ -390,16 +385,16 @@ function PendingRow({
     >
       <div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="mono" style={{ fontSize: 13, fontWeight: 500 }}>
-            {streamId.slice(0, 18)}…
+          <span style={{ fontSize: 13, fontWeight: 500 }}>
+            From {displayName(sender)}
           </span>
           <span className="badge warn">
             <span className="badge-dot" />
             Pending
           </span>
         </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 2 }}>
-          from {partyShort(sender)}
+        <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 2 }}>
+          Wants to send you a payment
         </div>
       </div>
       <ArrowUpRight size={14} style={{ color: 'var(--fg-4)' }} />
@@ -414,7 +409,6 @@ function StreamRow({
   totalDeposited,
   totalWithdrawn,
   asset,
-  vestingMode,
   status,
   isLast,
 }: {
@@ -424,7 +418,6 @@ function StreamRow({
   readonly totalDeposited: string;
   readonly totalWithdrawn: string;
   readonly asset: string;
-  readonly vestingMode: string;
   readonly status: StreamStatus;
   readonly isLast: boolean;
 }) {
@@ -448,18 +441,12 @@ function StreamRow({
     >
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="mono" style={{ fontSize: 13, fontWeight: 500 }}>
-            {streamId.slice(0, 12)}…
+          <span style={{ fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {displayName(sender)} → {displayName(recipient)}
           </span>
-          <span className="badge muted" style={{ fontSize: 10 }}>
-            {vestingMode}
+          <span className="badge muted" style={{ fontSize: 10, flexShrink: 0 }}>
+            {instrumentLabel(asset)}
           </span>
-          <span className="badge muted" style={{ fontSize: 10 }}>
-            {asset}
-          </span>
-        </div>
-        <div className="mono" style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 2 }}>
-          {partyShort(sender)} → {partyShort(recipient)}
         </div>
       </div>
       <div style={{ minWidth: 0 }}>
@@ -491,11 +478,6 @@ function fmt(n: number, decimals = 2): string {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
-}
-
-function partyShort(p: string): string {
-  const sep = p.indexOf('::');
-  return sep > 0 ? p.slice(0, Math.min(sep, 16)) : p.slice(0, 16);
 }
 
 /**

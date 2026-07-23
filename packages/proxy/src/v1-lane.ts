@@ -75,8 +75,27 @@ export interface V1LaneConfig {
   holdingTemplateId: string;
   /** On-ledger record template id (StreamAdmin) for create + Sync_Iteration. */
   streamAdminTemplateId: string;
+  /** Operator-signed direct-transfer index template id (StreamRecord). */
+  streamRecordTemplateId: string;
+  /** Operator-custodied escrow party — holds deposited funds and streams them
+   * out. Empty disables the escrow lane. */
+  escrowParty: string;
+  /** OperatorEscrow template id (operator-signed custodial escrow record). */
+  operatorEscrowTemplateId: string;
+  /** Splice validator app API base, e.g. http://127.0.0.1:5003/api/validator —
+   * used to set up the escrow party's TransferPreapproval. */
+  validatorApiUrl: string;
+  /** Validator app JWT audience + HS256 secret for its wallet API. */
+  validatorAuthAudience: string;
+  validatorAuthSecret: string;
+  /** Escrow streamer tick interval in seconds (auto-release cadence check). */
+  escrowTickSeconds: number;
   /** TransferFactory interface id on the TransferFactory_Transfer exercise. */
   transferFactoryInterfaceId: string;
+  /** v2 TransferFactory interface id (v2 direct-delivery money leg). */
+  transferFactoryInterfaceIdV2: string;
+  /** Token-standard version for the direct-transfer money leg ('v1' | 'v2'). */
+  transferVersion: 'v1' | 'v2';
   /** TransferInstruction interface id for Accept/Withdraw of pending offers. */
   transferInstructionInterfaceId: string;
   /** Registry AllocationFactory interface id for receiver-claim funding. */
@@ -113,10 +132,28 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
       'STREAM_ADMIN_TEMPLATE_ID',
       '#canton-streams:CantonStreams.Stream.StreamAdmin:StreamAdmin',
     ),
+    streamRecordTemplateId: get(
+      'STREAM_RECORD_TEMPLATE_ID',
+      '#canton-streams:CantonStreams.Stream.StreamRecord:StreamRecord',
+    ),
+    escrowParty: get('ESCROW_PARTY'),
+    operatorEscrowTemplateId: get(
+      'OPERATOR_ESCROW_TEMPLATE_ID',
+      '#canton-streams:CantonStreams.Stream.OperatorEscrow:OperatorEscrow',
+    ),
+    validatorApiUrl: get('VALIDATOR_API_URL').replace(/\/+$/, ''),
+    validatorAuthAudience: get('VALIDATOR_AUTH_AUDIENCE'),
+    validatorAuthSecret: get('VALIDATOR_AUTH_SECRET'),
+    escrowTickSeconds: Number(get('ESCROW_STREAM_TICK_SECONDS', '30')),
     transferFactoryInterfaceId: get(
       'TRANSFER_FACTORY_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory',
     ),
+    transferFactoryInterfaceIdV2: get(
+      'TRANSFER_FACTORY_INTERFACE_ID_V2',
+      '#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferFactory',
+    ),
+    transferVersion: get('TRANSFER_VERSION', 'v1') === 'v2' ? 'v2' : 'v1',
     transferInstructionInterfaceId: get(
       'TRANSFER_INSTRUCTION_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction',
@@ -169,6 +206,8 @@ export interface V1Agreement {
   arrearsPolicy?: ArrearsPolicy;
   /** Contract id of the pre-created StreamAdmin record (optional). */
   streamAdminCid?: string;
+  /** Contract id of the operator-signed StreamRecord index (optional). */
+  streamRecordCid?: string;
   /** Total committed at create time — stamped onto StreamAdmin.totalDeposited. */
   totalDeposited?: string;
   /** ISO timestamp the agreement row was created. */
@@ -266,7 +305,7 @@ export class V1LaneError extends Error {
 // HTTP helpers (ported verbatim from interest-stream-scheduler.mjs:108-140)
 // ---------------------------------------------------------------------------
 
-async function ledger(
+export async function ledger(
   config: V1LaneConfig,
   method: string,
   path: string,
@@ -318,7 +357,7 @@ function choiceContextValues(ctx: any): { values: Record<string, unknown> } {
 }
 
 let submitCounter = 0;
-async function submit(
+export async function submit(
   config: V1LaneConfig,
   tag: string,
   actAs: string[],
@@ -556,6 +595,220 @@ async function activeTransferInstructions(
 }
 
 // ---------------------------------------------------------------------------
+// Received / incoming transfers (ledger-backed, store-independent)
+//
+// The proxy JSON store only knows about streams it created. A recipient's real
+// picture — pending offers awaiting their accept, and CC already delivered —
+// lives on the ledger, so these read the participant directly and work for ANY
+// transfer to the party (proxy-created, raw registry, or wallet-sent), which
+// the stream list cannot surface.
+// ---------------------------------------------------------------------------
+
+/** A pending AmuletTransferInstruction awaiting the recipient's accept. */
+export interface ReceivedPendingOffer {
+  transferInstructionCid: string;
+  amount: string;
+  sender: string;
+  instrumentId: string;
+  requestedAt?: string;
+  executeBefore?: string;
+  /** True once `executeBefore` has passed: the on-ledger accept deadline is
+   *  baked into the instruction, so an expired offer can no longer be accepted —
+   *  the sender must withdraw + re-send. Surfaced so the UI can disable Accept. */
+  expired: boolean;
+}
+
+/** CC already delivered to the recipient (an accepted incoming transfer). */
+export interface ReceivedTransfer {
+  updateId: string;
+  amount: string;
+  at: string;
+}
+
+export interface ReceivedView {
+  party: string;
+  pending: ReceivedPendingOffer[];
+  received: ReceivedTransfer[];
+}
+
+const AMULET_TEMPLATE_RE = /:Splice\.Amulet:Amulet$/;
+const TRANSFER_INSTRUCTION_RE = /TransferInstruction/;
+
+/** Active incoming offers: AmuletTransferInstruction where the caller is the
+ *  transfer receiver. Unlike `activeTransferInstructions`, this is NOT scoped
+ *  to a payer/stream — it surfaces every pending offer to the party. */
+async function incomingOffers(config: V1LaneConfig, party: string): Promise<ReceivedPendingOffer[]> {
+  const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: {
+      filtersByParty: {
+        [party]: {
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: {
+                  value: {
+                    templateId:
+                      '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset: offset,
+  });
+  return rows
+    .map((r) => r.contractEntry?.JsActiveContract?.createdEvent)
+    .filter(Boolean)
+    .map((ev: any) => ({ ev, tr: ev.createArgument?.transfer ?? {} }))
+    .filter(({ tr }: any) => tr.receiver === party)
+    .map(({ ev, tr }: any) => ({
+      transferInstructionCid: ev.contractId,
+      amount: String(tr.amount ?? '0'),
+      sender: String(tr.sender ?? ''),
+      instrumentId:
+        tr.instrumentId && typeof tr.instrumentId === 'object'
+          ? String(tr.instrumentId.id ?? 'Amulet')
+          : String(tr.instrumentId ?? 'Amulet'),
+      requestedAt: tr.requestedAt,
+      executeBefore: tr.executeBefore,
+      expired: !!tr.executeBefore && Date.parse(tr.executeBefore) < Date.now(),
+    }));
+}
+
+/** Delivered receipts: walk the party's flat update history and collect the
+ *  Amulet(owner==party) creates that landed in a transaction which also
+ *  archived an AmuletTransferInstruction — i.e. an accepted incoming transfer.
+ *  (Change outputs from the party's own spends archive+create Amulets WITHOUT a
+ *  TransferInstruction archive, so they are excluded.) */
+/**
+ * Fetch every flat update for `party` in `[0, end]`. The JSON Ledger API caps
+ * a single `/v2/updates/flats` response at 200 elements (and returns HTTP 413
+ * rather than truncating), so a party with a long history — e.g. a high-volume
+ * operator — cannot be read in one call. This walks the offset range in
+ * windows, halving the window on a 413 and advancing (and gently growing it) on
+ * success, so the read completes for any party regardless of history size.
+ */
+async function fetchPartyUpdates(config: V1LaneConfig, party: string, end: number): Promise<any[]> {
+  const filter = {
+    filtersByParty: {
+      [party]: {
+        cumulative: [{ identifierFilter: { WildcardFilter: { value: { includeCreatedEventBlob: false } } } }],
+      },
+    },
+  };
+  const all: any[] = [];
+  let begin = 0;
+  let window = Math.max(1, end);
+  for (let guard = 0; begin < end && guard < 100000; guard++) {
+    const endInclusive = Math.min(end, begin + window);
+    try {
+      const body = await ledger(config, 'POST', '/v2/updates/flats', {
+        beginExclusive: begin,
+        endInclusive,
+        filter,
+        verbose: false,
+      });
+      const rows: any[] = Array.isArray(body) ? body : (body.updates ?? []);
+      all.push(...rows);
+      begin = endInclusive;
+      if (rows.length < 100 && window < end) window = Math.min(end - begin || 1, window * 2);
+    } catch (e) {
+      const msg = e instanceof V1LaneError ? e.message : String(e);
+      if (/MAXIMUM_LIST_ELEMENTS|\b413\b/.test(msg) && window > 1) {
+        window = Math.max(1, Math.floor(window / 2));
+        continue;
+      }
+      throw e;
+    }
+  }
+  return all;
+}
+
+async function receivedDeliveries(config: V1LaneConfig, party: string): Promise<ReceivedTransfer[]> {
+  const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  const rows: any[] = await fetchPartyUpdates(config, party, Number(offset));
+  const out: ReceivedTransfer[] = [];
+  for (const row of rows) {
+    const tx = row?.update?.Transaction?.value;
+    if (!tx) continue;
+    const events: any[] = tx.events ?? [];
+    let archivedOffer = false;
+    let amount = 0;
+    for (const ev of events) {
+      const arch = ev.ArchivedEvent ?? ev.ExercisedEvent;
+      if (arch && TRANSFER_INSTRUCTION_RE.test(String(arch.templateId ?? ''))) archivedOffer = true;
+      const ce = ev.CreatedEvent;
+      if (ce && AMULET_TEMPLATE_RE.test(String(ce.templateId ?? '')) && ce.createArgument?.owner === party) {
+        amount += Number(ce.createArgument?.amount?.initialAmount ?? 0);
+      }
+    }
+    if (archivedOffer && amount > 0) {
+      out.push({ updateId: tx.updateId, amount: amount.toFixed(10), at: tx.effectiveAt });
+    }
+  }
+  out.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0)); // newest first
+  return out;
+}
+
+/** Build + submit a TransferInstruction_Accept for a raw offer cid (no stream
+ *  record required). The party must be the offer's receiver — enforced here for
+ *  a clean error, and again on-ledger at submit. */
+async function prepareAcceptOfferByCid(
+  config: V1LaneConfig,
+  party: string,
+  transferInstructionCid: string,
+): Promise<PreparedInstructionAction & { amount: string; sender: string }> {
+  const offer = (await incomingOffers(config, party)).find(
+    (o) => o.transferInstructionCid === transferInstructionCid,
+  );
+  if (!offer) {
+    throw new V1LaneError(404, 'offer_not_found', 'No active incoming offer with that id for this party');
+  }
+  if (offer.expired) {
+    // The accept-by deadline is enforced on-ledger (deadline-exceeded), so
+    // catch it here for a clean message instead of a raw ledger 500.
+    throw new V1LaneError(
+      409,
+      'offer_expired',
+      `This transfer offer expired at ${offer.executeBefore} and can no longer be accepted. Ask the sender to re-send it.`,
+    );
+  }
+  const record: PendingTransferRecord = {
+    cycle: 0,
+    amount: offer.amount,
+    ref: `received:${transferInstructionCid.slice(0, 12)}`,
+    transferInstructionCid,
+    executeBefore:
+      offer.executeBefore ?? new Date(Date.now() + config.executeBeforeSeconds * 1000).toISOString(),
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+  };
+  const prepared = await prepareInstructionActionCommand(config, record, 'accept', party);
+  return { ...prepared, amount: offer.amount, sender: offer.sender };
+}
+
+/** Model 1 (hosted party): proxy forms AND submits the accept. */
+async function acceptOfferByCid(
+  config: V1LaneConfig,
+  party: string,
+  transferInstructionCid: string,
+): Promise<{ updateId: string; amount: string; sender: string }> {
+  const prepared = await prepareAcceptOfferByCid(config, party, transferInstructionCid);
+  const res = await submit(config, 'recv-accept', [party], [prepared.command], prepared.disclosedContracts as unknown[]);
+  const updateId = (res?.updateId ?? res?.transactionTree?.updateId) as string | undefined;
+  if (!updateId) {
+    throw new V1LaneError(502, 'submit_no_update', 'accept submitted but the ledger returned no updateId');
+  }
+  return { updateId, amount: prepared.amount, sender: prepared.sender };
+}
+
+// ---------------------------------------------------------------------------
 // Accrual + policy (ported from interest-stream-scheduler.mjs:224-241)
 // ---------------------------------------------------------------------------
 
@@ -587,6 +840,11 @@ export function dueAmount(agreement: V1Agreement, settled: number, nowMs: number
 export interface SettleResult {
   ref: string;
   updateId: string;
+  /** transfer.executeBefore — a pending offer's on-ledger acceptance deadline. */
+  executeBefore?: string;
+  /** Set when the transfer committed as a pending (undelivered) offer — a
+   * `TransferInstruction` the receiver must accept (no pre-approval). */
+  pendingInstructionCid?: string;
 }
 
 /** A holding the payer will spend this cycle: contract id + decimal amount. */
@@ -737,7 +995,7 @@ function selectClaimRecord(
  * its own participant, so the proxy can't read them); otherwise they are read
  * from this participant's ACS (model 1: a payer this participant hosts).
  */
-async function prepareSettleCommand(
+export async function prepareSettleCommand(
   config: V1LaneConfig,
   agreement: V1Agreement,
   amount: number,
@@ -787,6 +1045,79 @@ async function prepareSettleCommand(
           context: choiceContextValues(ctx),
           meta: { values: {} },
         },
+      },
+    },
+  };
+  return {
+    ref,
+    cycle: cycleNo,
+    amount: amount.toFixed(10),
+    executeBefore,
+    actAs: agreement.payerParty,
+    command,
+    disclosedContracts: disclosed,
+  };
+}
+
+/**
+ * v2 variant of {@link prepareSettleCommand} — the token-standard v2
+ * direct-transfer money leg (proven live). Differs from v1 in exactly three
+ * ways, per the CIP-56 v2 interface: (1) the registry path is `/v2/…`;
+ * (2) `TransferFactory_Transfer` drops `expectedAdmin` for `actors : [Party]`
+ * (`controller actors`); (3) `Transfer.sender`/`.receiver` are `Account`
+ * records `{ owner, provider, id }`, not bare parties. Everything else — the
+ * transfer body, disclosed-contract mapping, and single-signed submit — is
+ * identical, so callers can pick the version without changing the flow.
+ */
+export async function prepareSettleCommandV2(
+  config: V1LaneConfig,
+  agreement: V1Agreement,
+  amount: number,
+  cycleNo: number,
+  holdingsIn?: HoldingInput[],
+): Promise<PreparedSettle> {
+  const ref = `${agreement.agreementId}:cycle-${cycleNo}`;
+  const holdings = holdingsIn ?? (await senderHoldings(config, agreement.payerParty));
+  const total = holdings.reduce((s, h) => s + h.amount, 0);
+  if (total < amount) {
+    throw new V1LaneError(
+      402,
+      'insufficient_funds',
+      `insufficient funds: payer holds ≈${total.toFixed(4)}, cycle needs ${amount}`,
+    );
+  }
+  const executeBefore = new Date(Date.now() + config.executeBeforeSeconds * 1000).toISOString();
+  // v2 Account records: self-custodied holding → owner-only account.
+  const account = (owner: string) => ({ owner, provider: null, id: '' });
+  const transfer = {
+    sender: account(agreement.payerParty),
+    receiver: account(agreement.recipientParty),
+    amount: amount.toFixed(10),
+    instrumentId: { admin: config.ccAdminParty, id: config.instrumentId },
+    requestedAt: new Date(Date.now() - 5000).toISOString(),
+    executeBefore,
+    inputHoldingCids: holdings.map((h) => h.cid),
+    meta: streamMeta(agreement, ref),
+  };
+  const fac = await registryPost(config, '/registry/transfer-instruction/v2/transfer-factory', {
+    choiceArguments: {
+      transfer,
+      actors: [agreement.payerParty],
+      extraArgs: { context: { values: {} }, meta: { values: {} } },
+    },
+    excludeDebugFields: true,
+  });
+  const ctx = fac.choiceContext ?? {};
+  const disclosed = mapDisclosedContracts(ctx);
+  const command = {
+    ExerciseCommand: {
+      templateId: config.transferFactoryInterfaceIdV2,
+      contractId: fac.factoryId,
+      choice: 'TransferFactory_Transfer',
+      choiceArgument: {
+        transfer,
+        actors: [agreement.payerParty],
+        extraArgs: { context: choiceContextValues(ctx), meta: { values: {} } },
       },
     },
   };
@@ -1021,21 +1352,36 @@ async function prepareInstructionActionCommand(
 }
 
 /** Model 1: the proxy forms AND submits the transfer (payer hosted here). */
-async function settleCycle(
+export async function settleCycle(
   config: V1LaneConfig,
   agreement: V1Agreement,
   amount: number,
   cycleNo: number,
 ): Promise<SettleResult> {
-  const prepared = await prepareSettleCommand(config, agreement, amount, cycleNo);
-  const res = await submit(
-    config,
-    `xfer-${cycleNo}`,
-    [agreement.payerParty],
-    [prepared.command],
-    prepared.disclosedContracts,
-  );
-  return { ref: prepared.ref, updateId: res.updateId ?? 'n/a' };
+  const prepareFn =
+    config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+  const prepared = await prepareFn(config, agreement, amount, cycleNo);
+  // Submit for the transaction TREE so we can classify the outcome atomically
+  // (no Scan-ingestion lag, so no double-pay risk): a created TransferInstruction
+  // means the receiver had no pre-approval, so the transfer is a pending offer
+  // (funds locked, NOT delivered) rather than a completed delivery.
+  const res = await ledger(config, 'POST', '/v2/commands/submit-and-wait-for-transaction-tree', {
+    commands: [prepared.command],
+    commandId: `proxy-v1-xfer-${cycleNo}-${Date.now()}-${++submitCounter}`,
+    actAs: [agreement.payerParty],
+    readAs: [],
+    ...(config.userId ? { userId: config.userId } : {}),
+    ...(prepared.disclosedContracts.length ? { disclosedContracts: prepared.disclosedContracts } : {}),
+  });
+  const tree = res.transactionTree ?? res.transaction ?? res;
+  const updateId = tree?.updateId ?? res?.updateId ?? 'n/a';
+  const pendingInstructionCid = findCreatedInstructionCid(JSON.stringify(tree ?? res));
+  return {
+    ref: prepared.ref,
+    updateId,
+    executeBefore: prepared.executeBefore,
+    ...(pendingInstructionCid ? { pendingInstructionCid } : {}),
+  };
 }
 
 /**
@@ -1218,6 +1564,152 @@ export async function createStreamAdmin(
 }
 
 // ---------------------------------------------------------------------------
+// StreamRecord — the operator-signed direct-transfer index (any-node -> any-node)
+//
+// StreamRecord is `signatory operator`: the operator (this app provider) is the
+// only stakeholder, so the payer and payee never need to vet this package and a
+// stream can be recorded between any two parties on any nodes. Value moves as
+// standard CIP-56 transfers (the money leg); this contract is a best-effort
+// on-ledger index the operator maintains alongside them. It holds no funds and
+// is never on the settlement path — a create/record failure is observability
+// loss, not a payment failure.
+// ---------------------------------------------------------------------------
+
+/** cadence -> seconds, for StreamRecord.cadenceSeconds. */
+function cadenceToSeconds(cadence: Cadence): number {
+  return Math.max(1, Math.round(PERIOD_MS[cadence] / 1000));
+}
+
+/** Read the live StreamRecord createEvent for a stream (operator-visible). */
+async function resolveStreamRecordEvent(
+  config: V1LaneConfig,
+  streamId: string,
+): Promise<{ contractId: string; createArgument: any } | undefined> {
+  const operator = config.operatorParty;
+  if (!operator || !operator.includes('::')) return undefined;
+  const parts = config.streamRecordTemplateId.split(':');
+  const filterId = config.streamRecordTemplateId.startsWith('#')
+    ? config.streamRecordTemplateId
+    : `#canton-streams:${parts[1]}:${parts[2]}`;
+  const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: {
+      filtersByParty: {
+        [operator]: {
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: { value: { templateId: filterId, includeCreatedEventBlob: false } },
+              },
+            },
+          ],
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset: offset,
+  });
+  const matches = rows
+    .map((r) => r.contractEntry?.JsActiveContract?.createdEvent)
+    .filter((e: any) => e?.createArgument?.streamId === streamId && e?.createArgument?.operator === operator)
+    // The most-progressed record is the current one (RecordCycle is consuming).
+    .sort(
+      (a: any, b: any) =>
+        Number(b.createArgument.cyclesSettled ?? 0) - Number(a.createArgument.cyclesSettled ?? 0),
+    );
+  const only = matches[0];
+  return only ? { contractId: only.contractId, createArgument: only.createArgument } : undefined;
+}
+
+export interface StreamRecordCreateInput {
+  streamId: string;
+  operator: string;
+  payer: string;
+  payee: string;
+  instrumentAdmin: string;
+  instrumentId: string;
+  ratePerCycle: string;
+  cadenceSeconds: number;
+  startTime: string;
+  endTime?: string | null;
+  fundingMode: 'MandateFunding' | 'PerCycleFunding' | 'EscrowFunding';
+  observers?: string[];
+}
+
+/** Create an operator-signed StreamRecord (actAs=[operator]). Returns the cid. */
+export async function createStreamRecord(
+  config: V1LaneConfig,
+  input: StreamRecordCreateInput,
+): Promise<{ contractId: string; updateId: string }> {
+  const createArgument = {
+    streamId: input.streamId,
+    operator: input.operator,
+    payer: input.payer,
+    payee: input.payee,
+    instrumentId: { admin: input.instrumentAdmin, id: input.instrumentId },
+    ratePerCycle: Number(input.ratePerCycle).toFixed(10),
+    cadenceSeconds: String(input.cadenceSeconds),
+    startTime: input.startTime,
+    endTime: input.endTime ?? null,
+    fundingMode: input.fundingMode,
+    totalPaid: '0.0000000000',
+    cyclesSettled: '0',
+    lastTransferId: null,
+    status: 'Active',
+    observers: input.observers ?? [],
+  };
+  const res = await submit(config, 'record-create', [input.operator], [
+    { CreateCommand: { templateId: config.streamRecordTemplateId, createArguments: createArgument } },
+  ]);
+  const ev = await resolveStreamRecordEvent(config, input.streamId);
+  return { contractId: ev?.contractId ?? res.updateId ?? '', updateId: res.updateId ?? 'n/a' };
+}
+
+/**
+ * Record one settled cycle on the StreamRecord (RecordCycle, controller
+ * operator). Best-effort: returns the new (consuming-recreated) cid, or the
+ * old cid unchanged if there is no record / the exercise could not be made.
+ */
+async function recordStreamCycle(
+  config: V1LaneConfig,
+  agreement: V1Agreement,
+  amount: number,
+  transferId: string,
+): Promise<string | undefined> {
+  if (!agreement.streamRecordCid) return agreement.streamRecordCid;
+  const cid = (await resolveStreamRecordEvent(config, agreement.agreementId))?.contractId
+    ?? agreement.streamRecordCid;
+  await submit(config, 'record-cycle', [config.operatorParty], [
+    {
+      ExerciseCommand: {
+        templateId: config.streamRecordTemplateId,
+        contractId: cid,
+        choice: 'RecordCycle',
+        choiceArgument: { amount: amount.toFixed(10), transferId, settledAt: null },
+      },
+    },
+  ]);
+  return (await resolveStreamRecordEvent(config, agreement.agreementId))?.contractId ?? cid;
+}
+
+/** Mark a StreamRecord stopped (MarkStopped, controller operator). Best-effort. */
+async function markStreamRecordStopped(config: V1LaneConfig, agreement: V1Agreement): Promise<void> {
+  if (!agreement.streamRecordCid) return;
+  const cid = (await resolveStreamRecordEvent(config, agreement.agreementId))?.contractId
+    ?? agreement.streamRecordCid;
+  await submit(config, 'record-stop', [config.operatorParty], [
+    {
+      ExerciseCommand: {
+        templateId: config.streamRecordTemplateId,
+        contractId: cid,
+        choice: 'MarkStopped',
+        choiceArgument: {},
+      },
+    },
+  ]);
+}
+
+// ---------------------------------------------------------------------------
 // Proxy-owned state store (agreements + settled history)
 // ---------------------------------------------------------------------------
 
@@ -1351,6 +1843,11 @@ export class V1LaneService {
     agreement.status = 'stopped';
     agreement.ratePerPeriod = '0';
     saveStore(this.config, store);
+    try {
+      await markStreamRecordStopped(this.config, agreement);
+    } catch {
+      // StreamRecord index is best-effort.
+    }
     // Scope the returned view to the payer (a stakeholder) — getStream 404s for
     // an undefined caller.
     return this.getStream(streamId, agreement.payerParty);
@@ -1409,6 +1906,32 @@ export class V1LaneService {
       streamAdminCid = created.contractId;
     }
 
+    // Operator-signed StreamRecord — the on-ledger index for the direct-transfer
+    // model. Created when a real operator party is configured; best-effort so a
+    // create failure never blocks the stream (the money leg is independent).
+    let streamRecordCid: string | undefined;
+    if (this.config.operatorParty && this.config.operatorParty.includes('::')) {
+      try {
+        const rec = await createStreamRecord(this.config, {
+          streamId,
+          operator: this.config.operatorParty,
+          payer: input.payerParty,
+          payee: input.recipientParty,
+          instrumentAdmin: this.config.ccAdminParty,
+          instrumentId: this.config.instrumentId,
+          ratePerCycle: ratePerPeriod,
+          cadenceSeconds: cadenceToSeconds(cadence),
+          startTime: effectiveFrom,
+          endTime: input.termEnd ?? null,
+          fundingMode: 'PerCycleFunding',
+          observers: input.observers,
+        });
+        streamRecordCid = rec.contractId;
+      } catch {
+        // Index is best-effort; the stream proceeds without it.
+      }
+    }
+
     const agreement: V1Agreement = {
       agreementId: streamId,
       ...(input.appId ? { appId: input.appId } : {}),
@@ -1420,6 +1943,7 @@ export class V1LaneService {
       ...(input.termEnd ? { termEnd: input.termEnd } : {}),
       arrearsPolicy: input.arrearsPolicy ?? 'catch-up',
       ...(streamAdminCid ? { streamAdminCid } : {}),
+      ...(streamRecordCid ? { streamRecordCid } : {}),
       totalDeposited,
       createdAt: new Date().toISOString(),
     };
@@ -1440,6 +1964,73 @@ export class V1LaneService {
     return Object.values(store.agreements)
       .filter((a) => this.isStakeholder(a, callerParty))
       .map((a) => this.view(a, store.state[a.agreementId] ?? emptyState()));
+  }
+
+  /** Ledger-backed incoming view for a recipient: pending offers awaiting their
+   * accept + CC already delivered, read straight from the participant. Unlike
+   * `listStreams` (proxy JSON store, proxy-created streams only), this surfaces
+   * EVERY transfer to the party — including raw-registry and wallet-sent ones
+   * the proxy never tracked. */
+  async listReceived(callerParty?: string): Promise<ReceivedView> {
+    if (!callerParty) {
+      throw new V1LaneError(401, 'unauthenticated', 'a caller party is required');
+    }
+    const [pending, received] = await Promise.all([
+      incomingOffers(this.config, callerParty),
+      receivedDeliveries(this.config, callerParty),
+    ]);
+    return { party: callerParty, pending, received };
+  }
+
+  /** Accept a pending incoming offer by contract id (recipient-scoped,
+   * store-independent). The proxy submits TransferInstruction_Accept as the
+   * caller — for a hosted/dev-mode recipient (e.g. a validator-local party with
+   * no browser wallet). `incomingOffers` only returns offers where the caller
+   * is the receiver, so a caller can never accept another party's offer. */
+  async acceptReceived(
+    callerParty: string | undefined,
+    transferInstructionCid: string,
+  ): Promise<{ updateId: string; amount: string; sender: string }> {
+    if (!callerParty) {
+      throw new V1LaneError(401, 'unauthenticated', 'a caller party is required');
+    }
+    if (!transferInstructionCid) {
+      throw new V1LaneError(400, 'missing_cid', 'transferInstructionCid is required');
+    }
+    return acceptOfferByCid(this.config, callerParty, transferInstructionCid);
+  }
+
+  /** Model 2 (wallet party, e.g. a Loop party NOT hosted on this participant):
+   * build the TransferInstruction_Accept command + choice-context disclosures so
+   * the caller's WALLET can sign+submit it on its own participant. The registry
+   * choice-context needs the validator's whitelisted egress, so it must be built
+   * here even though the proxy can't submit for a party it doesn't host. */
+  async prepareAcceptReceived(
+    callerParty: string | undefined,
+    transferInstructionCid: string,
+  ): Promise<{ command: unknown; disclosedContracts: unknown[]; actAs: string }> {
+    if (!callerParty) {
+      throw new V1LaneError(401, 'unauthenticated', 'a caller party is required');
+    }
+    if (!transferInstructionCid) {
+      throw new V1LaneError(400, 'missing_cid', 'transferInstructionCid is required');
+    }
+    // A Loop-hosted recipient is NOT visible in this participant's ACS, so we
+    // cannot look the offer up here — we just build the accept command from the
+    // cid via the (whitelisted-egress) registry choice-context. The wallet
+    // submits it; the ledger enforces that `callerParty` is the offer's receiver
+    // and that the deadline has not passed.
+    const record: PendingTransferRecord = {
+      cycle: 0,
+      amount: '0',
+      ref: `received:${transferInstructionCid.slice(0, 12)}`,
+      transferInstructionCid,
+      executeBefore: new Date(Date.now() + this.config.executeBeforeSeconds * 1000).toISOString(),
+      createdAt: new Date().toISOString(),
+      status: 'pending',
+    };
+    const prepared = await prepareInstructionActionCommand(this.config, record, 'accept', callerParty);
+    return { command: prepared.command, disclosedContracts: prepared.disclosedContracts, actAs: callerParty };
   }
 
   /** True when `callerParty` is a read-stakeholder (payer or recipient) of the
@@ -1554,6 +2145,42 @@ export class V1LaneService {
 
     const result = await settleCycle(this.config, agreement, due, st.cycles + 1);
 
+    // Classify the on-chain outcome before crediting the cycle (mirrors
+    // recordSettle): a created TransferInstruction means the receiver had no
+    // pre-approval, so the transfer is a PENDING OFFER (funds locked, NOT
+    // delivered). Track it for the receiver to accept and do NOT advance
+    // settled/cycles or report "settled" — otherwise the stream over-reports an
+    // undelivered cycle as paid.
+    if (result.pendingInstructionCid) {
+      const cycleNo = st.cycles + 1;
+      const rows = pendingRecords(st);
+      let record = rows.find((r) => r.transferInstructionCid === result.pendingInstructionCid);
+      if (!record) {
+        record = {
+          cycle: cycleNo,
+          amount: due.toFixed(10),
+          ref: result.ref,
+          transferInstructionCid: result.pendingInstructionCid,
+          createUpdateId: result.updateId,
+          executeBefore: new Date(
+            Date.now() + this.config.executeBeforeSeconds * 1000,
+          ).toISOString(),
+          createdAt: new Date().toISOString(),
+          status: 'pending',
+        };
+        rows.push(record);
+        saveStore(this.config, store);
+      }
+      return {
+        settled: false,
+        reason: 'pending_acceptance',
+        cycle: st.cycles,
+        amount: due.toFixed(10),
+        ref: result.ref,
+        pending: record,
+      };
+    }
+
     // CRITICAL: record the payment BEFORE any secondary step. A failure after
     // the transfer committed must never lead to a re-payment.
     st.settled = Number((st.settled + due).toFixed(10));
@@ -1575,6 +2202,15 @@ export class V1LaneService {
       adminSynced = Boolean(agreement.streamAdminCid);
     } catch (e) {
       reason = `sync_failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`;
+    }
+    try {
+      const newCid = await recordStreamCycle(this.config, agreement, due, result.updateId);
+      if (newCid && newCid !== agreement.streamRecordCid) {
+        agreement.streamRecordCid = newCid;
+        saveStore(this.config, store);
+      }
+    } catch {
+      // StreamRecord index is best-effort; a miss is observability loss only.
     }
 
     return {
@@ -1617,13 +2253,9 @@ export class V1LaneService {
       if (due <= 0 && opts.force) due = Number(agreement.ratePerPeriod);
     }
     if (due <= 0) return { prepared: false, reason: 'nothing_due' };
-    const prepared = await prepareSettleCommand(
-      this.config,
-      agreement,
-      due,
-      st.cycles + 1,
-      opts.holdings,
-    );
+    const prepareFn =
+      this.config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+    const prepared = await prepareFn(this.config, agreement, due, st.cycles + 1, opts.holdings);
     return { prepared: true, ...prepared };
   }
 
@@ -1974,6 +2606,15 @@ export class V1LaneService {
       adminSynced = Boolean(agreement.streamAdminCid);
     } catch (e) {
       reason = `sync_failed: ${String((e as Error)?.message ?? e).slice(0, 200)}`;
+    }
+    try {
+      const newCid = await recordStreamCycle(this.config, agreement, amount, input.updateId);
+      if (newCid && newCid !== agreement.streamRecordCid) {
+        agreement.streamRecordCid = newCid;
+        saveStore(this.config, store);
+      }
+    } catch {
+      // StreamRecord index is best-effort; a miss is observability loss only.
     }
     return {
       settled: true,

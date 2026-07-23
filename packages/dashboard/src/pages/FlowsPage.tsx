@@ -8,6 +8,7 @@
  */
 
 import { useState, type CSSProperties } from 'react';
+import { Link } from 'react-router';
 import Decimal from 'decimal.js';
 import { Waves } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
@@ -21,6 +22,7 @@ import {
 import type { RawFlow } from '../api/client.js';
 import { Form } from '../components/forms/Form.js';
 import { FormField } from '../components/forms/FormField.js';
+import { AssetSelect } from '../components/streams/AssetSelect.js';
 import { formatCantonDateTime } from '../lib/cantonTime.js';
 import {
   createFlowSchema,
@@ -54,11 +56,15 @@ const inputStyle: CSSProperties = {
 export function FlowsPage() {
   const auth = useAuth();
   const party = auth.party ?? '';
+  // Flows put a canton-streams contract on the payer's participant, so they only
+  // work where that participant vets our DAR. Gate on the same signal the
+  // custody create uses; skip the (canton-streams) reads otherwise.
+  const canFlow = auth.canCreateCustodyStream;
 
   // Two directional queries: flows I send and flows I receive. The proxy
   // pins unfiltered queries to recipient-scope, so ask for both explicitly.
-  const outgoing = useFlows(party ? { sender: party } : undefined);
-  const incoming = useFlows(party ? { recipient: party } : undefined);
+  const outgoing = useFlows(party && canFlow ? { sender: party } : undefined);
+  const incoming = useFlows(party && canFlow ? { recipient: party } : undefined);
 
   if (!party) {
     return (
@@ -72,6 +78,32 @@ export function FlowsPage() {
           style={{ padding: 36, textAlign: 'center', color: 'var(--fg-3)' }}
         >
           Connect to a Canton participant to view flows.
+        </div>
+      </div>
+    );
+  }
+
+  if (!canFlow) {
+    return (
+      <div style={{ paddingTop: 28 }}>
+        <PageHeader
+          title="Open-ended Flows"
+          subtitle="Non-prefunded streams with a per-day rate and a rolling funded balance"
+        />
+        <div className="card" style={{ padding: 36, textAlign: 'center' }}>
+          <Waves size={28} style={{ color: 'var(--fg-5)', margin: '0 auto 8px' }} />
+          <p style={{ margin: '0 0 6px', fontSize: 13.5, color: 'var(--fg)' }}>
+            Flows aren&apos;t available for this wallet.
+          </p>
+          <p style={{ margin: 0, fontSize: 12.5, color: 'var(--fg-3)', maxWidth: 460, marginInline: 'auto' }}>
+            A flow records a Canton Streams contract on your participant, which your
+            wallet&apos;s network doesn&apos;t run. Use a{' '}
+            <Link to="/v1/create" style={{ color: 'var(--accent)' }}>
+              Direct delivery stream
+            </Link>{' '}
+            instead — it sends a token-standard transfer from your wallet each cycle,
+            with nothing locked up front.
+          </p>
         </div>
       </div>
     );
@@ -188,12 +220,9 @@ function CreateFlowCard({ senderParty }: { readonly senderParty: string }) {
           <FormField name="escrowOperator" label="Escrow operator party" required>
             <input className={inputClass} style={inputStyle} placeholder="operator::1220abcd…" />
           </FormField>
-          <FormField name="instrumentAdmin" label="Instrument admin" required>
-            <input className={inputClass} style={inputStyle} placeholder="AmuletAdmin::1220…" />
-          </FormField>
-          <FormField name="instrumentId" label="Instrument id" required>
-            <input className={inputClass} style={inputStyle} placeholder="Amulet" />
-          </FormField>
+          <div style={{ gridColumn: '1 / -1' }}>
+            <AssetSelect />
+          </div>
           <FormField
             name="ratePerDay"
             label="Rate (tokens / day)"
