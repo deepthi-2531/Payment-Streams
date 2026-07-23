@@ -80,14 +80,16 @@ jobs:
           docker build -f docker/Dockerfile.dashboard -t canton-streams-dashboard:latest .
 
 # ──────────────────────────────────────────────────────────────────────────
-# Daml build & test is intentionally NOT in the push-triggered pipeline.
+# Daml build & test lives in its own workflow, not this fast push pipeline.
 #
 # The canton-streams DAR depends on CIP-56 V2 Token Standard packages from
 # canton-network/splice. When pre-built DARs are not available, building
 # them requires cloning the upstream Splice repo and running `daml build`
 # against 6+ source packages — a 10-30 minute operation per fresh CI runner.
 #
-# We run the Daml build manually via `.github/workflows/daml.yml`
-# (workflow_dispatch). Contributors run `pnpm daml:deps && pnpm daml:build`
-# locally; see CONTRIBUTING.md for the developer-side flow.
+# So the Daml build & test runs in `.github/workflows/daml.yml`, which
+# triggers on changes under packages/daml/** (plus the fetch script and pin
+# file) and on demand — giving a green check when the Daml side changes
+# without repeating the heavy build on unrelated commits. Contributors run
+# `pnpm daml:deps && pnpm daml:build` locally; see CONTRIBUTING.md.
 # ──────────────────────────────────────────────────────────────────────────
