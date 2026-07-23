@@ -1,0 +1,127 @@
+-- | OperatorEscrow — the operator-custodied streaming escrow.
+--
+-- Unlike `StreamEscrow` (the non-custodial token-standard allocation lock) and
+-- `StreamRecord` (an index over direct transfers that holds nothing), an
+-- OperatorEscrow backs a stream whose funds the **operator holds**: the payer
+-- makes one standard transfer of the full amount into the operator's own party
+-- wallet, and the operator streams it out to the payee over time.
+--
+-- This is the "sign once" path for wallets that cannot vet this DAR. The payer
+-- is never a stakeholder here — `payer` and `payee` are recorded fields, not
+-- signatories or observers — so their node needs nothing installed. The
+-- trade-off is custody: the operator holds the funds between deposit and
+-- delivery. `fundingTransferId` anchors this contract to the payer's signed
+-- deposit transfer, whose metadata carries the stream terms, so the payer's
+-- consent is on-ledger and non-repudiable — evidence, not enforcement (the
+-- operator, holding the funds, is trusted to honour it). See
+-- `docs/SETTLEMENT-DESIGN.md`.
+module CantonStreams.Stream.OperatorEscrow where
+
+import CantonStreams.Interface.Types (StreamId, StreamStatus(..), InstrumentIdV2)
+import CantonStreams.Stream.Time (assertNotInFuture)
+
+template OperatorEscrow
+  with
+    streamId : StreamId
+    operator : Party
+      -- ^ Sole signatory. Custodies the deposited funds in its own wallet,
+      -- releases them per cycle, and refunds the remainder on stop.
+    payer : Party
+      -- ^ Recorded only; funded the escrow. NOT a stakeholder.
+    payee : Party
+      -- ^ Recorded only; the final recipient. NOT a stakeholder.
+    instrumentId : InstrumentIdV2
+    ratePerCycle : Decimal
+    cadenceSeconds : Int
+      -- ^ Seconds between released cycles.
+    totalDeposited : Decimal
+      -- ^ Amount the payer deposited into the operator's wallet up front.
+    released : Decimal
+      -- ^ Amount streamed to the payee so far. `totalDeposited - released` is
+      -- the refundable balance still held by the operator.
+    fundingTransferId : Text
+      -- ^ updateId of the payer's signed deposit transfer (verifiable on scan);
+      -- its metadata carries the stream terms the payer authorized.
+    startTime : Time
+    endTime : Optional Time
+    status : StreamStatus
+    observers : [Party]
+  where
+    signatory operator
+    observer observers
+
+    ensure ratePerCycle >= 0.0
+      && totalDeposited >= 0.0
+      && released >= 0.0
+      && released <= totalDeposited
+      && cadenceSeconds > 0
+      && optional True (startTime <) endTime
+
+    -- | Record that one cycle was released — a committed transfer
+    -- operator -> payee. Operator-only bookkeeping, bounded by the deposited
+    -- balance so the escrow can never over-release what the payer funded.
+    choice RecordRelease : ContractId OperatorEscrow
+      with
+        amount : Decimal
+        transferId : Text
+          -- ^ updateId of the cycle's operator -> payee transfer.
+        releasedAt : Optional Time
+      controller operator
+      do
+        assertMsg "Escrow not active" (status == Active)
+        assertMsg "Release must be positive" (amount > 0.0)
+        assertMsg "Release exceeds deposited balance" (released + amount <= totalDeposited)
+        optional (pure ()) (assertNotInFuture "releasedAt") releasedAt
+        let _ = transferId  -- recorded in the exercise event for audit linkage
+        create this with released = released + amount
+
+    -- | Stop the escrow and refund the unspent balance to the payer. Operator-
+    -- mediated: the payer is not a stakeholder, so they request it off-ledger
+    -- and the operator honours it. The refund transfer (operator -> payer for
+    -- `totalDeposited - released`) executes alongside this exercise.
+    choice Refund : ContractId OperatorEscrow
+      with
+        refundTransferId : Text
+          -- ^ updateId of the operator -> payer refund transfer.
+      controller operator
+      do
+        assertMsg "Escrow not active" (status == Active)
+        let _ = refundTransferId
+        create this with status = Cancelled
+
+    -- | Stop the escrow without a refund (e.g. fully released). Operator-only.
+    choice MarkStopped : ContractId OperatorEscrow
+      controller operator
+      do
+        assertMsg "Escrow not active" (status == Active)
+        create this with status = Cancelled
+
+    -- | Non-consuming projection for off-chain queries by a stakeholder.
+    nonconsuming choice GetEscrowInfo : EscrowInfo
+      with
+        viewer : Party
+      controller viewer
+      do
+        assertMsg "Not authorized to view"
+          (viewer == operator || viewer `elem` observers)
+        pure EscrowInfo with
+          streamId
+          operator
+          payer
+          payee
+          ratePerCycle
+          totalDeposited
+          released
+          status
+
+-- | Structured projection returned by `GetEscrowInfo`.
+data EscrowInfo = EscrowInfo with
+    streamId : StreamId
+    operator : Party
+    payer : Party
+    payee : Party
+    ratePerCycle : Decimal
+    totalDeposited : Decimal
+    released : Decimal
+    status : StreamStatus
+  deriving (Eq, Show)
