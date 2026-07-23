@@ -39,7 +39,7 @@ export function CreateStreamV1Page() {
         <span>
           Don't want to approve every cycle?{' '}
           <strong style={{ color: 'var(--fg)' }}>Deposit once and let the operator stream it</strong>{' '}
-          — a custodied stream (custodial).
+          — a vault stream (custodial).
         </span>
       </Link>
 

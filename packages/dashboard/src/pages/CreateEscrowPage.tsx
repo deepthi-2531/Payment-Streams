@@ -64,11 +64,11 @@ export function CreateEscrowPage() {
         to="/v1/escrows"
         style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12.5, color: 'var(--fg-3)', textDecoration: 'none', marginBottom: 12 }}
       >
-        <ArrowLeft size={13} /> Custodied streams
+        <ArrowLeft size={13} /> Vault streams
       </Link>
 
       <PageHeader
-        title="New custodied stream"
+        title="New vault stream"
         subtitle="Deposit once — the operator streams it to the recipient on schedule."
       />
 

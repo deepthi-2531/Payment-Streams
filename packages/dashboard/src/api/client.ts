@@ -947,6 +947,11 @@ export class CantonStreamsApi {
     return this.request<EscrowView>('POST', `/api/v1/escrows/${encodeURIComponent(id)}/refund`, {});
   }
 
+  /** Reconcile the audit trail against the chain (OperatorEscrow + balances + offers). */
+  async reconcileEscrow(id: string): Promise<EscrowReconciliation> {
+    return this.request<EscrowReconciliation>('GET', `/api/v1/escrows/${encodeURIComponent(id)}/reconcile`);
+  }
+
   /** Model 2 phase 1: form (no submit) the next cycle's transfer so the payer's
    * wallet can submit it through its own participant. */
   async prepareSettleV1(id: string, body: V1PrepareSettleParams): Promise<V1PreparedSettle> {
@@ -1261,6 +1266,90 @@ export interface EscrowReleaseRecord {
 /** One operator-custodied stream: the payer deposited `totalDeposited` into the
  * operator-controlled escrow party once, and the operator streams `ratePerCycle`
  * to the payee every `cadenceSeconds` until the deposit is exhausted. */
+// --- Audit / flow ledger ---
+
+export type EscrowLegKind = 'deposit' | 'release' | 'refund';
+export type EscrowLegDirection = 'in' | 'out';
+export type EscrowDelivery = 'direct' | 'pending_offer';
+export type EscrowOfferStatus = 'active' | 'accepted' | 'withdrawn' | 'expired';
+export type EscrowInitiator = 'payer' | 'streamer' | 'operator';
+
+/** One append-only leg of value moving through the escrow — the audit row. */
+export interface EscrowLedgerEntry {
+  readonly seq: number;
+  readonly eventId: string;
+  readonly kind: EscrowLegKind;
+  readonly direction: EscrowLegDirection;
+  readonly from: string;
+  readonly to: string;
+  readonly custodian: string;
+  readonly amount: string;
+  readonly instrumentAdmin: string;
+  readonly instrumentId: string;
+  readonly cycleNo?: number;
+  readonly scheduledDueAt?: string;
+  readonly updateId?: string;
+  readonly contractCid?: string;
+  readonly transferInstructionCid?: string;
+  readonly offerExpiresAt?: string;
+  readonly delivery: EscrowDelivery;
+  readonly offerStatus?: EscrowOfferStatus;
+  readonly acceptUpdateId?: string;
+  readonly acceptedAt?: string;
+  readonly initiatedBy: EscrowInitiator;
+  readonly authorizationBasis?: string;
+  readonly reasonCode?: string;
+  readonly at: string;
+  readonly recordTime?: string;
+}
+
+/** Computed roll-up — streamed / delivered / pending / refunded / remaining. */
+export interface EscrowSummary {
+  readonly totalIn: string;
+  readonly totalStreamed: string;
+  readonly totalDelivered: string;
+  readonly totalPending: string;
+  readonly totalRefunded: string;
+  readonly totalRefundPending: string;
+  readonly remaining: string;
+  readonly cyclesReleased: number;
+  readonly cyclesDelivered: number;
+  readonly cyclesPending: number;
+  readonly firstReleaseAt?: string;
+  readonly lastReleaseAt?: string;
+}
+
+/** Result of reconciling the audit trail against the chain. */
+export interface EscrowReconciliation {
+  readonly at: string;
+  readonly escrowId: string;
+  readonly offLedger: {
+    readonly totalStreamed: string;
+    readonly totalDelivered: string;
+    readonly totalPending: string;
+    readonly totalRefunded: string;
+    readonly remaining: string;
+  };
+  readonly onLedger: {
+    readonly operatorEscrowCid?: string;
+    readonly operatorReleased?: string;
+    readonly operatorTotalDeposited?: string;
+    readonly operatorStatus?: string;
+    readonly escrowFreeBalance: string;
+    readonly commingled: boolean;
+  };
+  readonly offers: ReadonlyArray<{
+    readonly seq: number;
+    readonly kind: EscrowLegKind;
+    readonly cycleNo?: number;
+    readonly transferInstructionCid: string;
+    readonly amount: string;
+    readonly to: string;
+    readonly status: EscrowOfferStatus;
+  }>;
+  readonly checks: ReadonlyArray<{ readonly name: string; readonly ok: boolean; readonly detail: string }>;
+}
+
 export interface EscrowView {
   readonly escrowId: string;
   readonly originalPayer: string;
@@ -1276,6 +1365,10 @@ export interface EscrowView {
   readonly nextDueAt: string;
   readonly lastReleaseAt?: string;
   readonly releases: readonly EscrowReleaseRecord[];
+  /** Append-only audit/flow ledger. */
+  readonly ledger: readonly EscrowLedgerEntry[];
+  /** Computed audit roll-up. */
+  readonly summary: EscrowSummary;
 }
 
 export interface EscrowInfo {

@@ -30,11 +30,11 @@ export function EscrowsPage() {
   return (
     <div style={{ paddingTop: 28 }}>
       <PageHeader
-        title="Custodied streams"
-        subtitle="Deposit once; the operator streams it to the recipient. Custodial — funds sit in the operator escrow while streaming."
+        title="Vault streams"
+        subtitle="Deposit once; the operator streams it to the recipient. Custodial — the funds sit in escrow while streaming."
         actions={
           <Link to="/v1/escrows/create" className="btn btn-primary">
-            <Lock size={14} /> New custodied stream
+            <Lock size={14} /> New vault stream
           </Link>
         }
       />
@@ -42,13 +42,13 @@ export function EscrowsPage() {
       {escrowsQ.isPending && <Skeleton.Row count={4} height={64} />}
 
       {escrowsQ.isError && (
-        <ErrorState error={escrowsQ.error} title="Could not load custodied streams" onRetry={() => escrowsQ.refetch()} />
+        <ErrorState error={escrowsQ.error} title="Could not load vault streams" onRetry={() => escrowsQ.refetch()} />
       )}
 
       {escrowsQ.data && rows.length === 0 && !escrowsQ.isPending && (
         <div className="card" style={{ padding: 36, textAlign: 'center' }}>
           <p style={{ margin: '0 0 14px', color: 'var(--fg-3)', fontSize: 13 }}>
-            No custodied streams yet.
+            No vault streams yet.
           </p>
           <Link to="/v1/escrows/create" className="btn btn-primary" style={{ display: 'inline-flex' }}>
             <Lock size={14} /> Start one
@@ -78,9 +78,9 @@ function EscrowRow({
 }) {
   const outgoing = party != null && view.originalPayer === party;
   const counterparty = outgoing ? view.recipient : view.originalPayer;
-  const total = Number(view.totalDeposited);
-  const released = Number(view.released);
-  const pct = total > 0 ? Math.min(100, Math.round((released / total) * 100)) : 0;
+  const total = Number(view.summary.totalIn);
+  const streamed = Number(view.summary.totalStreamed);
+  const pct = total > 0 ? Math.min(100, Math.round((streamed / total) * 100)) : 0;
 
   return (
     <Link
@@ -107,7 +107,7 @@ function EscrowRow({
             {view.escrowId}
           </span>
         </div>
-        <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>custodial · {STATUS_LABEL[view.status]}</span>
+        <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>vault · {STATUS_LABEL[view.status]}</span>
       </div>
 
       <div style={{ minWidth: 0 }}>
@@ -126,16 +126,16 @@ function EscrowRow({
           <div style={{ width: `${pct}%`, height: '100%', background: view.status === 'refunded' ? 'var(--fg-4)' : 'var(--accent)' }} />
         </div>
         <span className="mono" style={{ display: 'block', fontSize: 11, color: 'var(--fg-4)', marginTop: 5 }}>
-          {released} / {total} CC
+          {Number(streamed.toFixed(4))} / {Number(total.toFixed(4))} CC streamed
         </span>
       </div>
 
       <div>
         <span className="badge accent" style={{ fontSize: 11 }}>
-          {view.releases.length} {view.releases.length === 1 ? 'cycle' : 'cycles'}
+          {view.summary.cyclesReleased} {view.summary.cyclesReleased === 1 ? 'cycle' : 'cycles'}
         </span>
         <span style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-4)', marginTop: 4 }}>
-          {view.ratePerCycle} CC each
+          {view.summary.cyclesDelivered} delivered · {view.summary.cyclesPending} pending
         </span>
       </div>
 

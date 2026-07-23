@@ -45,6 +45,18 @@ export function useEscrowInfo() {
   });
 }
 
+/** Reconcile the audit trail against the chain. Polls while the escrow is live
+ * so pending offers flip to delivered as the payee accepts. */
+export function useReconcileEscrow(id: string, enabled = true) {
+  const client = useCantonClient();
+  return useQuery({
+    queryKey: ['escrow-reconcile', id],
+    queryFn: () => client!.reconcileEscrow(id),
+    enabled: !!client && !!id && enabled,
+    refetchInterval: 15_000,
+  });
+}
+
 export function useCreateEscrow() {
   const client = useCantonClient();
   const queryClient = useQueryClient();
