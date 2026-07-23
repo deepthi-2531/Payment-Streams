@@ -19,7 +19,8 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { requireAmount, requirePartyId, requireId } from './validation.js';
 import {
   settleCycle,
@@ -245,6 +246,112 @@ function saveEscrows(config: V1LaneConfig, store: EscrowStore): void {
 const dec = (x: string | number): string => Number(x).toFixed(10);
 const remainingOf = (e: EscrowAgreement): number =>
   Math.max(0, Number(e.totalDeposited) - Number(e.released));
+
+/** Total still owed across every active escrow — the floor the custody party
+ * must always be able to cover. Shared by the per-action solvency interlock and
+ * the continuous drift monitor so both read the same number. */
+const sumOwed = (store: EscrowStore): number =>
+  Object.values(store.escrows)
+    .filter((x) => x.status === 'active')
+    .reduce((s, x) => s + remainingOf(x), 0);
+
+function escrowLockFile(config: V1LaneConfig): string {
+  return escrowStateFile(config).replace(/\.json$/i, '') + '.lock';
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    // EPERM means the pid exists but we may not signal it — still alive.
+    return err?.code === 'EPERM';
+  }
+}
+
+/** Age of the current holder, from its recorded timestamp or, if that is
+ * unreadable, the lock file's mtime — never Infinity, so an unparseable lock is
+ * waited on and only reclaimed once it truly ages out. */
+function lockAgeMs(lockPath: string, holderAt: unknown): number {
+  const at = Number(holderAt);
+  if (Number.isFinite(at) && at > 0) return Date.now() - at;
+  try {
+    return Date.now() - statSync(lockPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/** Acquire an exclusive on-disk lock for the escrow store, returning a token the
+ * holder must present to release it. The in-process mutationLock only serializes
+ * one Node process; two processes sharing the store (a second replica, or the old
+ * instance during the slow SIGTERM->SIGKILL window on redeploy) would each read a
+ * stale snapshot and could double-release. This lockfile makes the whole
+ * load->mutate->save critical section single-writer across processes on one host.
+ *
+ * The lock is created by writing a fully-formed record to a private temp file and
+ * hard-linking it into place: link is atomic and fails if the target exists, so
+ * the lock is never observed empty (no steal-mid-write race). A held lock is
+ * reclaimed only when its holder pid is dead, or it has aged past staleMs (which a
+ * genuine mutation never reaches) — a live, in-progress holder is waited on, never
+ * overtaken. */
+async function acquireEscrowLock(lockPath: string, staleMs: number): Promise<string> {
+  const token = `${process.pid}:${randomUUID()}`;
+  const tmp = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), token }));
+  const start = Date.now();
+  try {
+    for (;;) {
+      try {
+        linkSync(tmp, lockPath);
+        return token;
+      } catch (err: any) {
+        if (err?.code !== 'EEXIST') throw err;
+        let holder: { pid?: number; at?: number } = {};
+        try {
+          holder = JSON.parse(readFileSync(lockPath, 'utf8'));
+        } catch {
+          /* unreadable — fall through to the mtime-based age check */
+        }
+        const aged = lockAgeMs(lockPath, holder.at) > staleMs;
+        const dead = typeof holder.pid === 'number' ? !pidAlive(holder.pid) || aged : aged;
+        if (dead) {
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            /* another waiter cleared it first */
+          }
+          continue;
+        }
+        if (Date.now() - start > staleMs) {
+          throw new V1LaneError(
+            503,
+            'escrow_lock_timeout',
+            `could not acquire the escrow store lock within ${staleMs}ms; another instance is holding it`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* temp already gone */
+    }
+  }
+}
+
+/** Release a lock only if we still hold it: if it was reclaimed as stale and now
+ * belongs to another process, leave that process's lock in place. */
+function releaseEscrowLock(lockPath: string, token: string): void {
+  try {
+    const holder = JSON.parse(readFileSync(lockPath, 'utf8'));
+    if (holder.token === token) unlinkSync(lockPath);
+  } catch {
+    /* missing or unreadable — nothing of ours to release */
+  }
+}
 
 /** Minimal synthetic agreement so `settleCycle` can fire a sender→receiver
  * transfer for any pair of parties (deposit, release, refund legs). */
@@ -584,12 +691,34 @@ export class EscrowLane {
   // Serialize every mutating path through this one queue.
   private mutationLock: Promise<unknown> = Promise.resolve();
   private withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.mutationLock.then(fn, fn);
+    const run = this.mutationLock.then(
+      () => this.withStoreLock(fn),
+      () => this.withStoreLock(fn),
+    );
     this.mutationLock = run.then(
       () => undefined,
       () => undefined,
     );
     return run;
+  }
+
+  /** Hold the cross-process store lock for the duration of one mutation. The
+   * in-process chain above already serializes this process, so the file lock
+   * only ever contends with a second process sharing the store. Held across the
+   * whole load->transfer->save section so the second process re-reads the
+   * committed result instead of racing a stale snapshot. */
+  private solvencyBreachStreak = 0;
+  private async withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lockPath = escrowLockFile(this.config);
+    // Generous enough to outlast a real release round-trip; a dead holder is
+    // reclaimed immediately by pid, so this only bounds an unreadable-pid lock.
+    const staleMs = Math.max(120000, (this.config.escrowTickSeconds + 60) * 1000);
+    const token = await acquireEscrowLock(lockPath, staleMs);
+    try {
+      return await fn();
+    } finally {
+      releaseEscrowLock(lockPath, token);
+    }
   }
 
   /** Live free CC balance held by the shared escrow custody party. */
@@ -624,9 +753,7 @@ export class EscrowLane {
    * interlock over the commingled party, not literal per-escrow sub-accounts
    * (which would need separate parties or an on-ledger lock). */
   private async assertPoolSolvent(store: EscrowStore): Promise<void> {
-    const owed = Object.values(store.escrows)
-      .filter((x) => x.status === 'active')
-      .reduce((s, x) => s + remainingOf(x), 0);
+    const owed = sumOwed(store);
     if (owed <= 0) return;
     const pool = await this.poolFreeBalance();
     if (pool + 1e-6 < owed) {
@@ -635,6 +762,55 @@ export class EscrowLane {
         'escrow_pool_insolvent',
         `escrow custody balance ${pool.toFixed(4)} CC is below the ${owed.toFixed(4)} CC owed across active escrows; halting to protect other depositors`,
       );
+    }
+  }
+
+  /** Continuous, read-only solvency probe. The per-action interlock only fires
+   * when a release or refund is attempted; this runs on a timer so an out-of-band
+   * drain of the custody party (fees, a mis-scoped transfer, holding expiry)
+   * between actions is still surfaced. It never moves funds. A single breach can
+   * be the ordinary release window — the on-chain debit lands before `released`
+   * is persisted — so an alert is only escalated after two consecutive breached
+   * probes; a transient skew clears on the next cycle, a real drain persists.
+   * This detects aggregate drift only (custody < total owed); per-escrow
+   * shortfalls under the commingled cushion are not visible here. Log-only: it is
+   * a signal for an external pager, not an enforcement point. */
+  async checkSolvency(): Promise<void> {
+    if (!this.enabled) return;
+    const owedBefore = sumOwed(loadEscrows(this.config));
+    if (owedBefore <= 0) {
+      this.solvencyBreachStreak = 0;
+      return;
+    }
+    let pool: number;
+    try {
+      pool = await this.poolFreeBalance();
+    } catch (err) {
+      console.error(`escrow_solvency_probe_unreadable owed=${owedBefore.toFixed(4)} err=${(err as Error).message}`);
+      return;
+    }
+    // Re-read owed after the balance. A release debits the chain before it
+    // persists `released`, so a probe landing in that window would otherwise read
+    // a debited pool against a stale-high owed. Taking the lower of the two owed
+    // snapshots biases an in-flight release toward not alerting; a real persistent
+    // drain trips both snapshots and, with the two-cycle streak, still fires.
+    const store = loadEscrows(this.config);
+    const owed = Math.min(owedBefore, sumOwed(store));
+    const active = Object.values(store.escrows).filter((x) => x.status === 'active').length;
+    if (pool + 1e-6 < owed) {
+      this.solvencyBreachStreak += 1;
+      const deficit = (owed - pool).toFixed(4);
+      if (this.solvencyBreachStreak >= 2) {
+        console.error(
+          `escrow_solvency_drift level=alert pool=${pool.toFixed(4)} owed=${owed.toFixed(4)} deficit=${deficit} active=${active} streak=${this.solvencyBreachStreak}`,
+        );
+      } else {
+        console.warn(
+          `escrow_solvency_drift level=warn pool=${pool.toFixed(4)} owed=${owed.toFixed(4)} deficit=${deficit} active=${active}`,
+        );
+      }
+    } else {
+      this.solvencyBreachStreak = 0;
     }
   }
 
@@ -722,6 +898,27 @@ export class EscrowLane {
         minAmount: Number(totalDeposit),
       });
       depositAmount = dec(verified.amount);
+    }
+    // Aggregate custody cap: refuse to grow the total tracked obligation beyond a
+    // configured ceiling, so a single commingled key can never be trusted with
+    // more than that. On the proxy-submitted path this runs before the deposit
+    // transfer fires, so it gates fund movement; on the wallet-signed path the CC
+    // is already on chain when we reject, so a distinct alert is logged for the
+    // out-of-band refund. Disabled when the cap is 0.
+    if (this.config.escrowMaxTotalCC > 0) {
+      const projected = sumOwed(store) + Number(depositAmount);
+      if (projected > this.config.escrowMaxTotalCC + 1e-6) {
+        if (fundingTransferId) {
+          console.error(
+            `escrow_cap_rejected_funded party=${this.config.escrowParty} payer=${originalPayer} amount=${Number(depositAmount).toFixed(4)} fundingTransferId=${fundingTransferId} refund_required=true`,
+          );
+        }
+        throw new V1LaneError(
+          409,
+          'escrow_cap_exceeded',
+          `deposit of ${Number(depositAmount).toFixed(4)} CC would raise tracked escrow obligation to ${projected.toFixed(4)} CC, over the ${this.config.escrowMaxTotalCC} CC aggregate cap`,
+        );
+      }
     }
     let depositPending: string | undefined;
     let depositExpires: string | undefined;
@@ -1173,5 +1370,26 @@ export function startEscrowStreamer(lane: EscrowLane, config: V1LaneConfig): () 
       running = false;
     });
   }, ms);
+  return () => clearInterval(timer);
+}
+
+/** Run the continuous solvency drift probe on its own cadence (default: the
+ * streamer tick, floor 10s). Read-only; emits `escrow_solvency_drift` for an
+ * external pager to watch. Returns a stop function. */
+export function startEscrowSolvencyMonitor(lane: EscrowLane, config: V1LaneConfig): () => void {
+  if (!lane.enabled) return () => {};
+  const ms = Math.max(10, config.solvencyMonitorSeconds || config.escrowTickSeconds) * 1000;
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void lane
+      .checkSolvency()
+      .catch(() => {})
+      .finally(() => {
+        running = false;
+      });
+  }, ms);
+  timer.unref?.();
   return () => clearInterval(timer);
 }

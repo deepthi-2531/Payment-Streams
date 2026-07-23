@@ -128,6 +128,7 @@ import { getSupportedAssets } from './assets.js';
 import {
   EscrowLane,
   startEscrowStreamer,
+  startEscrowSolvencyMonitor,
   ensureEscrowPreapproval,
 } from './escrow.js';
 
@@ -172,6 +173,7 @@ const escrowLane = new EscrowLane(v1LaneConfig);
 let startupReadiness: ReadinessReport | null = null;
 let stopAutoWithdrawWorker: (() => void) | null = null;
 let stopEscrowStreamer: (() => void) | null = null;
+let stopEscrowSolvencyMonitor: (() => void) | null = null;
 
 // ---------------------------------------------------------------------------
 // Express app
@@ -2293,6 +2295,18 @@ async function start(): Promise<void> {
         .catch((err) => console.log(`  Escrow preapproval check failed: ${(err as Error).message}`));
       stopEscrowStreamer = startEscrowStreamer(escrowLane, v1LaneConfig);
       console.log(`  Escrow streamer: on (tick ${v1LaneConfig.escrowTickSeconds}s, party ${op})`);
+      stopEscrowSolvencyMonitor = startEscrowSolvencyMonitor(escrowLane, v1LaneConfig);
+      console.log('  Escrow solvency monitor: on (alert tag escrow_solvency_drift)');
+      console.log(
+        `  Custody posture: ${
+          v1LaneConfig.disclosedCustody
+            ? 'operator-custodial (disclosed) — co-hosted payer money legs allowed'
+            : 'non-custodial enforced — operator-authority transfer of a co-hosted party refused'
+        }`,
+      );
+      console.log(
+        `  Escrow cap: ${v1LaneConfig.escrowMaxTotalCC > 0 ? `${v1LaneConfig.escrowMaxTotalCC} CC aggregate` : 'off'}`,
+      );
     } else {
       console.log('  Escrow lane: off (set ESCROW_PARTY to enable)');
     }
@@ -2433,6 +2447,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     stopAutoWithdrawWorker?.();
     stopEscrowStreamer?.();
+    stopEscrowSolvencyMonitor?.();
   });
 }
 

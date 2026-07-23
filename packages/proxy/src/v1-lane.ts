@@ -114,6 +114,16 @@ export interface V1LaneConfig {
   allocateBeforeSeconds: number;
   /** allocation.settleBefore/claim expiry window in seconds after unlock. */
   settleBeforeSeconds: number;
+  /** Acknowledge that this deployment runs operator-custodial: the operator's
+   * participant submits a co-hosted payer's money leg with its own authority.
+   * Off by default, so an operator-authority transfer of a party hosted here is
+   * refused unless custody is disclosed. In the intended topology the payer is on
+   * its own participant and never triggers it. */
+  disclosedCustody: boolean;
+  /** Aggregate cap in CC on total tracked escrow obligation; 0 disables it. */
+  escrowMaxTotalCC: number;
+  /** Cadence in seconds for the continuous escrow solvency drift probe. */
+  solvencyMonitorSeconds: number;
   /** Path to the proxy-owned V1 state file (settled totals + history). */
   stateFile: string;
 }
@@ -178,8 +188,24 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     executeBeforeSeconds: Number(get('EXECUTE_BEFORE_SECONDS', '3600')),
     allocateBeforeSeconds: Number(get('ALLOCATE_BEFORE_SECONDS', '3600')),
     settleBeforeSeconds: Number(get('SETTLE_BEFORE_SECONDS', '86400')),
+    disclosedCustody:
+      get('ESCROW_DISCLOSED_CUSTODY') === 'true' || get('COHOST_DISCLOSED_CUSTODY') === 'true',
+    escrowMaxTotalCC: nonNegNumber(get('ESCROW_MAX_TOTAL_CC', '0')),
+    solvencyMonitorSeconds: nonNegNumber(get('ESCROW_SOLVENCY_MONITOR_SECONDS', '0')),
     stateFile: get('V1_STATE_FILE', './v1-stream-state.json'),
   };
+}
+
+/** Coerce an env number, failing safe to 0 (disabled) on a typo or negative,
+ * warning once so a misconfigured limit isn't silently off. */
+function nonNegNumber(raw: string): number {
+  if (raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    console.warn(`ignoring invalid numeric config "${raw}"; treating as 0 (disabled)`);
+    return 0;
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -324,6 +350,63 @@ export async function ledger(
     throw new V1LaneError(502, 'ledger_error', `${method} ${path} ${res.status}: ${d}`);
   }
   return t ? JSON.parse(t) : {};
+}
+
+// Whether a party is hosted on this (the operator's) participant. Cached: a
+// local=true result is kept indefinitely (it only makes the guard stricter),
+// while local=false is re-checked after a short TTL so a later re-hosting isn't
+// missed.
+const partyLocalCache = new Map<string, { local: boolean; at: number }>();
+async function partyIsLocal(config: V1LaneConfig, party: string): Promise<boolean> {
+  const cached = partyLocalCache.get(party);
+  // local=true is cached indefinitely (it only tightens the guard); local=false is
+  // re-checked after a short window so a party re-hosted here is caught promptly.
+  if (cached && (cached.local || Date.now() - cached.at < 30 * 1000)) return cached.local;
+  let details: unknown;
+  try {
+    const r = await ledger(config, 'GET', `/v2/parties/${encodeURIComponent(party)}`);
+    details = (r as any).partyDetails ?? (r as any).party_details;
+  } catch (err) {
+    // Cannot determine hosting — fail closed so a claimed-non-custodial deployment
+    // never silently submits with operator authority it couldn't verify.
+    throw new V1LaneError(
+      502,
+      'undisclosed_custody_probe_failed',
+      `cannot determine whether ${party} is hosted here; refusing the operator-authority submission (${(err as Error).message})`,
+    );
+  }
+  if (!Array.isArray(details)) {
+    // A 200 whose shape we don't recognise is not a not-local signal — fail closed
+    // rather than let an unexpected envelope wave through a custodial move.
+    throw new V1LaneError(
+      502,
+      'undisclosed_custody_probe_failed',
+      `party hosting response for ${party} was not in the expected shape; refusing the operator-authority submission`,
+    );
+  }
+  const local = details.some((d: any) => d?.isLocal === true || d?.is_local === true);
+  partyLocalCache.set(party, { local, at: Date.now() });
+  return local;
+}
+
+/** Refuse to submit a party's money leg with the operator participant's own
+ * authority when that party is hosted here, unless the operator has acknowledged
+ * running custodially. This turns "non-custodial by topology" into an enforced
+ * property: in the intended topology the payer is on its own participant, the
+ * probe returns not-local, and nothing changes; a silent co-hosting misconfig is
+ * caught instead of quietly reintroducing operator custody. The operator's own
+ * escrow custody party is exempt — its releases and refunds are custodial by
+ * design and already disclosed. */
+async function assertNotUndisclosedCustody(config: V1LaneConfig, sender: string, ctx: string): Promise<void> {
+  if (config.escrowParty && sender === config.escrowParty) return;
+  if (config.disclosedCustody) return;
+  if (await partyIsLocal(config, sender)) {
+    throw new V1LaneError(
+      403,
+      'undisclosed_custody',
+      `refusing to move ${sender}'s funds with the operator participant's authority (${ctx}): that party is hosted here, so this is a custodial move. In the intended topology the payer signs on its own participant. Set ESCROW_DISCLOSED_CUSTODY=true to run operator-custodial knowingly.`,
+    );
+  }
 }
 
 async function registryPost(config: V1LaneConfig, path: string, body: unknown): Promise<any> {
@@ -1466,6 +1549,10 @@ export async function settleCycle(
   const prepareFn =
     config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
   const prepared = await prepareFn(config, agreement, amount, cycleNo);
+  // This is the one place the operator participant submits a transfer with a
+  // party's own authority (actAs=[payerParty]). Refuse to do so for a co-hosted
+  // party unless custody is disclosed.
+  await assertNotUndisclosedCustody(config, agreement.payerParty, prepared.ref);
   // Submit for the transaction TREE so we can classify the outcome atomically
   // (no Scan-ingestion lag, so no double-pay risk): a created TransferInstruction
   // means the receiver had no pre-approval, so the transfer is a pending offer
