@@ -16,22 +16,28 @@ verify their wallet is compatible with Canton Payment Streams.
 
 ## Quick conformance check
 
-Run the SDK's bundled conformance suite (`packages/sdk/src/cip103/*.test.ts`):
+There is no bundled CIP-103 OpenRPC conformance suite in this repo. What
+ships today is a set of wallet-client contract/capability tests
+(`packages/dashboard/src/store/wallet/walletClient.test.ts`):
 
 ```bash
-pnpm --filter @canton-streams/sdk test
+pnpm --filter @canton-streams/dashboard test walletClient
 ```
 
-This exercises:
+These verify the wallet-provider client shape and capability flags:
 
-1. Provider lifecycle (`connect` → `disconnect` → `isConnected`)
-2. Account discovery (`listAccounts`, `getPrimaryAccount`)
-3. Signing (`signMessage`)
-4. Transaction preparation + submission (`prepareExecute`)
-5. Ledger API proxy (`ledgerApi`)
-6. Network identification (`getNetwork` with CAIP-2 networkId)
-7. Event delivery (`accountsChanged`, `statusChanged`, `txChanged`)
-8. EIP-1474 error code propagation
+1. Provider lifecycle (`connect` → `disconnect` → `status`)
+2. Account discovery (`listAccounts`)
+3. Transaction preparation + submission (`prepareExecuteAndWait`)
+4. Ledger API proxy (`ledgerApi`)
+5. Event delivery (`accountsChanged`, `statusChanged`, `txChanged`)
+6. Capability flags (`hostedMultiWallet`, `openSurfacesWalletUi`,
+   `ledgerApi`, `prepareExecuteAndWait`, `v2AllocationRequestUx`)
+
+Note that method-level CIP-103 behaviors — `signMessage`, `getNetwork`
+(CAIP-2 networkId), and EIP-1474 error-code propagation — are spec
+requirements that are **not yet implemented** in the wallet-provider
+clients. Validate those against the upstream OpenRPC suite below.
 
 ---
 

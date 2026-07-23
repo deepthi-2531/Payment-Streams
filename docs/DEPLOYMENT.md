@@ -41,21 +41,21 @@ pnpm daml:deps       # download Splice V2 dependency DARs into packages/daml/mai
 pnpm daml:build      # compile all Daml packages
 ```
 
-Output: `packages/daml/main/.daml/dist/canton-streams-1.0.0.dar`.
+Output: `packages/daml/main/.daml/dist/canton-streams-1.3.0.dar`.
 
 **Upload to a participant:**
 
 ```bash
 # Via Canton Admin API (gRPC)
 grpcurl -plaintext \
-  -d "{\"dar_file\": \"$(base64 -i packages/daml/main/.daml/dist/canton-streams-1.0.0.dar)\"}" \
+  -d "{\"dar_file\": \"$(base64 -i packages/daml/main/.daml/dist/canton-streams-1.3.0.dar)\"}" \
   localhost:5002 \
   com.digitalasset.canton.admin.participant.v30.PackageService/UploadDar
 
 # Or via the daml CLI
 daml ledger upload-dar \
   --host localhost --port 5001 \
-  packages/daml/main/.daml/dist/canton-streams-1.0.0.dar
+  packages/daml/main/.daml/dist/canton-streams-1.3.0.dar
 ```
 
 **Vet the package on the synchronizer:**
@@ -110,6 +110,10 @@ node packages/proxy/dist/index.js
 | `PROXY_JWT_AUDIENCE`        | (none)                          | Expected JWT audience; required in jwt mode unless explicitly acknowledged with `PROXY_ALLOW_ANY_AUDIENCE=true` |
 | `PROXY_SERVICE_TOKEN`       | (none)                          | Service JWT for finalize / auto-withdraw routes                |
 | `PROXY_ESCROW_OPERATOR`     | (none)                          | Escrow-operator party id                                       |
+| `ESCROW_DISCLOSED_CUSTODY`  | `false`                         | Set `true` to knowingly run the operator-custodial money-leg when the payer is co-hosted on the operator participant |
+| `ESCROW_MAX_TOTAL_CC`       | `0` (uncapped)                  | Aggregate custody cap; deposits past it are rejected with `escrow_cap_exceeded` |
+| `ESCROW_SOLVENCY_MONITOR_SECONDS` | `0` (streamer tick)       | Cadence override for the pool-vs-owed drift monitor (`escrow_solvency_drift`); the monitor always runs when the escrow lane is enabled, `0` uses the escrow-streamer tick cadence (10s floor) |
+| `PROXY_ALLOW_INSECURE_WALLET_URL` | `false`                   | Allow an `http` wallet-gateway URL on a trusted private network; otherwise a non-loopback gateway URL must be `https` |
 | `ALLOWED_ORIGINS`           | (none)                          | CORS allowlist, comma-separated (e.g. `http://localhost:3000`) |
 | `LOG_LEVEL`                 | `info`                          | `trace` / `debug` / `info` / `warn` / `error`                  |
 
@@ -184,6 +188,8 @@ transitional V1 lane only for assets that explicitly set `allocationsV1`.
 ```
 
 Updating the registry does not require an SDK release; the proxy and dashboard read the file on startup.
+
+The proxy's configured wallet-gateway URL (`CANTON_STREAMS_WALLET_GATEWAY_URL` / `WALLET_GATEWAY_URL`) must be `https` (loopback hosts excepted); a plaintext `http` gateway fails closed at client construction unless `PROXY_ALLOW_INSECURE_WALLET_URL=true` is set for a trusted private network. The per-asset registry `walletGatewayUrl` field itself is validated only as a non-empty string.
 
 ### 5. Dashboard
 

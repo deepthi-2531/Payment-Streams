@@ -40,8 +40,11 @@ UI.
 | 3. Server-side SigningProvider | `packages/sdk/src/signing/` | Service party, via the gateway's bound provider | Yes — gateway-issued `accessToken` |
 
 The dashboard selects path 1 or 2 at build time via `VITE_WALLET_LAYER`
-(`store/wallet/config.ts` + `store/wallet/index.ts`). Path 3 is for
-backends (executors, billing crons) and has no browser dependency.
+(alias `VITE_WALLET_PROVIDER`) in `store/wallet/config.ts` +
+`store/wallet/index.ts`. A third value, `combined`, merges the Loop and
+dApp-SDK wallets into one picker (`combinedWalletClient`) and is the
+current live default. Path 3 is for backends (executors, billing crons)
+and has no browser dependency.
 
 ---
 
@@ -287,6 +290,13 @@ See `packages/sdk/src/signing/provider.ts` (interface + error codes),
 kinds). Provider credentials (HSM/MPC API keys) are configured on the
 gateway, never in your process.
 
+The SDK signing transport enforces `https` on the gateway URL: a
+plaintext `http://` `gatewayUrl` / `CANTON_STREAMS_WALLET_GATEWAY_URL`
+throws at construction (`signing/transport.ts` `assertSecureGatewayUrl`)
+unless the host is loopback (`localhost` / `127.0.0.1` / `::1`). The SDK
+has no insecure-override; that escape hatch exists only on the proxy's
+host-wallet client (`PROXY_ALLOW_INSECURE_WALLET_URL`).
+
 ---
 
 ## The approval UX — what the user actually signs
@@ -363,7 +373,7 @@ needs a user step outside the dApp; "—" = not supported on that path.
 
 | Variable | Path | Default | Meaning |
 |---|---|---|---|
-| `VITE_WALLET_LAYER` | 1/2 | `dapp-sdk` | `dapp-sdk` or `partylayer` |
+| `VITE_WALLET_LAYER` | 1/2 | `dapp-sdk` | `dapp-sdk`, `partylayer`, or `combined` (merged Loop + dApp-SDK picker, the live default); alias `VITE_WALLET_PROVIDER` |
 | `VITE_WALLET_GATEWAY_URL` | 1 | `http://localhost:3030/api/v0/dapp` | CIP-103 endpoint of the wallet gateway |
 | `VITE_SKIP_WALLET_PICKER` | 1 | `false` | Auto-select the remote gateway adapter (dev) |
 | `VITE_WALLET_NAME` | 1 | `Splice Amulet Wallet` | Display name for the remote adapter |

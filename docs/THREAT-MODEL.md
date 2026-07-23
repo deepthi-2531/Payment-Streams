@@ -288,11 +288,17 @@ in version-control history under the `0.2.7` tag for reference.
 - **Trust assumption:** Daml authority — the `Allocation` template's
   signatory set includes the sender, the recipient, and the asset
   admin. No off-ledger trust is required for the settlement itself.
-- **Custody path:** The sender's tokens are locked in place (or, for
-  V1-compatibility paths, physically moved to an escrow operator's
-  holding). Either way, the escrow operator cannot steal funds —
-  every settlement choice is controller-gated and bounded by the
-  on-ledger spec.
+- **Custody path:** The sender's tokens are locked in place on the
+  pure V2 path. The deployed "sign once" lane
+  (`packages/proxy/src/escrow.ts`) is instead a **disclosed
+  operator-custodial** model: the payer makes one token-standard
+  transfer into a dedicated escrow party whose keys are the validator
+  node's keys, and the operator streams the commingled balance out on
+  a schedule. On that lane nothing on-ledger stops the operator from
+  moving the pooled balance; protection is off-ledger — a pre-release
+  solvency interlock (`assertPoolSolvent`), an aggregate custody cap
+  (`ESCROW_MAX_TOTAL_CC`), and holding-delivery verification. The
+  trust-minimised on-ledger mandate pull is not yet wired.
 - **Capability negotiation:** The library reads
   `getAssetCapabilities(instrumentRef)` and selects the V1 or V2
   adapter per CIP-0112 §5 automatically. dApps don't branch by asset.
@@ -326,9 +332,14 @@ in version-control history under the `0.2.7` tag for reference.
 ### JWT verification
 
 - **Production:** The proxy verifies JWTs against a JWKS endpoint
-  (`AUTH_JWKS_URL`). Tokens must contain the acting party claim.
-- **Development:** `AUTH_MODE=dev` disables JWT verification for local
-  testing. Never use dev mode in production.
+  resolved from `PROXY_OIDC_ISSUER` (OIDC discovery) or
+  `PROXY_JWT_ISSUER` (`{issuer}/.well-known/jwks.json`), with optional
+  `PROXY_JWT_AUDIENCE` enforcement. Tokens must contain the acting
+  party claim.
+- **Development:** `PROXY_AUTH_MODE=dev` disables JWT verification for
+  local testing. It is fail-closed gated — the proxy refuses to start
+  unless `PROXY_ALLOW_DEV_AUTH=true` is also set and `PROXY_BIND_HOST`
+  is an explicit loopback address. Never use dev mode in production.
 - **Token-to-party binding:** The proxy reads the acting party from
   the JWT `party` (or `sub`) claim. The legacy `X-Canton-Party` header
   is still accepted for backwards compatibility but the JWT claim is
@@ -336,7 +347,7 @@ in version-control history under the `0.2.7` tag for reference.
 
 ### Service tokens
 
-- Certain operations (e.g., `POST /api/streams/:id/finalize`) require
+- Certain operations (e.g., `POST /api/streams/:sender/:streamId/finalize`) require
   a service-level token that identifies the escrow operator.
 - Service tokens are validated separately and reject user-level tokens.
 
@@ -359,8 +370,10 @@ The proxy should be configured with a strict CORS allow-list in
 production:
 
 ```
-CORS_ORIGIN=https://dashboard.example.com
+ALLOWED_ORIGINS=https://dashboard.example.com
 ```
+
+`ALLOWED_ORIGINS` is a comma-separated allow-list.
 
 Do not use `*` in production.
 
@@ -545,6 +558,22 @@ appropriate for direct internet exposure.
 - No request correlation IDs propagated browser → proxy → ledger
 - Per-role response filtering not implemented
 - Graceful shutdown does not drain auto-withdraw worker
+
+**Operator-custody hardening controls (deployed)**
+
+The disclosed operator-custodial escrow lane (`escrow.ts`, `v1-lane.ts`)
+enforces the following off-ledger controls, each surfaced with a
+machine-readable reason code:
+
+| Control | Env var | Reason code |
+|---|---|---|
+| Aggregate custody cap on pooled deposits | `ESCROW_MAX_TOTAL_CC` | `escrow_cap_exceeded` |
+| Pre-release solvency interlock (pool ≥ owed) + continuous drift monitor | `ESCROW_SOLVENCY_MONITOR_SECONDS` | `escrow_pool_insolvent` (log tag `escrow_solvency_drift`) |
+| Cross-process single-writer store lock | — | `store_lock_timeout` |
+| Deposit requires a verified delivered holding | — | `deposit_undelivered` |
+| Co-hosting / custodial-disclosure gate | `ESCROW_DISCLOSED_CUSTODY` | `undisclosed_custody`, `undisclosed_custody_probe_failed` |
+| Payer==recipient rejection at stream creation | — | `self_stream` |
+| HTTPS wallet-gateway enforcement (loopback exempt) | `PROXY_ALLOW_INSECURE_WALLET_URL` (escape hatch) | — |
 
 ---
 

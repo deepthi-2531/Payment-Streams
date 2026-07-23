@@ -92,6 +92,15 @@ contract, returning a fresh `ContractId StreamFlow`.
 
 Notes:
 
+- The **Daml choice** column names the on-ledger `StreamFlow` choices,
+  which the SDK/probe path exercises directly (§3/§4). On the current
+  deploy the **proxy `/api/flows` routes** instead drive a separate
+  `StreamFlowAdmin` bookkeeping contract — `create`→`createFlowAdminViaJson`,
+  `Top up`→`TopUp_Flow_Admin`, `Withdraw`→`Sync_Iteration_Flow`,
+  `Stop`→`Mark_Cancelled_Flow_Admin` (controller = operator, over JSON) —
+  and do **not** execute the on-ledger money legs; the Amulet
+  `Allocation_Settle` / `Allocation_Cancel` settlement is DSO-gated on
+  this participant.
 - Pause / Resume are exposed through the SDK and the client
   (`pauseFlow` / `resumeFlow`) but have **no proxy route and no
   dashboard button** today — drive them server-side via the SDK.
@@ -302,12 +311,14 @@ Pause / resume are not surfaced in the dashboard; use the SDK for those.
 
 > **Maturity note — operator/co-hosted reference, not yet hosted-wallet.**
 > The current `StreamFlow` path is a solid **operator / co-hosted
-> reference**: the proxy creates and drives flows by submitting with
-> `sender` + `recipient` + `escrowOperator` together in `actAs`
-> (`packages/proxy/src/index.ts`, `POST /api/flows` — see the
-> `createClientForAuthWithParties(auth, [recipient, escrowOperator])`
-> call), and the SDK/probe path co-hosts all three parties on one
-> participant. A **fully hosted-wallet `StreamFlow` UX is future work**:
+> reference**. On the current deploy the proxy's `POST /api/flows`
+> routes create and drive a separate `StreamFlowAdmin` bookkeeping
+> contract over the JSON Ledger API (`createFlowAdminViaJson` in
+> `packages/proxy/src/index.ts`); `StreamFlowAdmin` is `signatory
+> sender`, so `actAs=[sender]` suffices — the proxy does not submit a
+> co-hosted three-party `StreamFlow`. The all-three-in-`actAs`
+> co-hosted `StreamFlow` submission is the SDK/probe path (§3/§4),
+> which co-hosts all three parties on one participant. A **fully hosted-wallet `StreamFlow` UX is future work**:
 > the dashboard's hosted-wallet client does not yet wire StreamFlow —
 > `createFlow` / `topUpFlow` / `withdrawFlow` / `stopFlow` throw
 > `HostedWalletWriteUnsupportedError`, and `listFlows` returns an empty

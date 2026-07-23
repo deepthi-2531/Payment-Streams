@@ -41,6 +41,8 @@ const { streamId } = await client.createStream({
   instrumentRef: myAssetRef,            // concrete CIP-56 V2 instrument
   fundingReference: walletFundingRef,   // from the wallet's V2 allocation step
   escrowOperator: escrowOperatorParty,
+  senderAccount: aliceAccount,          // required for TokenStandardCustody (LedgerRecord)
+  recipientAccount: bobAccount,         // required for TokenStandardCustody (LedgerRecord)
   cancellable: true,
 });
 ```
@@ -263,7 +265,7 @@ operator records it with `Mark_Cancelled_Milestone_Admin`.
 
 ## Walkthrough 4 — Bulk creation
 
-**Scenario:** AcmeCo creates 250 simultaneous vesting streams (one per employee) with one signature.
+**Scenario:** AcmeCo creates 250 vesting streams, one per employee, from a single SDK call.
 
 Use `client.createBatch({ streams })` — each entry is a full
 `CreateStreamParams` (`CreateBatchParams`; see
@@ -283,12 +285,14 @@ const { streamIds } = await client.createBatch({
     instrumentRef: usdcxRef,
     fundingReference: emp.walletFundingRef,
     escrowOperator: escrowOperatorParty,
+    senderAccount: treasuryAccount,
+    recipientAccount: emp.account,
     cancellable: false,
   })),
 });
 ```
 
-On-ledger: a single `BatchCreateRequest` contract exercises `ExecuteBatch`, fan-out-creating 250 `AllocationRequest` contracts in one transaction. Employees see them in their inboxes; each accepts independently.
+`createBatch` is an SDK-side convenience: it submits 250 independent `StreamAdmin` creates (one `transport.create` per stream), not a single atomic transaction. `batchContractId` is just the first stream's contract id. Employees see the requests in their inboxes; each accepts independently.
 
 ---
 

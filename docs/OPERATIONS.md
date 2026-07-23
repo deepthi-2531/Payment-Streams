@@ -108,8 +108,11 @@ it is operated alongside the stack. The dashboard talks to it from the browser
 at the `VITE_WALLET_GATEWAY_URL` (default `http://localhost:3030/api/v0/dapp`).
 When the proxy auto-withdraw worker routes signing through a gateway, it reads
 `CANTON_STREAMS_WALLET_GATEWAY_URL` (or `WALLET_GATEWAY_URL`). Signing keys live
-in the gateway's bound signing provider, never in the proxy process. Standing
-it up is covered by [E2E-HARNESS.md](E2E-HARNESS.md).
+in the gateway's bound signing provider, never in the proxy process. The proxy
+fails closed at client construction unless this URL is `https` (a loopback host
+is exempt); set `PROXY_ALLOW_INSECURE_WALLET_URL=true` to permit `http` on a
+trusted private network. Standing it up is covered by
+[E2E-HARNESS.md](E2E-HARNESS.md).
 
 ## 2. Health and readiness
 
@@ -169,6 +172,10 @@ the service token).
   readiness report inside the response names the failing check.
 - **HTTP 429 (`rate_limit_exceeded`) spikes** -> a caller is exceeding the
   in-process limiter (see section 3).
+- **`escrow_solvency_drift level=alert` in the proxy logs** -> page. The
+  operator-custodial escrow lane's drift monitor has seen the custody party's
+  balance fall below the total owed across active escrows on two consecutive
+  probes (see incident 5.6).
 - **Canton gRPC health check failing** -> the participant is the problem, not
   the proxy.
 
@@ -208,33 +215,44 @@ Request bodies are capped at `64kb` (`PROXY_BODY_LIMIT`).
 
 ## 4. Stateful components and backup/restore
 
-The system keeps three small on-disk state files. All are written atomically
-(write to `<path>.tmp`, then `rename`), so a crash mid-write cannot leave a
-torn file — a hot copy of the file is always internally consistent. None of
-them hold ledger truth (the ledger is the source of record); they exist to
-make recovery safe and avoid replaying payouts.
+The system keeps several small on-disk state files. Most are written
+atomically (write to `<path>.tmp`, then `rename`), so a crash mid-write cannot
+leave a torn file — a hot copy is always internally consistent. The lone
+exception is the executor offset file, a single small timestamp written in
+place. None of these files hold ledger truth (the ledger is the source of
+record); they exist to make recovery safe and avoid replaying payouts.
 
 | File | Path (env) | Default | Why it matters |
 | --- | --- | --- | --- |
 | Executor offset checkpoint | `EXECUTOR_OFFSET_PATH` | `.executor-offset` | Last processed timestamp; lets the executor resume after restart instead of rescanning from the beginning. |
 | Executor idempotency guard | `EXECUTOR_GUARD_PATH` | `.executor-guard` | Set of in-flight/recently-completed execution ids; on restart it is loaded as a startup guard so a payout whose submit outcome was never observed is **not** replayed on the first cycle. |
 | Settlement journal | `PROXY_SETTLEMENT_JOURNAL_PATH` | `.proxy-settlement-journal.json` | Durable record of in-flight interactive auto-withdraw settlements across the off-chain-transfer -> on-ledger-record window; the next cycle recovers a pending record instead of relying on log scraping. |
+| V1 stream store | `V1_STATE_FILE` | `./v1-stream-state.json` | Proxy-owned record of V1-lane stream agreements and settled history. Every mutation is serialized single-writer via a sibling `<path>.lock` file (cross-process). |
+| Escrow custody store | derived from `V1_STATE_FILE` | `./v1-stream-state-escrow.json` | Operator's off-chain custody accounting (custody-party pool balance vs amount owed per active escrow) that the solvency interlock and releases depend on. Guarded by its own sibling `-escrow.lock` file. |
 
 Implementations:
 [offset.ts](../packages/executor/src/offset.ts),
 [guard-store.ts](../packages/executor/src/guard-store.ts),
-[settlement-journal.ts](../packages/proxy/src/settlement-journal.ts).
+[settlement-journal.ts](../packages/proxy/src/settlement-journal.ts),
+[v1-lane.ts](../packages/proxy/src/v1-lane.ts),
+[escrow.ts](../packages/proxy/src/escrow.ts),
+[store-lock.ts](../packages/proxy/src/store-lock.ts).
 
 ### Backup
 
 - Put each file on persistent, durable storage (a mounted volume, not an
   ephemeral container layer). Configure the paths to point there.
-- Because writes are atomic tmp+rename, a periodic file copy or a volume
-  snapshot is safe to take at any time without quiescing the service.
-- Most important to back up is the **settlement journal**: it is the only
-  durable record bridging the window where funds have moved off-chain but the
-  ledger record has not yet landed. The guard file is the executor's
-  double-submit protection; the offset file is only a resume optimization.
+- Because the stores that matter use atomic tmp+rename writes, a periodic file
+  copy or a volume snapshot is safe to take at any time without quiescing the
+  service.
+- Most important to back up are the **settlement journal** and the **escrow
+  custody store**: the journal is the only durable record bridging the window
+  where funds have moved off-chain but the ledger record has not yet landed,
+  and the escrow store holds live custodial accounting (pool vs owed) that the
+  solvency interlock and releases depend on — treat it as at least as
+  backup-critical as the journal. The V1 stream store carries the agreements
+  those two derive from. The guard file is the executor's double-submit
+  protection; the offset file is only a resume optimization.
 
 ### Restore behavior on restart
 
@@ -359,6 +377,38 @@ authoritative; when in doubt, query the ledger before acting.
   For a confirmed vulnerability, coordinate privately with the maintainers —
   do not open a public issue or PR. Keep secrets in env vars, never in
   committed config.
+
+### 5.6 Operator-custodied escrow: solvency, cap, and custody disclosure
+
+- **Detection** — one of:
+  - `escrow_solvency_drift level=alert` (paged) — the custody party's free
+    balance has fallen below the total owed across active escrows on two
+    consecutive drift-monitor probes (cadence `ESCROW_SOLVENCY_MONITOR_SECONDS`;
+    a single `level=warn` breach can be the ordinary release window and clears);
+  - deposits rejected with `409 escrow_pool_insolvent` — the pre-release
+    interlock refuses to move funds that would dip into balance owed to other
+    escrows;
+  - deposits rejected with `409 escrow_cap_exceeded` — the deposit would raise
+    the tracked escrow obligation past `ESCROW_MAX_TOTAL_CC`;
+  - deposits rejected with `undisclosed_custody` / `undisclosed_custody_probe_failed`
+    — the co-hosting custody gate (`ESCROW_DISCLOSED_CUSTODY`) refused a money
+    leg because operator-custodial co-hosting was not disclosed or could not be
+    probed.
+- **Diagnosis** — the escrow lane commingles deposits in a single custody party
+  ([escrow.ts](../packages/proxy/src/escrow.ts)); protection is off-ledger. The
+  drift monitor is a read-only signal for an external pager; the interlock and
+  aggregate cap are enforcement points that fail closed. A persistent
+  `level=alert` means a real drain of the custody party (fees, a mis-scoped
+  transfer, holding expiry), not a transient release-window skew.
+- **Action** — for a solvency alert, stop new releases and reconcile the custody
+  party's on-chain balance against the escrow store's owed total (section 4)
+  before resuming; the store is the accounting of record here. For
+  `escrow_cap_exceeded`, raise `ESCROW_MAX_TOTAL_CC` only deliberately (it bounds
+  total custodial exposure). For an `undisclosed_custody` rejection, confirm the
+  deployment is genuinely operator-custodial and set `ESCROW_DISCLOSED_CUSTODY=true`
+  only if that posture is disclosed to depositors. A `escrow_cap_rejected_funded`
+  log line means CC was already on chain when the cap tripped — an out-of-band
+  refund is required.
 
 ## 6. Upgrade and rollback
 

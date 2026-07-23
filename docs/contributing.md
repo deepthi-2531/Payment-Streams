@@ -31,8 +31,8 @@ cd packages/dashboard && pnpm dev  # Vite dev server
 ### Daml development
 
 ```bash
-pnpm daml:deps      # download dependency DARs (legacy Daml Finance)
-node scripts/fetch-v2-dars.mjs --mode source-build  # Splice V2 DARs
+pnpm daml:deps      # fetch Splice CIP-56 V2 DARs (runs scripts/fetch-v2-dars.mjs)
+node scripts/fetch-v2-dars.mjs --mode source-build  # source-build the Splice V2 DARs
 pnpm daml:build     # compile all Daml packages
 pnpm daml:test      # run Daml scenario tests
 ```
@@ -55,6 +55,8 @@ Canton-Streams/
     daml/             # Daml smart contracts
       interfaces/     # Shared type definitions (StreamConfig, etc.)
       main/           # Escrow templates, workflows, settlement adapters
+    cli/              # Command-line tooling
+    executor/         # On-ledger execution worker
     sdk/              # TypeScript SDK
       src/
         transport/    # gRPC and JSON API transports
@@ -97,9 +99,8 @@ step documented in [RELEASING.md](RELEASING.md).
 
 ### Writing tests
 
-- **SDK tests:** `packages/sdk/src/__tests__/` using vitest
-- **Proxy tests:** `packages/proxy/src/__tests__/` using vitest
-- **Dashboard tests:** `packages/dashboard/src/__tests__/` using vitest
+- **SDK tests:** `packages/sdk/test/` using vitest
+- **Dashboard tests:** colocated `*.test.ts`/`*.test.tsx` under `packages/dashboard/src/` using vitest
 - **Daml tests:** scenario functions in Daml modules
 
 ## Pull request process

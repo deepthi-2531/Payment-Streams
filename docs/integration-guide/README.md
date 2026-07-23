@@ -102,7 +102,7 @@ const params = buildVestingStream({
 const client = new CantonStreamsClient(clientConfig);
 const result = await client.createStream(params);
 
-console.log('Stream created:', result.contractId);
+console.log('Stream created:', result.requestContractId);
 ```
 
 For the browser-wallet (Path A) flow, the same params object is passed

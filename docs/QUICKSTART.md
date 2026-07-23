@@ -53,7 +53,7 @@ pnpm build                # builds all TypeScript packages
 
 # 2. Build Daml DARs (only when changing Daml sources)
 pnpm daml:deps            # fetches Splice V2 dependency DARs into .lib/
-pnpm daml:build           # builds packages/daml/main/.daml/dist/canton-streams-1.0.0.dar
+pnpm daml:build           # builds packages/daml/main/.daml/dist/canton-streams-<version>.dar
 
 # 3. Start the Canton sandbox (separately — see docs/DEPLOYMENT.md for options)
 

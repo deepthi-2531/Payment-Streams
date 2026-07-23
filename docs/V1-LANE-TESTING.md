@@ -78,7 +78,7 @@
 ```bash
 CANTON_JSON_API_URL=http://localhost:7575 \
 CANTON_LEDGER_TOKEN=$TOKEN \
-REGISTRY_API_URL=<scan-base-url>/api/scan \
+REGISTRY_API_URL=<bare-scan-host> \
 CC_ADMIN_PARTY=<dso-party> \
 SENDER_PARTY=<sender> RECIPIENT_PARTY=<recipient> EXECUTOR_PARTY=<operator> \
 AMOUNT=25.0 \
@@ -88,9 +88,13 @@ node scripts/devnet-v1-cc-stream-probe.mjs
 Start with `DRY_RUN=true` to print the plan. The probe:
 
 1. creates a `StreamAllocationRequestV1` (settlement ref `<streamId>:cycle-<n>`),
-2. waits for the sender's V1 `Allocation` — either allocate in the sender's
-   wallet UI and pass `ALLOCATION_CID=...`, or set `ALLOCATION_TEMPLATE_ID`
-   (e.g. the Amulet allocation template) so the probe can poll,
+2. obtains the sender's V1 `Allocation`. By default (`AUTO_ALLOCATE=true`)
+   the probe resolves the registry `AllocationFactory` and allocates from
+   the sender's unlocked CC holdings itself. Set `AUTO_ALLOCATE=false` to
+   fall back to the wallet path — either allocate in the sender's wallet UI
+   and pass `ALLOCATION_CID=...`, or set `ALLOCATION_TEMPLATE`
+   (default `#splice-amulet:Splice.AmuletAllocation:AmuletAllocation`) so
+   the probe can poll,
 3. fetches the `execute-transfer` choice context from the registry API,
 4. exercises `Allocation_ExecuteTransfer` with the context in
    `extraArgs.context` and the registry's disclosed contracts on the command,

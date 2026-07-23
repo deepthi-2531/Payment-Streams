@@ -74,8 +74,13 @@ data AllocationSpecification = AllocationSpecification with
 
 ## Streaming Implications
 
-- Streams use committed allocations so funds cannot be withdrawn before the
-  settlement deadline.
+- Committed allocations (funds cannot be withdrawn before the settlement
+  deadline) describe the upstream V2 vocabulary and Daml template design. On the
+  live deployment, settlement runs through a disclosed operator-custodial escrow
+  path (direct CC holding delivery): funds are custodied by the commingled
+  operator rather than locked on-ledger until a deadline. The on-chain
+  committed-allocation `Allocation_Settle` leg is DSO-gated on this participant
+  and is not currently exercised.
 - `nextIterationFunding` enables repeated settlement across stream periods.
 - `numIterations` is the allocation-chain counter used for off-chain
   correlation.

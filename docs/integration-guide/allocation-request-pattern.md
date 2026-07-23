@@ -1,14 +1,13 @@
 # AllocationRequest pattern (V2 preferred)
 
-> **Status:** this library supports the CIP-56 Token Standard V2 path and a
-> transitional V1 allocation lane.
+> **Status:** this library's `AllocationRequest` interface is V2-only. Assets
+> must be V2-capable; V1 dual-implementation is not implemented.
 >
 > Per [CIP-0112 §5 Backwards Compatibility](https://github.com/canton-foundation/cips/blob/main/cip-0112/cip-0112.md#5-backwards-compatibility),
 > V1 assets are expected to publish V2 interfaces alongside V1 (dual-
-> implementation). Once an asset advertises V2 in its `supportedApis`
-> metadata field, this library routes the V2 lane automatically. Assets that
-> are live on V1 today can use the transitional V1 allocation lane, with the
-> important limitation that iterated allocations and batch settlement require V2.
+> implementation). This library requires an asset to advertise V2 in its
+> `supportedApis` metadata field; the `AllocationRequest` interface instance on
+> the stream templates implements only the V2 standard.
 
 ## The pattern in one diagram
 
@@ -18,11 +17,11 @@
 │   (admin)   │                                     │      (V2)        │
 └──────┬──────┘                                     └────────┬─────────┘
        │                                                     │
-       │ creates StreamEscrow                                │ sender wallet
+       │ creates StreamAdmin                                 │ sender wallet
        │ admin contract                                      │ sees the request
        ▼                                                     ▼
 ┌─────────────┐    2. AllocationFactory_Allocate   ┌──────────────────┐
-│ StreamEscrow│                                     │ Sender's wallet  │
+│ StreamAdmin │                                     │ Sender's wallet  │
 │  (admin)    │                                     │ (committed=True, │
 │             │                                     │  nextIteration   │
 │             │                                     │   Funding=Some)  │
@@ -68,6 +67,14 @@ Verified against the upstream [`canton-network/splice`](https://github.com/canto
 | Withdraw allocation | `Allocation_Withdraw` | executor | operator-side |
 | Batch settle | `SettlementFactory_SettleBatch` | executor | operator-side; multi-leg / multi-allocation |
 
+> **Note on this library's contracts:** the three `AllocationRequest_*` choices
+> (`_Accept` / `_Reject` / `_Withdraw`) are intentionally **not wired** on the
+> stream templates — their interface impls `abort` and redirect to the native
+> choices (`Withdraw_Stream` / `Cancel_Stream` / `Stop_Flow` / `ConfirmMilestone`),
+> or to the separate V2 `StreamAdmin` / `StreamFlowAdmin` / `MilestoneAdmin`
+> allocation path. The interface instance exists only so the contract is
+> renderable as an `AllocationRequest`.
+
 **Action enums on the views** (V2):
 
 * `AllocationRequestAction = ARA_Accept | ARA_Reject | ARA_Custom { id : Text }`
@@ -99,8 +106,7 @@ A precise statement of what generic V2-wallet interop covers:
 A V2-only wallet — one that implements `Splice.Api.Token.AllocationV2` + `Splice.Api.Token.AllocationRequestV2` and nothing else — can complete the **standard-set lifecycle** for a Canton-Streams stream without any stream-specific code:
 
 * Render an `AllocationRequest` from `AllocationRequestView` (settlement info, allocations list, `availableActions` map)
-* Sign `AllocationFactory_Allocate` to create the committed + iterated allocation at stream start
-* Sign `AllocationRequest_Accept` / `AllocationRequest_Reject`
+* Sign `AllocationFactory_Allocate` to create the committed + iterated allocation at stream start (via the `StreamAdmin` / `StreamFlowAdmin` / `MilestoneAdmin` allocation path)
 * Sign `Allocation_Cancel` to release the committed allocation
 * Display `numIterations`, `originalAllocationId`, and the leg list verbatim
 
@@ -134,15 +140,16 @@ The wallet-agnostic claim holds for the **majority of stream activity** (creates
 | Surface | Trust source |
 |---|---|
 | Standard V2 interface choices (`AllocationFactory_Allocate`, `Allocation_Settle`, etc.) | **Interface-fixed**: wallet renders from typed view fields. Reliable. |
-| `meta` / `extraArgs` content + the library's template choices (`StreamEscrow.Sync_Iteration` etc.) | **dApp-honesty**: wallet must surface raw args alongside any operator-supplied label. |
+| `meta` / `extraArgs` content + the library's template choices (`StreamAdmin.Sync_Iteration` etc.) | **dApp-honesty**: wallet must surface raw args alongside any operator-supplied label. |
 | Executor's settle calls | **Operator trust**: per the CIP-0112 update, `SettlementFactory_SettleBatch` requires only executor authority. By exercising `AllocationFactory_Allocate(committed=True)`, the sender effectively pre-authorizes the executor's settlement series within the iteration chain. |
 
 ## What lives where
 
 * **On-ledger custody**: V2 `Allocation` contracts (standard, not ours). Hold the locked funds. Chain via `originalAllocationId`.
-* **On-ledger admin**: our `StreamEscrow` / `StreamFlow` / `MilestoneEscrow` templates. Record metadata, accrual config, sync per-iteration state. Not custody contracts.
-* **Off-chain accrual math**: SDK `accrual/executor.ts`. Computes `period_amount` from vesting mode + time.
-* **Off-chain settlement orchestration**: proxy's `transfer-events-subscriber.ts`. Reacts to V2 `EventLog_HoldingsChange` events; exercises `Allocation_Settle` via the operator's `SigningProvider` on the Wallet Gateway.
+* **On-ledger admin (iterated)**: our `StreamAdmin` / `StreamFlowAdmin` / `MilestoneAdmin` templates. Originate the committed-iterated allocation (`AllocationFactory_Allocate` with `committed=True`, `nextIterationFunding=Some`) and record per-iteration state via `Sync_Iteration` / `Sync_Iteration_Flow`.
+* **On-ledger stream templates**: our `StreamEscrow` / `StreamFlow` / `MilestoneEscrow` templates. Carry native withdraw/cancel semantics and a non-committed, non-iterated advertisement view. Not custody contracts.
+* **Off-chain accrual math**: SDK `accrual/calculator.ts`. Computes the `withdrawable` / `accrued` amount from vesting mode + time.
+* **Off-chain settlement orchestration**: proxy's `transfer-events-subscriber.ts`. Reacts to `Allocation_Settle` / `AllocationSettle` events (polled over the Ledger API with `ledgerApiToken`) and advances stream admin state (`Withdraw_Stream` / `Withdraw_Flow` / `ConfirmMilestone`). It does not itself exercise `Allocation_Settle` and holds no `SigningProvider` or Wallet Gateway connection.
 
 ## Reference implementations to mirror
 

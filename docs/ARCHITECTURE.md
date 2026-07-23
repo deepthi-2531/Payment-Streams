@@ -51,6 +51,7 @@ Compiled to DARs and uploaded to the participant.
 | `UnifiedStreamRequest` | `CantonStreams.Workflow.UnifiedStream` | Propose / accept / counter-propose state machine |
 | `BatchCreateRequest` | `CantonStreams.Workflow.BatchCreate` | Sender-side bulk stream creation |
 | `RenewRequest` | `CantonStreams.Workflow.RenewStream` | Per-period renewal for `RenewableTerm` vesting |
+| `OperatorEscrow` | `CantonStreams.Stream.OperatorEscrow` | Operator-custodied "deposit once, operator streams" escrow — the operator is sole signatory and holds the deposited funds; payer/payee are recorded fields, not stakeholders (for wallets that cannot vet the main DAR) |
 
 Stream-admin templates expose the V2 `AllocationRequest` shape for the full
 feature set. Per CIP-0112 §5, V1 assets are expected to publish V2 interfaces
@@ -202,6 +203,7 @@ See [THREAT-MODEL.md](THREAT-MODEL.md) for the full threat analysis.
 |---|---|---|
 | `config/asset-registry.json` | In-repo, public | Per-asset admin / Scan / wallet-gateway routing, V2 capability flags |
 | Proxy env vars | `.env` or runtime env | `CANTON_HOST/PORT`, `CANTON_JSON_API_URL`, `CANTON_SYNCHRONIZER_ID`, `CANTON_STREAMS_PACKAGE_ID`, `PROXY_AUTH_MODE`, `PROXY_SERVICE_TOKEN`, etc. |
+| Proxy escrow-custody controls | `.env` or runtime env | `ESCROW_DISCLOSED_CUSTODY` (gate for co-hosted/operator-custodial money-leg submission), `ESCROW_MAX_TOTAL_CC` (aggregate custody cap), `ESCROW_SOLVENCY_MONITOR_SECONDS` (solvency drift-monitor cadence), `PROXY_ALLOW_INSECURE_WALLET_URL` (allow http wallet gateway on a trusted private network; https is required otherwise) |
 | Dashboard env vars | `packages/dashboard/.env.local` (gitignored) | `VITE_SKIP_WALLET_PICKER`, `VITE_WALLET_GATEWAY_URL`, `VITE_WC_PROJECT_ID` |
 | Local-deployment metadata | `config/local.<env>.json` (gitignored) | Per-environment party ids, package ids, contract ids for sandbox debug scripts |
 
@@ -209,6 +211,6 @@ Templates live next to the gitignored counterparts (`config/local.testnet.exampl
 
 ## Versioning
 
-- Workspace packages and the main Daml DAR ship as one release candidate line: npm packages use `1.0.0-rc.1`, and the Daml DAR uses numeric version `1.0.0`.
+- npm packages use `1.0.0-rc.1`; the main Daml DAR carries its own numeric version, currently `1.3.0` (bumped from `1.2.0` to add `OperatorEscrow`).
 - DAR filenames are `canton-streams-<version>.dar`.
 - See [RELEASING.md](../RELEASING.md) for the tag-driven npm release process.

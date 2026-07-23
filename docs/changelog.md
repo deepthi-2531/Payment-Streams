@@ -4,6 +4,18 @@ All notable changes to Canton Payment Streams are documented here. The format is
 
 ## [Unreleased]
 
+### Added
+
+- **Operator-custodied escrow/settlement lane** (`packages/proxy/src/escrow.ts`, backed by the `OperatorEscrow` Daml template): the "deposit once, operator streams" path for wallets that cannot vet the `canton-streams` DAR. This is a disclosed operator-custodial model — the escrow party's keys are the validator node's keys. Hardened with holding-only delivery verification (deposits require a delivered holding; reason `deposit_undelivered`), an aggregate custody cap (`ESCROW_MAX_TOTAL_CC`; reason `escrow_cap_exceeded`), a pre-release solvency interlock and continuous pool-vs-owed drift monitor (`ESCROW_SOLVENCY_MONITOR_SECONDS`; reason `escrow_pool_insolvent`, log tag `escrow_solvency_drift`), and a co-hosting custody-disclosure gate (`ESCROW_DISCLOSED_CUSTODY`; reasons `undisclosed_custody` / `undisclosed_custody_probe_failed`).
+- **Cross-process single-writer store lock** (`packages/proxy/src/store-lock.ts`): serializes every read-modify-write of the proxy's JSON stores across processes on one host, preventing last-writer-wins clobbering during redeploy or replica overlap (reason `store_lock_timeout`).
+- **`self_stream` rejection** on stream creation — the proxy refuses a stream whose payer equals its recipient.
+- **HTTPS wallet-gateway enforcement**: the proxy rejects a non-`https` wallet gateway URL unless the host is loopback or `PROXY_ALLOW_INSECURE_WALLET_URL=true` (trusted private network escape hatch).
+
+### Changed
+
+- New proxy env vars: `ESCROW_DISCLOSED_CUSTODY`, `ESCROW_MAX_TOTAL_CC`, `ESCROW_SOLVENCY_MONITOR_SECONDS`, `PROXY_ALLOW_INSECURE_WALLET_URL`.
+- New settlement-lane reason codes: `settlement_mismatch`, `deposit_undelivered`, `self_stream`, `undisclosed_custody`, `undisclosed_custody_probe_failed`, `escrow_cap_exceeded`, `escrow_pool_insolvent`, `store_lock_timeout`.
+
 ## [1.0.0-rc.1] - 2026-06-11
 
 ### Added
