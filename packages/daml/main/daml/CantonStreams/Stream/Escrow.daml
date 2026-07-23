@@ -239,12 +239,25 @@ template StreamEscrow
                 then (renewTime, additionalDeposit, 0.0)
                 else (config.startTime, config.totalDeposited + additionalDeposit, state.totalWithdrawn)
 
+        let renewedConfig = config with
+              startTime = newStartTime
+              totalDeposited = newTotalDeposited
+              endTime = newEndTime
+
+        -- An Active renewal keeps `startTime` but extends `endTime`, so the
+        -- larger denominator could price the curve below what the recipient has
+        -- already accrued. Forbid that: the renewed curve at ledger time must be
+        -- at least the pre-renewal accrued amount. The Completed branch starts a
+        -- fresh term and is exempt (the prior term is fully vested).
+        if state.status == Active
+          then assertMsg
+                 "Renewal would reduce the recipient's accrued entitlement"
+                 (computeAccrued renewedConfig now >= computeAccrued config now)
+          else pure ()
+
         archive self
         create this with
-          config = config with
-            startTime = newStartTime
-            totalDeposited = newTotalDeposited
-            endTime = newEndTime
+          config = renewedConfig
           state = state with
             status = Active
             totalWithdrawn = newTotalWithdrawn
@@ -263,6 +276,11 @@ template StreamEscrow
         let accrued = computeAccrued config completeTime
         assertMsg "Stream not fully vested" (accrued >= config.totalDeposited)
         assertMsg "Stream not active" (state.status == Active)
+        -- Refuse to complete while the recipient still has an unwithdrawn balance:
+        -- Completed would strand it (Withdraw requires Active), and a later
+        -- Renew-on-Completed would orphan the remainder.
+        assertMsg "Withdraw the remaining balance before completing"
+          (state.totalWithdrawn == config.totalDeposited)
 
         archive self
         create this with

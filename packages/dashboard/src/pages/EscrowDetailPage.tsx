@@ -106,7 +106,7 @@ function EscrowDetail({ view }: { view: EscrowView }) {
         <Row label={isPayer ? 'From (you)' : 'From'} value={displayName(view.originalPayer)} full={view.originalPayer} me={isPayer} />
         <Row label={isPayer ? 'To' : 'To (you)'} value={displayName(view.recipient)} full={view.recipient} me={party === view.recipient} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 0 0', fontSize: 11.5, color: 'var(--fg-4)' }}>
-          <ShieldCheck size={13} style={{ color: 'var(--accent)' }} /> Funds held safely by CC Streams while the stream runs.
+          <ShieldCheck size={13} style={{ color: 'var(--accent)' }} /> Held by CC Streams (the operator) while the stream runs.
         </div>
       </div>
 
@@ -142,7 +142,7 @@ function PaymentHistory({ view }: { view: EscrowView }) {
         {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
         <span style={{ fontSize: 13.5, fontWeight: 500 }}>Payment history</span>
         <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: verified === false ? 'var(--warn)' : 'var(--accent)' }}>
-          <ShieldCheck size={13} /> {verified === false ? 'Check needed' : 'Verified on-chain'}
+          <ShieldCheck size={13} /> {verified === false ? 'Check needed' : 'Operator-reported'}
         </span>
       </button>
 

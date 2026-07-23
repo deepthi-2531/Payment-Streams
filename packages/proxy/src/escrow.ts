@@ -19,13 +19,16 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync, unlinkSync, linkSync, statSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { requireAmount, requirePartyId, requireId } from './validation.js';
 import {
   settleCycle,
   submit,
   ledger,
   prepareSettleCommand,
   prepareSettleCommandV2,
+  verifyDeliveryOnScan,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
@@ -159,8 +162,9 @@ export interface EscrowReconciliation {
     operatorReleased?: string;
     operatorTotalDeposited?: string;
     operatorStatus?: string;
-    /** Whole escrow party's free Amulet balance — commingled across escrows. */
-    escrowFreeBalance: string;
+    /** Whether the custodian holds at least this escrow's remaining. The absolute
+     * pool balance is commingled across escrows, so it is not exposed. */
+    custodianSolvent?: boolean;
     commingled: boolean;
   };
   offers: Array<{
@@ -212,21 +216,142 @@ function escrowStateFile(config: V1LaneConfig): string {
 function loadEscrows(config: V1LaneConfig): EscrowStore {
   const f = escrowStateFile(config);
   if (!existsSync(f)) return { escrows: {} };
+  const raw = readFileSync(f, 'utf8');
   try {
-    const raw = JSON.parse(readFileSync(f, 'utf8'));
-    return { escrows: raw.escrows ?? {} };
+    const parsed = JSON.parse(raw);
+    return { escrows: parsed.escrows ?? {} };
   } catch {
+    // A parse failure of a non-empty file means the store is corrupt, not absent.
+    // Overwriting it with {} would discard every escrow record, so fail loud.
+    if (raw.trim() !== '') {
+      throw new V1LaneError(
+        500,
+        'escrow_store_corrupt',
+        `escrow store ${f} exists but is unparseable; refusing to overwrite it`,
+      );
+    }
     return { escrows: {} };
   }
 }
 
 function saveEscrows(config: V1LaneConfig, store: EscrowStore): void {
-  writeFileSync(escrowStateFile(config), JSON.stringify(store, null, 2));
+  // Write to a temp file then rename, so a crash mid-write can't truncate the
+  // live store (rename is atomic on the same filesystem).
+  const f = escrowStateFile(config);
+  const tmp = `${f}.tmp`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, f);
 }
 
 const dec = (x: string | number): string => Number(x).toFixed(10);
 const remainingOf = (e: EscrowAgreement): number =>
   Math.max(0, Number(e.totalDeposited) - Number(e.released));
+
+/** Total still owed across every active escrow — the floor the custody party
+ * must always be able to cover. Shared by the per-action solvency interlock and
+ * the continuous drift monitor so both read the same number. */
+const sumOwed = (store: EscrowStore): number =>
+  Object.values(store.escrows)
+    .filter((x) => x.status === 'active')
+    .reduce((s, x) => s + remainingOf(x), 0);
+
+function escrowLockFile(config: V1LaneConfig): string {
+  return escrowStateFile(config).replace(/\.json$/i, '') + '.lock';
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err: any) {
+    // EPERM means the pid exists but we may not signal it — still alive.
+    return err?.code === 'EPERM';
+  }
+}
+
+/** Age of the current holder, from its recorded timestamp or, if that is
+ * unreadable, the lock file's mtime — never Infinity, so an unparseable lock is
+ * waited on and only reclaimed once it truly ages out. */
+function lockAgeMs(lockPath: string, holderAt: unknown): number {
+  const at = Number(holderAt);
+  if (Number.isFinite(at) && at > 0) return Date.now() - at;
+  try {
+    return Date.now() - statSync(lockPath).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+
+/** Acquire an exclusive on-disk lock for the escrow store, returning a token the
+ * holder must present to release it. The in-process mutationLock only serializes
+ * one Node process; two processes sharing the store (a second replica, or the old
+ * instance during the slow SIGTERM->SIGKILL window on redeploy) would each read a
+ * stale snapshot and could double-release. This lockfile makes the whole
+ * load->mutate->save critical section single-writer across processes on one host.
+ *
+ * The lock is created by writing a fully-formed record to a private temp file and
+ * hard-linking it into place: link is atomic and fails if the target exists, so
+ * the lock is never observed empty (no steal-mid-write race). A held lock is
+ * reclaimed only when its holder pid is dead, or it has aged past staleMs (which a
+ * genuine mutation never reaches) — a live, in-progress holder is waited on, never
+ * overtaken. */
+async function acquireEscrowLock(lockPath: string, staleMs: number): Promise<string> {
+  const token = `${process.pid}:${randomUUID()}`;
+  const tmp = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ pid: process.pid, at: Date.now(), token }));
+  const start = Date.now();
+  try {
+    for (;;) {
+      try {
+        linkSync(tmp, lockPath);
+        return token;
+      } catch (err: any) {
+        if (err?.code !== 'EEXIST') throw err;
+        let holder: { pid?: number; at?: number } = {};
+        try {
+          holder = JSON.parse(readFileSync(lockPath, 'utf8'));
+        } catch {
+          /* unreadable — fall through to the mtime-based age check */
+        }
+        const aged = lockAgeMs(lockPath, holder.at) > staleMs;
+        const dead = typeof holder.pid === 'number' ? !pidAlive(holder.pid) || aged : aged;
+        if (dead) {
+          try {
+            unlinkSync(lockPath);
+          } catch {
+            /* another waiter cleared it first */
+          }
+          continue;
+        }
+        if (Date.now() - start > staleMs) {
+          throw new V1LaneError(
+            503,
+            'escrow_lock_timeout',
+            `could not acquire the escrow store lock within ${staleMs}ms; another instance is holding it`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+    }
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch {
+      /* temp already gone */
+    }
+  }
+}
+
+/** Release a lock only if we still hold it: if it was reclaimed as stale and now
+ * belongs to another process, leave that process's lock in place. */
+function releaseEscrowLock(lockPath: string, token: string): void {
+  try {
+    const holder = JSON.parse(readFileSync(lockPath, 'utf8'));
+    if (holder.token === token) unlinkSync(lockPath);
+  } catch {
+    /* missing or unreadable — nothing of ours to release */
+  }
+}
 
 /** Minimal synthetic agreement so `settleCycle` can fire a sender→receiver
  * transfer for any pair of parties (deposit, release, refund legs). */
@@ -566,12 +691,127 @@ export class EscrowLane {
   // Serialize every mutating path through this one queue.
   private mutationLock: Promise<unknown> = Promise.resolve();
   private withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const run = this.mutationLock.then(fn, fn);
+    const run = this.mutationLock.then(
+      () => this.withStoreLock(fn),
+      () => this.withStoreLock(fn),
+    );
     this.mutationLock = run.then(
       () => undefined,
       () => undefined,
     );
     return run;
+  }
+
+  /** Hold the cross-process store lock for the duration of one mutation. The
+   * in-process chain above already serializes this process, so the file lock
+   * only ever contends with a second process sharing the store. Held across the
+   * whole load->transfer->save section so the second process re-reads the
+   * committed result instead of racing a stale snapshot. */
+  private solvencyBreachStreak = 0;
+  private async withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
+    const lockPath = escrowLockFile(this.config);
+    // Generous enough to outlast a real release round-trip; a dead holder is
+    // reclaimed immediately by pid, so this only bounds an unreadable-pid lock.
+    const staleMs = Math.max(120000, (this.config.escrowTickSeconds + 60) * 1000);
+    const token = await acquireEscrowLock(lockPath, staleMs);
+    try {
+      return await fn();
+    } finally {
+      releaseEscrowLock(lockPath, token);
+    }
+  }
+
+  /** Live free CC balance held by the shared escrow custody party. */
+  private async poolFreeBalance(): Promise<number> {
+    const AMULET = '#splice-amulet:Splice.Amulet:Amulet';
+    const { offset } = await ledger(this.config, 'GET', '/v2/state/ledger-end');
+    const rows: any[] = await ledger(this.config, 'POST', '/v2/state/active-contracts', {
+      filter: {
+        filtersByParty: {
+          [this.config.escrowParty]: {
+            cumulative: [
+              { identifierFilter: { TemplateFilter: { value: { templateId: AMULET, includeCreatedEventBlob: false } } } },
+            ],
+          },
+        },
+      },
+      verbose: false,
+      activeAtOffset: offset,
+    });
+    let bal = 0;
+    for (const r of rows) {
+      const v = (r.contractEntry?.JsActiveContract?.createdEvent?.createArgument?.amount ?? {})?.initialAmount;
+      if (v !== undefined) bal += Number(v);
+    }
+    return bal;
+  }
+
+  /** Refuse to move funds out of the shared custody party if doing so would dip
+   * into balance owed to OTHER active escrows: the party must hold at least the
+   * sum of every active escrow's remaining. Enforced before every release and
+   * refund, so one escrow can never spend another's deposit. This is a solvency
+   * interlock over the commingled party, not literal per-escrow sub-accounts
+   * (which would need separate parties or an on-ledger lock). */
+  private async assertPoolSolvent(store: EscrowStore): Promise<void> {
+    const owed = sumOwed(store);
+    if (owed <= 0) return;
+    const pool = await this.poolFreeBalance();
+    if (pool + 1e-6 < owed) {
+      throw new V1LaneError(
+        409,
+        'escrow_pool_insolvent',
+        `escrow custody balance ${pool.toFixed(4)} CC is below the ${owed.toFixed(4)} CC owed across active escrows; halting to protect other depositors`,
+      );
+    }
+  }
+
+  /** Continuous, read-only solvency probe. The per-action interlock only fires
+   * when a release or refund is attempted; this runs on a timer so an out-of-band
+   * drain of the custody party (fees, a mis-scoped transfer, holding expiry)
+   * between actions is still surfaced. It never moves funds. A single breach can
+   * be the ordinary release window — the on-chain debit lands before `released`
+   * is persisted — so an alert is only escalated after two consecutive breached
+   * probes; a transient skew clears on the next cycle, a real drain persists.
+   * This detects aggregate drift only (custody < total owed); per-escrow
+   * shortfalls under the commingled cushion are not visible here. Log-only: it is
+   * a signal for an external pager, not an enforcement point. */
+  async checkSolvency(): Promise<void> {
+    if (!this.enabled) return;
+    const owedBefore = sumOwed(loadEscrows(this.config));
+    if (owedBefore <= 0) {
+      this.solvencyBreachStreak = 0;
+      return;
+    }
+    let pool: number;
+    try {
+      pool = await this.poolFreeBalance();
+    } catch (err) {
+      console.error(`escrow_solvency_probe_unreadable owed=${owedBefore.toFixed(4)} err=${(err as Error).message}`);
+      return;
+    }
+    // Re-read owed after the balance. A release debits the chain before it
+    // persists `released`, so a probe landing in that window would otherwise read
+    // a debited pool against a stale-high owed. Taking the lower of the two owed
+    // snapshots biases an in-flight release toward not alerting; a real persistent
+    // drain trips both snapshots and, with the two-cycle streak, still fires.
+    const store = loadEscrows(this.config);
+    const owed = Math.min(owedBefore, sumOwed(store));
+    const active = Object.values(store.escrows).filter((x) => x.status === 'active').length;
+    if (pool + 1e-6 < owed) {
+      this.solvencyBreachStreak += 1;
+      const deficit = (owed - pool).toFixed(4);
+      if (this.solvencyBreachStreak >= 2) {
+        console.error(
+          `escrow_solvency_drift level=alert pool=${pool.toFixed(4)} owed=${owed.toFixed(4)} deficit=${deficit} active=${active} streak=${this.solvencyBreachStreak}`,
+        );
+      } else {
+        console.warn(
+          `escrow_solvency_drift level=warn pool=${pool.toFixed(4)} owed=${owed.toFixed(4)} deficit=${deficit} active=${active}`,
+        );
+      }
+    } else {
+      this.solvencyBreachStreak = 0;
+    }
   }
 
   /** Public escrow config — the deposit target a wallet needs to fund an escrow. */
@@ -619,25 +859,74 @@ export class EscrowLane {
   }
   private async createEscrowImpl(input: CreateEscrowInput): Promise<EscrowAgreement> {
     this.requireEnabled();
-    if (!input.originalPayer) throw new V1LaneError(400, 'missing_payer', 'originalPayer required');
-    if (!input.recipient) throw new V1LaneError(400, 'missing_recipient', 'recipient required');
-    if (!(Number(input.totalDeposit) > 0)) throw new V1LaneError(400, 'invalid_deposit', 'totalDeposit must be > 0');
-    if (!(Number(input.ratePerCycle) > 0)) throw new V1LaneError(400, 'invalid_rate', 'ratePerCycle must be > 0');
+    // Validate every field before any transfer or ledger write, so a bad input
+    // can't fire the on-chain deposit and then fail the create, stranding funds.
+    const originalPayer = requirePartyId(input.originalPayer, 'originalPayer');
+    const recipient = requirePartyId(input.recipient, 'recipient');
+    const totalDeposit = requireAmount(input.totalDeposit, 'totalDeposit').toString();
+    const ratePerCycle = requireAmount(input.ratePerCycle, 'ratePerCycle').toString();
+    const cadenceSeconds = input.cadenceSeconds;
+    if (!Number.isInteger(cadenceSeconds) || cadenceSeconds <= 0) {
+      throw new V1LaneError(400, 'invalid_cadence', 'cadenceSeconds must be a positive integer');
+    }
 
-    const escrowId = input.escrowId ?? `esc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const escrowId = input.escrowId
+      ? requireId(input.escrowId, 'escrowId')
+      : `esc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const store = loadEscrows(this.config);
     if (store.escrows[escrowId]) throw new V1LaneError(409, 'escrow_exists', `escrow "${escrowId}" already exists`);
 
     // Deposit leg. Either the wallet already did it (fundingTransferId given) or
     // the proxy submits it as the payer (hosted payer only).
-    let fundingTransferId = input.fundingTransferId ?? '';
+    let fundingTransferId = input.fundingTransferId ? requireId(input.fundingTransferId, 'fundingTransferId') : '';
+    // What actually funds the escrow: the on-chain amount we verify for a
+    // wallet-signed deposit, or the amount the proxy transfers otherwise.
+    let depositAmount = totalDeposit;
+    if (fundingTransferId) {
+      // One funding id may back at most one escrow.
+      for (const other of Object.values(store.escrows)) {
+        if (other.fundingTransferId && other.fundingTransferId === fundingTransferId) {
+          throw new V1LaneError(409, 'funding_reused', 'fundingTransferId already backs another escrow');
+        }
+      }
+      // Verify the deposit committed on-chain — payer -> escrow party in CC for at
+      // least the requested amount — and take the verified on-chain amount as the
+      // funded total, so a forged or too-small id can't mint an over-funded escrow.
+      const verified = await verifyDeliveryOnScan(this.config, fundingTransferId, {
+        sender: originalPayer,
+        receiver: this.config.escrowParty,
+        minAmount: Number(totalDeposit),
+      });
+      depositAmount = dec(verified.amount);
+    }
+    // Aggregate custody cap: refuse to grow the total tracked obligation beyond a
+    // configured ceiling, so a single commingled key can never be trusted with
+    // more than that. On the proxy-submitted path this runs before the deposit
+    // transfer fires, so it gates fund movement; on the wallet-signed path the CC
+    // is already on chain when we reject, so a distinct alert is logged for the
+    // out-of-band refund. Disabled when the cap is 0.
+    if (this.config.escrowMaxTotalCC > 0) {
+      const projected = sumOwed(store) + Number(depositAmount);
+      if (projected > this.config.escrowMaxTotalCC + 1e-6) {
+        if (fundingTransferId) {
+          console.error(
+            `escrow_cap_rejected_funded party=${this.config.escrowParty} payer=${originalPayer} amount=${Number(depositAmount).toFixed(4)} fundingTransferId=${fundingTransferId} refund_required=true`,
+          );
+        }
+        throw new V1LaneError(
+          409,
+          'escrow_cap_exceeded',
+          `deposit of ${Number(depositAmount).toFixed(4)} CC would raise tracked escrow obligation to ${projected.toFixed(4)} CC, over the ${this.config.escrowMaxTotalCC} CC aggregate cap`,
+        );
+      }
+    }
     let depositPending: string | undefined;
     let depositExpires: string | undefined;
     if (!fundingTransferId) {
       const deposit = await settleCycle(
         this.config,
-        leg(input.originalPayer, this.config.escrowParty, `${escrowId}:deposit`),
-        Number(input.totalDeposit),
+        leg(originalPayer, this.config.escrowParty, `${escrowId}:deposit`),
+        Number(depositAmount),
         0,
       );
       fundingTransferId = deposit.updateId;
@@ -648,11 +937,11 @@ export class EscrowLane {
     const now = new Date();
     const e: EscrowAgreement = {
       escrowId,
-      originalPayer: input.originalPayer,
-      recipient: input.recipient,
-      ratePerCycle: dec(input.ratePerCycle),
-      cadenceSeconds: input.cadenceSeconds,
-      totalDeposited: dec(input.totalDeposit),
+      originalPayer,
+      recipient,
+      ratePerCycle: dec(ratePerCycle),
+      cadenceSeconds,
+      totalDeposited: dec(depositAmount),
       released: dec(0),
       fundingTransferId,
       status: 'active',
@@ -669,9 +958,9 @@ export class EscrowLane {
     appendLedger(e, this.config, {
       kind: 'deposit',
       direction: 'in',
-      from: input.originalPayer,
+      from: originalPayer,
       to: this.config.escrowParty,
-      amount: dec(input.totalDeposit),
+      amount: dec(depositAmount),
       updateId: fundingTransferId || undefined,
       contractCid: e.operatorEscrowCid,
       delivery: depositPending ? 'pending_offer' : 'direct',
@@ -687,9 +976,9 @@ export class EscrowLane {
   }
 
   /** Release one cycle to the payee (operator-signed). Bounded by the remaining
-   * deposited balance; advances `released` and the schedule. Idempotent per
-   * tick via `nextDueAt`. `initiatedBy` distinguishes the automated streamer
-   * from a manual operator trigger for the audit trail. */
+   * deposited balance and the cadence schedule: a release is refused until
+   * `nextDueAt` has passed. Advances `released` and `nextDueAt`. `initiatedBy`
+   * distinguishes the automated streamer from a payer-triggered release. */
   async releaseEscrowOnce(
     escrowId: string,
     initiatedBy: EscrowInitiator = 'streamer',
@@ -706,6 +995,12 @@ export class EscrowLane {
     if (!e) throw new V1LaneError(404, 'escrow_not_found', `escrow "${escrowId}" not found`);
     if (e.status !== 'active') return e;
 
+    // Enforce the cadence on every release path, not just the streamer, so no
+    // caller can fire releases back-to-back and drain the deposit early.
+    if (Date.parse(e.nextDueAt) > Date.now()) {
+      throw new V1LaneError(409, 'cycle_not_due', `next release for "${escrowId}" is not due until ${e.nextDueAt}`);
+    }
+
     const remaining = remainingOf(e);
     if (remaining <= 0) {
       e.status = 'completed';
@@ -716,6 +1011,7 @@ export class EscrowLane {
     const cycleNo = e.releases.length + 1;
     const scheduledDueAt = e.nextDueAt; // baseline for cadence-adherence
 
+    await this.assertPoolSolvent(store);
     const res = await settleCycle(
       this.config,
       leg(this.config.escrowParty, e.recipient, `${escrowId}:release`),
@@ -780,6 +1076,7 @@ export class EscrowLane {
     let refundTransferId = 'none';
     let refundPending: string | undefined;
     if (remaining > 0) {
+      await this.assertPoolSolvent(store);
       const res = await settleCycle(
         this.config,
         leg(this.config.escrowParty, e.originalPayer, `${escrowId}:refund`),
@@ -913,12 +1210,28 @@ export class EscrowLane {
         if (activeCids.has(l.transferInstructionCid)) {
           next = 'active'; // still locked (may be past deadline but not yet swept)
         } else {
-          // Consumed from the ACS. Past its executeBefore it could not have been
-          // accepted (accept fails deadline-exceeded), so it was swept = expired.
           const pastDeadline = l.offerExpiresAt ? Date.parse(l.offerExpiresAt) <= nowMs : false;
-          next = pastDeadline ? 'expired' : 'accepted';
+          if (pastDeadline) {
+            // Past executeBefore, an accept can no longer succeed → it was swept.
+            next = 'expired';
+          } else if (l.direction === 'out') {
+            // An outgoing offer (escrow is the sender) that leaves the ACS before
+            // its deadline can only have been accepted — the operator never
+            // withdraws its own releases.
+            next = 'accepted';
+          } else {
+            // An incoming deposit offer can leave the ACS by accept OR a payer
+            // withdraw; exit alone can't tell them apart, so don't infer delivery.
+            next = 'active';
+          }
         }
         if (l.offerStatus !== next) {
+          // A release offer that reverted (expired, swept back to escrow) returns
+          // its funds to custody, so undo its advance of `released` — otherwise
+          // `remaining` under-counts and the funds are stranded.
+          if (next === 'expired' && l.kind === 'release') {
+            e.released = dec(Math.max(0, Number(e.released) - Number(l.amount)));
+          }
           l.offerStatus = next;
           mutated = true;
         }
@@ -978,7 +1291,7 @@ export class EscrowLane {
       checks.push({
         name: 'escrowSolvency',
         ok: escrowFreeBalance + dust >= Number(sum.remaining),
-        detail: `escrow free balance ${escrowFreeBalance.toFixed(4)} CC ≥ this escrow's remaining ${sum.remaining} (commingled lower bound)`,
+        detail: `custodian holds at least this escrow's remaining ${sum.remaining} (commingled lower bound)`,
       });
     }
 
@@ -1017,7 +1330,7 @@ export class EscrowLane {
         operatorReleased: op?.createArgument?.released,
         operatorTotalDeposited: op?.createArgument?.totalDeposited,
         operatorStatus: op?.createArgument?.status,
-        escrowFreeBalance: dec(escrowFreeBalance),
+        custodianSolvent: acsOk ? escrowFreeBalance + dust >= Number(sum.remaining) : undefined,
         commingled: true,
       },
       offers,
@@ -1057,5 +1370,26 @@ export function startEscrowStreamer(lane: EscrowLane, config: V1LaneConfig): () 
       running = false;
     });
   }, ms);
+  return () => clearInterval(timer);
+}
+
+/** Run the continuous solvency drift probe on its own cadence (default: the
+ * streamer tick, floor 10s). Read-only; emits `escrow_solvency_drift` for an
+ * external pager to watch. Returns a stop function. */
+export function startEscrowSolvencyMonitor(lane: EscrowLane, config: V1LaneConfig): () => void {
+  if (!lane.enabled) return () => {};
+  const ms = Math.max(10, config.solvencyMonitorSeconds || config.escrowTickSeconds) * 1000;
+  let running = false;
+  const timer = setInterval(() => {
+    if (running) return;
+    running = true;
+    void lane
+      .checkSolvency()
+      .catch(() => {})
+      .finally(() => {
+        running = false;
+      });
+  }, ms);
+  timer.unref?.();
   return () => clearInterval(timer);
 }

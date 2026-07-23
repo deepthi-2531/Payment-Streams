@@ -120,7 +120,9 @@ testRenewableRenewWithTopUp = script do
       deposit = 9000.0
       midpoint = time (date 2025 Feb 15) 0 0 0
       additionalDeposit = 6000.0
-      newEnd = time (date 2025 Jul 1) 0 0 0
+      -- May 1 keeps the renewed curve above what Bob already withdrew at the
+      -- midpoint; a longer term would price it below and be rejected.
+      newEnd = time (date 2025 May 1) 0 0 0
       postRenewalWithdraw = time (date 2025 May 1) 0 0 0
 
   setTime start
@@ -169,6 +171,62 @@ testRenewableRenewWithTopUp = script do
   debug ("GOLDEN:renewable_topup:w2_totalWithdrawn:" <> show r2.newTotalWithdrawn)
 
   assertMsg "Post-renewal withdraw correct" (r2.amountWithdrawn == expectedWithdrawable)
+
+-- | A renewal must not re-price the curve below what the recipient already
+-- withdrew. Bob withdraws 4500 at the midpoint; stretching the term to Jul 1
+-- with only 6000 more would price the midpoint below 4500, so it is rejected.
+testRenewCannotDiluteAccrued : Script ()
+testRenewCannotDiluteAccrued = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+      midpoint = time (date 2025 Feb 15) 0 0 0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "renew-dilute" start end 90 deposit True
+
+  setTime midpoint
+  _ <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = midpoint
+
+  escrows <- query @StreamEscrow bob
+  let (updatedCid, _) = head escrows
+
+  submitMustFail alice do
+    exerciseCmd updatedCid Renew_Stream with
+      additionalDeposit = 6000.0
+      newEndTime = time (date 2025 Jul 1) 0 0 0
+      renewTime = midpoint
+
+-- | Completing a stream that still has an unwithdrawn balance would strand it,
+-- so it is refused.
+testCompleteRequiresFullWithdraw : Script ()
+testCompleteRequiresFullWithdraw = script do
+  alice <- allocateParty "Alice"
+  bob <- allocateParty "Bob"
+
+  let start = time (date 2025 Jan 1) 0 0 0
+      end   = time (date 2025 Apr 1) 0 0 0
+      deposit = 9000.0
+      midpoint = time (date 2025 Feb 15) 0 0 0
+
+  setTime start
+  escrowCid <- createRenewableStream alice bob "complete-guard" start end 90 deposit True
+
+  -- Fully vested (ledger at end), but withdraw only the midpoint's accrual.
+  setTime end
+  _ <- submit bob do
+    exerciseCmd escrowCid Withdraw_Stream with withdrawTime = midpoint
+
+  escrows <- query @StreamEscrow bob
+  let (cid2, _) = head escrows
+
+  -- Not fully withdrawn → completing would strand the remainder, so it fails.
+  submitMustFail bob do
+    exerciseCmd cid2 Complete_Stream with completeTime = end
 
 -- | Test: multiple sequential renewals.
 testRenewableMultipleRenewals : Script ()

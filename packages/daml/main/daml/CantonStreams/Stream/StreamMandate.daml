@@ -30,6 +30,24 @@
 -- cross-node deployments; it requires binding the transfer-instruction package
 -- as a dependency (a consistent token-standard DAR set). See
 -- `docs/SETTLEMENT-DESIGN.md`.
+--
+-- ## Custody depends on where the payer is hosted
+--
+-- The money leg runs through `settleCycle`, a `TransferFactory_Transfer`
+-- submitted with `actAs = [payer]`. Whether the operator can exceed the mandate
+-- therefore depends on topology:
+--
+--   * In the current co-hosted test setup the payer shares the operator's
+--     participant, so the operator's ledger token can act as the payer and the
+--     rate/cap/cadence bounds and revocation are honored off-ledger by the
+--     operator, not enforced on-ledger. Do not call this non-custodial.
+--   * In the intended topology the payer is on their own participant (operator =
+--     escrow, receiver on a separate node). The payer's authority is then not
+--     available to the operator, so Canton enforces the mandate bounds and
+--     revocation on-ledger and the model is genuinely non-custodial.
+--
+-- The `RecordPull`/`PullCycle` in-choice variant is an alternative that enforces
+-- the bounds even under co-hosting; it is not wired today.
 module CantonStreams.Stream.StreamMandate where
 
 import DA.Time (addRelTime, seconds)
@@ -101,10 +119,12 @@ template StreamMandate
           cyclesPulled = cyclesPulled + 1
           lastPulledAt = Some now
 
-    -- | The payer revokes the mandate. No operator cooperation required.
-    choice Revoke : ()
+    -- | The payer revokes the mandate. No operator cooperation required. Flips
+    -- `active` to False (rather than archiving), so the `RecordPull` guard is a
+    -- live check and the revocation is an auditable on-ledger state.
+    choice Revoke : ContractId StreamMandate
       controller payer
-      do pure ()
+      do create this with active = False
 
     nonconsuming choice GetMandateInfo : MandateInfo
       with

@@ -114,6 +114,16 @@ export interface V1LaneConfig {
   allocateBeforeSeconds: number;
   /** allocation.settleBefore/claim expiry window in seconds after unlock. */
   settleBeforeSeconds: number;
+  /** Acknowledge that this deployment runs operator-custodial: the operator's
+   * participant submits a co-hosted payer's money leg with its own authority.
+   * Off by default, so an operator-authority transfer of a party hosted here is
+   * refused unless custody is disclosed. In the intended topology the payer is on
+   * its own participant and never triggers it. */
+  disclosedCustody: boolean;
+  /** Aggregate cap in CC on total tracked escrow obligation; 0 disables it. */
+  escrowMaxTotalCC: number;
+  /** Cadence in seconds for the continuous escrow solvency drift probe. */
+  solvencyMonitorSeconds: number;
   /** Path to the proxy-owned V1 state file (settled totals + history). */
   stateFile: string;
 }
@@ -178,8 +188,24 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     executeBeforeSeconds: Number(get('EXECUTE_BEFORE_SECONDS', '3600')),
     allocateBeforeSeconds: Number(get('ALLOCATE_BEFORE_SECONDS', '3600')),
     settleBeforeSeconds: Number(get('SETTLE_BEFORE_SECONDS', '86400')),
+    disclosedCustody:
+      get('ESCROW_DISCLOSED_CUSTODY') === 'true' || get('COHOST_DISCLOSED_CUSTODY') === 'true',
+    escrowMaxTotalCC: nonNegNumber(get('ESCROW_MAX_TOTAL_CC', '0')),
+    solvencyMonitorSeconds: nonNegNumber(get('ESCROW_SOLVENCY_MONITOR_SECONDS', '0')),
     stateFile: get('V1_STATE_FILE', './v1-stream-state.json'),
   };
+}
+
+/** Coerce an env number, failing safe to 0 (disabled) on a typo or negative,
+ * warning once so a misconfigured limit isn't silently off. */
+function nonNegNumber(raw: string): number {
+  if (raw === '') return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 0) {
+    console.warn(`ignoring invalid numeric config "${raw}"; treating as 0 (disabled)`);
+    return 0;
+  }
+  return n;
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +352,63 @@ export async function ledger(
   return t ? JSON.parse(t) : {};
 }
 
+// Whether a party is hosted on this (the operator's) participant. Cached: a
+// local=true result is kept indefinitely (it only makes the guard stricter),
+// while local=false is re-checked after a short TTL so a later re-hosting isn't
+// missed.
+const partyLocalCache = new Map<string, { local: boolean; at: number }>();
+async function partyIsLocal(config: V1LaneConfig, party: string): Promise<boolean> {
+  const cached = partyLocalCache.get(party);
+  // local=true is cached indefinitely (it only tightens the guard); local=false is
+  // re-checked after a short window so a party re-hosted here is caught promptly.
+  if (cached && (cached.local || Date.now() - cached.at < 30 * 1000)) return cached.local;
+  let details: unknown;
+  try {
+    const r = await ledger(config, 'GET', `/v2/parties/${encodeURIComponent(party)}`);
+    details = (r as any).partyDetails ?? (r as any).party_details;
+  } catch (err) {
+    // Cannot determine hosting — fail closed so a claimed-non-custodial deployment
+    // never silently submits with operator authority it couldn't verify.
+    throw new V1LaneError(
+      502,
+      'undisclosed_custody_probe_failed',
+      `cannot determine whether ${party} is hosted here; refusing the operator-authority submission (${(err as Error).message})`,
+    );
+  }
+  if (!Array.isArray(details)) {
+    // A 200 whose shape we don't recognise is not a not-local signal — fail closed
+    // rather than let an unexpected envelope wave through a custodial move.
+    throw new V1LaneError(
+      502,
+      'undisclosed_custody_probe_failed',
+      `party hosting response for ${party} was not in the expected shape; refusing the operator-authority submission`,
+    );
+  }
+  const local = details.some((d: any) => d?.isLocal === true || d?.is_local === true);
+  partyLocalCache.set(party, { local, at: Date.now() });
+  return local;
+}
+
+/** Refuse to submit a party's money leg with the operator participant's own
+ * authority when that party is hosted here, unless the operator has acknowledged
+ * running custodially. This turns "non-custodial by topology" into an enforced
+ * property: in the intended topology the payer is on its own participant, the
+ * probe returns not-local, and nothing changes; a silent co-hosting misconfig is
+ * caught instead of quietly reintroducing operator custody. The operator's own
+ * escrow custody party is exempt — its releases and refunds are custodial by
+ * design and already disclosed. */
+async function assertNotUndisclosedCustody(config: V1LaneConfig, sender: string, ctx: string): Promise<void> {
+  if (config.escrowParty && sender === config.escrowParty) return;
+  if (config.disclosedCustody) return;
+  if (await partyIsLocal(config, sender)) {
+    throw new V1LaneError(
+      403,
+      'undisclosed_custody',
+      `refusing to move ${sender}'s funds with the operator participant's authority (${ctx}): that party is hosted here, so this is a custodial move. In the intended topology the payer signs on its own participant. Set ESCROW_DISCLOSED_CUSTODY=true to run operator-custodial knowingly.`,
+    );
+  }
+}
+
 async function registryPost(config: V1LaneConfig, path: string, body: unknown): Promise<any> {
   const res = await fetch(`${config.registryApiUrl}${path}`, {
     method: 'POST',
@@ -378,29 +461,200 @@ function v1Sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+interface DeliveryLeg {
+  /** Present only on a transfer-spec leg (the transfer authorization carries it).
+   * A created-holding leg has no sender — the holding only names its owner. */
+  sender?: string;
+  receiver: string;
+  amount: number;
+  instrumentOk: boolean;
+  agreement?: string;
+}
+
+function pickKey(o: any, keys: string[]): any {
+  for (const k of keys) if (o != null && o[k] !== undefined) return o[k];
+  return undefined;
+}
+
+function ccInstrumentMatches(instId: unknown, config: V1LaneConfig): boolean {
+  if (instId == null) return false;
+  if (typeof instId === 'string') return instId === config.instrumentId;
+  return String(pickKey(instId, ['id', 'instrumentId'])) === config.instrumentId;
+}
+
 /**
- * Confirm a settle's transfer actually committed on-ledger by looking it up on
- * the global Scan: `GET {registryApiUrl}/api/scan/v2/updates/{updateId}`.
- *
- * Why Scan and not our own participant: in model 2 the payer's wallet submits on
- * ITS participant, and Canton privacy means the proxy's participant generally
- * never witnesses that transfer — so an ACS/update lookup here returns nothing.
- * Scan ingests every committed update on the global synchronizer, so it is the
- * one vantage point that can see it. The caller-supplied `updateId` is UNTRUSTED;
- * this is what turns `recordSettle` from a blind write into a verified one and
- * stops a placeholder/phantom id (e.g. "wallet-submitted") from ever being shown
- * as settled. Polls briefly to absorb Scan ingestion lag (a 404 right after the
- * wallet returns is "not yet ingested", not "never committed").
- *
- * Throws V1LaneError unless the update is present on Scan AND names the payer
- * (the transfer sender), so a recorded settle always corresponds to a real,
- * on-chain transfer out of the payer's wallet.
+ * Decode a token-standard transfer spec — the argument of a
+ * `TransferFactory_Transfer` exercise, or a `TransferInstruction`'s transfer
+ * field — into a leg. `sender`/`receiver` may be a bare party or a `{ owner }`
+ * record; the amount, instrument, and `cantonstreams.dev/agreement` metadata are
+ * read out. Binding both parties from the transfer authorization itself (rather
+ * than by substring, or from a created holding whose owner is only the receiver)
+ * is what stops a change/refund leg or a reverse-direction transfer from being
+ * mistaken for a payer->recipient delivery.
  */
-async function verifyTransferOnScan(
+function transferSpecLeg(t: any, config: V1LaneConfig): DeliveryLeg | null {
+  if (!t || typeof t !== 'object') return null;
+  const amount = Number(pickKey(t, ['amount']));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const sRaw = pickKey(t, ['sender']);
+  const rRaw = pickKey(t, ['receiver']);
+  const sender = sRaw && typeof sRaw === 'object' ? pickKey(sRaw, ['owner']) : sRaw;
+  const receiver = rRaw && typeof rRaw === 'object' ? pickKey(rRaw, ['owner']) : rRaw;
+  if (typeof sender !== 'string' || typeof receiver !== 'string') return null;
+  const values = pickKey(pickKey(t, ['meta']) ?? {}, ['values']);
+  const agreement = values ? pickKey(values, ['cantonstreams.dev/agreement']) : undefined;
+  return {
+    sender,
+    receiver,
+    amount,
+    instrumentOk: ccInstrumentMatches(pickKey(t, ['instrument_id', 'instrumentId']), config),
+    agreement: typeof agreement === 'string' ? agreement : undefined,
+  };
+}
+
+/**
+ * Decode a created CC holding into a credit leg for its owner. When a
+ * pending offer is accepted, the committed update carries no transfer spec — the
+ * money shows up as a freshly-created holding owned by the receiver. Recognising
+ * it lets an accept be verified structurally (by who the holding lands on),
+ * instead of by a text match. There is no sender on a holding leg — the sender is
+ * bound separately, by the offer's own contract id.
+ */
+function holdingCreditLeg(node: any, config: V1LaneConfig): DeliveryLeg | null {
+  const tid = pickKey(node, ['template_id', 'templateId']);
+  if (typeof tid !== 'string') return null;
+  if (tid.split(':').pop() !== config.holdingTemplateId.split(':').pop()) return null;
+  const args = pickKey(node, ['create_arguments', 'createArguments', 'create_argument']);
+  if (!args || typeof args !== 'object') return null;
+  const owner = pickKey(args, ['owner']);
+  if (typeof owner !== 'string') return null;
+  const amtField = pickKey(args, ['amount']);
+  const amount = Number(
+    amtField && typeof amtField === 'object' ? pickKey(amtField, ['initialAmount', 'initial_amount']) : amtField,
+  );
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  return { receiver: owner, amount, instrumentOk: true };
+}
+
+/** Walk a committed Scan update tree and collect every value-delivery leg: a
+ * decodable transfer spec (carries both parties) and a created CC holding
+ * (carries only its owner), wherever each appears. */
+function collectDeliveryLegs(updateBody: string, config: V1LaneConfig): DeliveryLeg[] {
+  let root: unknown;
+  try {
+    root = JSON.parse(updateBody);
+  } catch {
+    return [];
+  }
+  const legs: DeliveryLeg[] = [];
+  const stack: unknown[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const v of node) stack.push(v);
+      continue;
+    }
+    const spec = transferSpecLeg(pickKey(node as Record<string, any>, ['transfer']), config);
+    if (spec) legs.push(spec);
+    const holding = holdingCreditLeg(node, config);
+    if (holding) legs.push(holding);
+    for (const v of Object.values(node)) stack.push(v);
+  }
+  return legs;
+}
+
+/** True if the committed update CONSUMES `cid` — exercises or archives it — as
+ * opposed to merely creating or referencing it. An accept or a withdraw consumes
+ * the offer; the offer's own creation only creates it. Binding on consumption
+ * (not mere reference) is what stops the offer's creation update — which carries
+ * the same contract id and its transfer authorization — from standing in for the
+ * acceptance that actually delivers. */
+function updateConsumesContract(updateBody: string, cid: string): boolean {
+  let root: unknown;
+  try {
+    root = JSON.parse(updateBody);
+  } catch {
+    return false;
+  }
+  const stack: unknown[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const v of node) stack.push(v);
+      continue;
+    }
+    const n = node as Record<string, any>;
+    for (const key of ['exercised_event', 'exercisedEvent', 'archived_event', 'archivedEvent']) {
+      const ev = n[key];
+      if (ev && typeof ev === 'object' && pickKey(ev, ['contract_id', 'contractId']) === cid) return true;
+    }
+    const et = pickKey(n, ['event_type', 'eventType']);
+    if ((et === 'exercised_event' || et === 'archived_event') && pickKey(n, ['contract_id', 'contractId']) === cid) {
+      return true;
+    }
+    for (const v of Object.values(n)) stack.push(v);
+  }
+  return false;
+}
+
+/**
+ * The largest CC amount a committed update transfers from `sender` to `receiver`,
+ * or null if none. Both parties and the instrument are bound structurally from
+ * the transfer spec. When `agreementRef` is given, the transfer must also carry
+ * that stream's `cantonstreams.dev/agreement` metadata, so an unrelated transfer
+ * between the same two parties cannot be recorded as one of its cycles.
+ */
+function verifiedDelivery(
+  updateBody: string,
+  config: V1LaneConfig,
+  expected: { sender: string; receiver: string; minAmount: number; agreementRef?: string },
+): number | null {
+  let best: number | null = null;
+  for (const leg of collectDeliveryLegs(updateBody, config)) {
+    if (!leg.instrumentOk) continue;
+    if (leg.sender !== expected.sender || leg.receiver !== expected.receiver) continue;
+    if (leg.amount + 1e-9 < expected.minAmount) continue;
+    if (expected.agreementRef && leg.agreement !== expected.agreementRef) continue;
+    if (best === null || leg.amount > best) best = leg.amount;
+  }
+  return best;
+}
+
+/**
+ * Confirm a transfer committed on-ledger by looking it up on the global Scan
+ * (`GET {registryApiUrl}/api/scan/v2/updates/{updateId}`) and structurally
+ * binding it: the committed update must actually deliver the configured CC
+ * instrument from `sender` to `receiver` for at least `minAmount`. Returns the
+ * on-chain amount delivered, so callers credit the ledger, never a client claim.
+ *
+ * Why Scan and not our own participant: the payer's wallet submits on ITS
+ * participant, and Canton privacy means the proxy generally never witnesses the
+ * transfer. Scan ingests every committed update, so it is the one vantage point
+ * that can see it. Polls briefly to absorb Scan ingestion lag.
+ */
+export async function verifyDeliveryOnScan(
   config: V1LaneConfig,
   updateId: string,
-  agreement: V1Agreement,
-): Promise<string> {
+  expected: { sender: string; receiver: string; minAmount: number; agreementRef?: string },
+): Promise<{ body: string; amount: number }> {
+  const body = await fetchCommittedUpdate(config, updateId);
+  const amount = verifiedDelivery(body, config, expected);
+  if (amount === null) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} committed on chain but delivers no ${config.instrumentId} of at least ${expected.minAmount} from ` +
+        `${expected.sender.split('::')[0]} to ${expected.receiver.split('::')[0]}; refusing to record.`,
+    );
+  }
+  return { body, amount };
+}
+
+/** Fetch a committed update from the global Scan, polling briefly to absorb
+ * ingestion lag, and confirm it echoes the requested id. Returns the raw body. */
+async function fetchCommittedUpdate(config: V1LaneConfig, updateId: string): Promise<string> {
   const url = `${config.registryApiUrl}/api/scan/v2/updates/${encodeURIComponent(updateId)}`;
   const attempts = 8;
   const delayMs = 2500;
@@ -416,7 +670,7 @@ async function verifyTransferOnScan(
     }
     if (res.status === 404) {
       lastNote = 'not yet on Scan';
-      await v1Sleep(delayMs); // not ingested yet, or never committed
+      await v1Sleep(delayMs);
       continue;
     }
     const text = await res.text();
@@ -425,30 +679,96 @@ async function verifyTransferOnScan(
       await v1Sleep(delayMs);
       continue;
     }
-    // 200 — Scan only holds COMMITTED updates, so existence already disproves a
-    // phantom. Bind it to this stream: the returned update must be the one we
-    // asked for and must name the payer (the transfer's sender).
     let parsed: { update_id?: string; updateId?: string };
     try {
       parsed = JSON.parse(text);
     } catch {
       parsed = {};
     }
-    const idOk = (parsed.update_id ?? parsed.updateId) === updateId;
-    const namesPayer = text.includes(agreement.payerParty);
-    if (idOk && namesPayer) return text; // verified on chain — return the body
-    throw new V1LaneError(
-      422,
-      'settlement_mismatch',
-      `update ${updateId} committed on chain but does not match this stream's payer; refusing to record.`,
-    );
+    if ((parsed.update_id ?? parsed.updateId) !== updateId) {
+      throw new V1LaneError(422, 'settlement_mismatch', `update ${updateId} on Scan does not echo the requested id.`);
+    }
+    return text;
   }
   throw new V1LaneError(
     422,
     'settlement_unverified',
-    `update ${updateId} is not confirmed on Scan after ${(attempts * delayMs) / 1000}s (${lastNote}); ` +
-      `the transfer is NOT on chain, so nothing was recorded.`,
+    `update ${updateId} is not confirmed on Scan after ${(attempts * delayMs) / 1000}s (${lastNote}); nothing was recorded.`,
   );
+}
+
+/**
+ * Confirm a pending offer was consummated in favour of `recipient`: the committed
+ * update must reference the exact tracked offer contract (so an unrelated update
+ * can't stand in for it) and create at least `minAmount` of the configured CC as a
+ * holding in the recipient's name. Only a created holding counts as delivery — a
+ * transfer-spec leg is the transfer's authorization, which is also present in the
+ * offer's own creation update, so counting it would let that creation update be
+ * replayed as an acceptance for funds that are only locked, never delivered.
+ * Returns the on-chain amount delivered, so the caller credits the ledger rather
+ * than a stored figure.
+ */
+async function verifyConsummationOnScan(
+  config: V1LaneConfig,
+  updateId: string,
+  expected: { trackedCid?: string; recipient: string; minAmount: number },
+): Promise<{ body: string; amount: number }> {
+  // Fail closed: a credit path must bind to a specific offer contract. Without
+  // one it would fall back to receiver+amount only, so an unrelated delivery of
+  // at least the amount to the recipient could consummate the cycle.
+  if (!expected.trackedCid) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `no tracked offer contract to bind update ${updateId} to; refusing to record.`,
+    );
+  }
+  const body = await fetchCommittedUpdate(config, updateId);
+  if (!updateConsumesContract(body, expected.trackedCid)) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} does not consume the tracked offer; refusing to record.`,
+    );
+  }
+  let best: number | null = null;
+  for (const leg of collectDeliveryLegs(body, config)) {
+    // Delivery is a created holding (no sender); a sender-bearing transfer-spec
+    // leg is only the authorization and is present at offer creation too.
+    if (leg.sender != null) continue;
+    if (!leg.instrumentOk || leg.receiver !== expected.recipient) continue;
+    if (leg.amount + 1e-9 < expected.minAmount) continue;
+    if (best === null || leg.amount > best) best = leg.amount;
+  }
+  if (best === null) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} creates no ${config.instrumentId} holding of at least ${expected.minAmount} for ` +
+        `${expected.recipient.split('::')[0]}; refusing to record.`,
+    );
+  }
+  return { body, amount: best };
+}
+
+/** Confirm a committed update consumed a specific offer contract. Used for a
+ * withdraw, which reclaims funds rather than delivering them, so there is nothing
+ * to credit — only the tracked offer's consumption to confirm, so a stray update
+ * can't mark the wrong offer withdrawn. */
+async function verifyContractConsumedOnScan(
+  config: V1LaneConfig,
+  updateId: string,
+  cid?: string,
+): Promise<string> {
+  const body = await fetchCommittedUpdate(config, updateId);
+  if (cid && !updateConsumesContract(body, cid)) {
+    throw new V1LaneError(
+      422,
+      'settlement_mismatch',
+      `update ${updateId} does not consume the withdrawn offer; refusing to record.`,
+    );
+  }
+  return body;
 }
 
 /**
@@ -1361,6 +1681,10 @@ export async function settleCycle(
   const prepareFn =
     config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
   const prepared = await prepareFn(config, agreement, amount, cycleNo);
+  // This is the one place the operator participant submits a transfer with a
+  // party's own authority (actAs=[payerParty]). Refuse to do so for a co-hosted
+  // party unless custody is disclosed.
+  await assertNotUndisclosedCustody(config, agreement.payerParty, prepared.ref);
   // Submit for the transaction TREE so we can classify the outcome atomically
   // (no Scan-ingestion lag, so no double-pay risk): a created TransferInstruction
   // means the receiver had no pre-approval, so the transfer is a pending offer
@@ -1731,6 +2055,18 @@ function emptyState(): V1StreamState {
   return { settled: 0, cycles: 0, history: [], receiverClaims: [], pendingTransfers: [] };
 }
 
+/** An on-chain updateId may back at most one recorded cycle across all streams,
+ * so a real transfer to one payee can't be replayed as a cycle on another
+ * same-payer stream. Excludes `streamId`, whose own history is checked at the
+ * call site, so a same-stream re-record stays idempotent. */
+function updateIdRecordedElsewhere(store: V1Store, streamId: string, updateId: string): boolean {
+  for (const [id, st] of Object.entries(store.state)) {
+    if (id === streamId) continue;
+    if (st.history?.some((h) => h.updateId === updateId)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Public service API consumed by the proxy routes
 // ---------------------------------------------------------------------------
@@ -1835,22 +2171,26 @@ export class V1LaneService {
    * Idempotent — stopping an already-stopped stream is a no-op.
    */
   async stopStream(streamId: string): Promise<V1StreamView & { onLedger?: Record<string, unknown> }> {
-    const store = loadStore(this.config);
-    const agreement = store.agreements[streamId];
-    if (!agreement) {
-      throw new V1LaneError(404, 'stream_not_found', `V1 stream "${streamId}" not found`);
-    }
-    agreement.status = 'stopped';
-    agreement.ratePerPeriod = '0';
-    saveStore(this.config, store);
-    try {
-      await markStreamRecordStopped(this.config, agreement);
-    } catch {
-      // StreamRecord index is best-effort.
-    }
-    // Scope the returned view to the payer (a stakeholder) — getStream 404s for
-    // an undefined caller.
-    return this.getStream(streamId, agreement.payerParty);
+    // Run under the same per-stream lock as settle so a stop can't interleave a
+    // settle mid-flight and let a cycle pull after the intended stop.
+    return this.runLocked(streamId, async () => {
+      const store = loadStore(this.config);
+      const agreement = store.agreements[streamId];
+      if (!agreement) {
+        throw new V1LaneError(404, 'stream_not_found', `V1 stream "${streamId}" not found`);
+      }
+      agreement.status = 'stopped';
+      agreement.ratePerPeriod = '0';
+      saveStore(this.config, store);
+      try {
+        await markStreamRecordStopped(this.config, agreement);
+      } catch {
+        // StreamRecord index is best-effort.
+      }
+      // Scope the returned view to the payer (a stakeholder) — getStream 404s for
+      // an undefined caller.
+      return this.getStream(streamId, agreement.payerParty);
+    });
   }
 
   /**
@@ -1864,6 +2204,12 @@ export class V1LaneService {
     if (!input.payerParty) throw new V1LaneError(400, 'missing_payer', 'payerParty is required');
     if (!input.recipientParty) {
       throw new V1LaneError(400, 'missing_recipient', 'recipientParty is required');
+    }
+    // A payer streaming to itself has no meaning, and it collapses the delivery
+    // check: a refund to the payer is then a holding owned by the recipient too,
+    // so the two become indistinguishable. Reject it up front.
+    if (input.payerParty === input.recipientParty) {
+      throw new V1LaneError(400, 'self_stream', 'payerParty and recipientParty must differ');
     }
     const ratePerPeriod = input.ratePerCycle ?? input.amount;
     if (!ratePerPeriod) {
@@ -2093,20 +2439,19 @@ export class V1LaneService {
     streamId: string,
     opts: { force?: boolean; amount?: string } = {},
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.settleOnce(streamId, opts));
+  }
+
+  /** Serialize a mutation for one stream after any in-flight settle/stop, so the
+   * read → submit → write sequence runs atomically within this process. A
+   * multi-process deployment would still need a shared lock; this proxy owns the
+   * V1 state file as a single writer. */
+  private runLocked<T>(streamId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.settleLocks.get(streamId) ?? Promise.resolve();
-    // Run after the previous settle resolves OR rejects (don't poison the chain).
-    const task = prev.then(
-      () => this.settleOnce(streamId, opts),
-      () => this.settleOnce(streamId, opts),
-    );
+    // Run after the previous task resolves OR rejects (don't poison the chain).
+    const task = prev.then(fn, fn);
     // Park a non-rejecting tail so the next caller waits for us either way.
-    this.settleLocks.set(
-      streamId,
-      task.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    this.settleLocks.set(streamId, task.then(() => undefined, () => undefined));
     return task;
   }
 
@@ -2125,14 +2470,24 @@ export class V1LaneService {
     if (!agreement) {
       throw new V1LaneError(404, 'stream_not_found', `V1 stream "${streamId}" not found`);
     }
+    // A stopped stream must never settle again — not even via `force` or an
+    // explicit `amount`, which otherwise bypass the accrual/status gate.
+    if (agreement.status === 'stopped') {
+      return { settled: false, reason: 'stopped' };
+    }
     const st = store.state[streamId] ?? emptyState();
     store.state[streamId] = st;
 
     const nowMs = Date.now();
     let due: number;
     if (opts.amount !== undefined) {
-      due = Number(opts.amount);
-      if (!(due > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
+      const requested = Number(opts.amount);
+      if (!(requested > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
+      // An explicit amount may top a cycle up to — but never beyond — what has
+      // accrued. `force` still permits one period when nothing has accrued yet.
+      const accruedDue = dueAmount(agreement, st.settled, nowMs);
+      const cap = Math.max(accruedDue, opts.force ? Number(agreement.ratePerPeriod) : 0);
+      due = Math.min(requested, cap);
     } else {
       due = dueAmount(agreement, st.settled, nowMs);
       // On-demand demo: if nothing has accrued yet but the caller wants to
@@ -2463,6 +2818,12 @@ export class V1LaneService {
     streamId: string,
     input: { updateId: string; cycle?: number; receiverClaimCid?: string; allocationCid?: string },
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.recordClaimImpl(streamId, input));
+  }
+  private async recordClaimImpl(
+    streamId: string,
+    input: { updateId: string; cycle?: number; receiverClaimCid?: string; allocationCid?: string },
+  ): Promise<SettleOutcome> {
     if (!input.updateId) {
       throw new V1LaneError(400, 'missing_update_id', 'updateId is required');
     }
@@ -2480,13 +2841,32 @@ export class V1LaneService {
     if (record.claimUpdateId === input.updateId || st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
     }
+    // The allocation's own creation update carries its transfer authorization and
+    // its created contract id, so it must never be claimed as the delivery.
+    if (record.allocationUpdateId && input.updateId === record.allocationUpdateId) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${input.updateId} is the allocation's creation, not its execution; refusing to record.`,
+      );
+    }
+    // Reject a cross-stream replay of the same on-chain update.
+    if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
+      throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
+    }
     if (record.status === 'claimed') {
       return { settled: false, reason: 'already_claimed', cycle: st.cycles };
     }
 
-    await verifyTransferOnScan(this.config, input.updateId, agreement);
-
-    const amount = Number(record.amount);
+    // Bind to the exact allocation being claimed and require the committed update
+    // deliver at least the tracked amount to the recipient; credit the on-chain
+    // amount, never the stored figure off an unrelated transfer.
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+      trackedCid: record.allocationCid || record.receiverClaimCid || input.allocationCid,
+      recipient: agreement.recipientParty,
+      minAmount: Number(record.amount),
+    });
+    const amount = Math.min(Number(record.amount), verifiedAmount);
     st.settled = Number((st.settled + amount).toFixed(10));
     st.cycles = Math.max(st.cycles, record.cycle);
     st.history.push({
@@ -2530,6 +2910,12 @@ export class V1LaneService {
     streamId: string,
     input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.recordSettleImpl(streamId, input));
+  }
+  private async recordSettleImpl(
+    streamId: string,
+    input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
+  ): Promise<SettleOutcome> {
     const store = loadStore(this.config);
     const agreement = store.agreements[streamId];
     if (!agreement) {
@@ -2537,17 +2923,26 @@ export class V1LaneService {
     }
     const st = store.state[streamId] ?? emptyState();
     store.state[streamId] = st;
-    const amount = Number(input.amount);
-    if (!(amount > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
+    if (!(Number(input.amount) > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
     // Idempotent: never double-count the same committed transfer.
     if (input.updateId && st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
     }
-    // The updateId is a CLIENT claim — verify the transfer actually committed on
-    // chain (via Scan) BEFORE crediting the cycle. Throws unless it is real and
-    // matches this stream's payer, so a settle is never recorded — and never
-    // shown as "settled" — without an on-ledger transaction backing it.
-    const updateBody = await verifyTransferOnScan(this.config, input.updateId, agreement);
+    // And never let one real transfer be replayed as a cycle on a different
+    // stream (the check above only covers this stream).
+    if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
+      throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
+    }
+    // The updateId is a client claim — verify the transfer committed on chain,
+    // moved payer -> recipient in CC, and carries this stream's agreement tag
+    // (so an unrelated transfer between the same parties can't be recorded as a
+    // cycle). Credit the on-chain amount it returns, never the client's amount.
+    const { body: updateBody, amount } = await verifyDeliveryOnScan(this.config, input.updateId, {
+      sender: agreement.payerParty,
+      receiver: agreement.recipientParty,
+      minAmount: 0,
+      agreementRef: streamId,
+    });
 
     // Classify the on-chain outcome from the committed transaction:
     //  - a created TransferInstruction → the receiver had NO pre-approval, so
@@ -2715,6 +3110,12 @@ export class V1LaneService {
     streamId: string,
     input: { updateId: string; transferInstructionCid?: string; cycle?: number },
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.recordAcceptTransferImpl(streamId, input));
+  }
+  private async recordAcceptTransferImpl(
+    streamId: string,
+    input: { updateId: string; transferInstructionCid?: string; cycle?: number },
+  ): Promise<SettleOutcome> {
     if (!input.updateId) {
       throw new V1LaneError(400, 'missing_update_id', 'updateId is required');
     }
@@ -2732,13 +3133,33 @@ export class V1LaneService {
     if (record.finalUpdateId === input.updateId || st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
     }
+    // The offer's own creation update carries its transfer authorization and its
+    // created contract id, so it must never be accepted as the delivery.
+    if (record.createUpdateId && input.updateId === record.createUpdateId) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${input.updateId} is the offer's creation, not its acceptance; refusing to record.`,
+      );
+    }
+    // Reject a cross-stream replay of the same on-chain update.
+    if (updateIdRecordedElsewhere(store, streamId, input.updateId)) {
+      throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
+    }
     if (record.status === 'accepted') {
       return { settled: false, reason: 'already_accepted', cycle: st.cycles };
     }
 
-    await verifyTransferOnScan(this.config, input.updateId, agreement);
-
-    const amount = Number(record.amount);
+    // Bind to the exact pending offer being accepted and require the committed
+    // update deliver at least the tracked amount to the recipient; credit the
+    // on-chain amount, so a dust or unrelated transfer can't mark the cycle
+    // accepted for the full pending figure.
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+      trackedCid: record.transferInstructionCid || input.transferInstructionCid,
+      recipient: agreement.recipientParty,
+      minAmount: Number(record.amount),
+    });
+    const amount = Math.min(Number(record.amount), verifiedAmount);
     st.settled = Number((st.settled + amount).toFixed(10));
     st.cycles = Math.max(st.cycles, record.cycle);
     st.history.push({
@@ -2871,7 +3292,23 @@ export class V1LaneService {
     if (record.status === 'accepted') {
       return { withdrawn: false, reason: 'already_accepted', cycle: record.cycle };
     }
-    await verifyTransferOnScan(this.config, input.updateId, agreement);
+    // The offer's own creation update references the tracked contract too, so it
+    // can't stand in for the withdrawal that consumes it.
+    if (record.createUpdateId && input.updateId === record.createUpdateId) {
+      throw new V1LaneError(
+        422,
+        'settlement_mismatch',
+        `update ${input.updateId} is the offer's creation, not its withdrawal; refusing to record.`,
+      );
+    }
+    // A withdraw reclaims the sender's locked funds — nothing is delivered to the
+    // recipient, so nothing is credited. Confirm the committed update actually
+    // consumed this offer, so a stray update can't mark it withdrawn.
+    await verifyContractConsumedOnScan(
+      this.config,
+      input.updateId,
+      record.transferInstructionCid || input.transferInstructionCid,
+    );
     record.status = 'withdrawn';
     record.finalUpdateId = input.updateId;
     saveStore(this.config, store);

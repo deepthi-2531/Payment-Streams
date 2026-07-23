@@ -1335,7 +1335,7 @@ export interface EscrowReconciliation {
     readonly operatorReleased?: string;
     readonly operatorTotalDeposited?: string;
     readonly operatorStatus?: string;
-    readonly escrowFreeBalance: string;
+    readonly custodianSolvent?: boolean;
     readonly commingled: boolean;
   };
   readonly offers: ReadonlyArray<{
