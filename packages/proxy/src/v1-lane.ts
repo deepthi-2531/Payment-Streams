@@ -379,10 +379,11 @@ function v1Sleep(ms: number): Promise<void> {
 }
 
 interface DeliveryLeg {
-  sender?: string;
-  receiver?: string;
+  sender: string;
+  receiver: string;
   amount: number;
   instrumentOk: boolean;
+  agreement?: string;
 }
 
 function pickKey(o: any, keys: string[]): any {
@@ -397,12 +398,37 @@ function ccInstrumentMatches(instId: unknown, config: V1LaneConfig): boolean {
 }
 
 /**
- * Walk a committed Scan update tree and collect every value-delivery leg it can
- * recognise: token-standard TransferInstruction creates (which carry
- * transfer.sender/receiver/amount/instrumentId) and CC holding creates (owner +
- * amount.initialAmount). Handles both the snake_case Scan shape and the
- * camelCase participant shape, and both key spellings for create arguments.
+ * Decode a token-standard transfer spec — the argument of a
+ * `TransferFactory_Transfer` exercise, or a `TransferInstruction`'s transfer
+ * field — into a leg. `sender`/`receiver` may be a bare party or a `{ owner }`
+ * record; the amount, instrument, and `cantonstreams.dev/agreement` metadata are
+ * read out. Binding both parties from the transfer authorization itself (rather
+ * than by substring, or from a created holding whose owner is only the receiver)
+ * is what stops a change/refund leg or a reverse-direction transfer from being
+ * mistaken for a payer->recipient delivery.
  */
+function transferSpecLeg(t: any, config: V1LaneConfig): DeliveryLeg | null {
+  if (!t || typeof t !== 'object') return null;
+  const amount = Number(pickKey(t, ['amount']));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const sRaw = pickKey(t, ['sender']);
+  const rRaw = pickKey(t, ['receiver']);
+  const sender = sRaw && typeof sRaw === 'object' ? pickKey(sRaw, ['owner']) : sRaw;
+  const receiver = rRaw && typeof rRaw === 'object' ? pickKey(rRaw, ['owner']) : rRaw;
+  if (typeof sender !== 'string' || typeof receiver !== 'string') return null;
+  const values = pickKey(pickKey(t, ['meta']) ?? {}, ['values']);
+  const agreement = values ? pickKey(values, ['cantonstreams.dev/agreement']) : undefined;
+  return {
+    sender,
+    receiver,
+    amount,
+    instrumentOk: ccInstrumentMatches(pickKey(t, ['instrument_id', 'instrumentId']), config),
+    agreement: typeof agreement === 'string' ? agreement : undefined,
+  };
+}
+
+/** Walk a committed Scan update tree and collect every transfer leg from a
+ * decodable transfer spec, wherever it appears. */
 function collectDeliveryLegs(updateBody: string, config: V1LaneConfig): DeliveryLeg[] {
   let root: unknown;
   try {
@@ -419,60 +445,31 @@ function collectDeliveryLegs(updateBody: string, config: V1LaneConfig): Delivery
       for (const v of node) stack.push(v);
       continue;
     }
-    const obj = node as Record<string, any>;
-    const tid = pickKey(obj, ['template_id', 'templateId']);
-    const args = pickKey(obj, ['create_arguments', 'createArguments', 'createArgument']);
-    if (typeof tid === 'string' && args && typeof args === 'object') {
-      if (/TransferInstruction/i.test(tid)) {
-        const tr = pickKey(args, ['transfer']) ?? {};
-        const amt = Number(pickKey(tr, ['amount']));
-        if (Number.isFinite(amt) && amt > 0) {
-          legs.push({
-            sender: pickKey(tr, ['sender']),
-            receiver: pickKey(tr, ['receiver']),
-            amount: amt,
-            instrumentOk: ccInstrumentMatches(pickKey(tr, ['instrument_id', 'instrumentId']), config),
-          });
-        }
-      } else if (String(tid).split(':').pop() === 'Amulet') {
-        const owner = pickKey(args, ['owner']);
-        const amtField = pickKey(args, ['amount']);
-        const amt = Number(
-          amtField && typeof amtField === 'object'
-            ? pickKey(amtField, ['initialAmount', 'initial_amount'])
-            : amtField,
-        );
-        if (owner && Number.isFinite(amt) && amt > 0) {
-          legs.push({ receiver: owner, amount: amt, instrumentOk: true });
-        }
-      }
-    }
-    for (const v of Object.values(obj)) stack.push(v);
+    const leg = transferSpecLeg(pickKey(node as Record<string, any>, ['transfer']), config);
+    if (leg) legs.push(leg);
+    for (const v of Object.values(node)) stack.push(v);
   }
   return legs;
 }
 
 /**
- * The largest CC amount a committed update delivers to `receiver` from `sender`,
- * or null if none. A TransferInstruction leg carries the sender and is bound
- * directly; a direct holding leg has no sender field (the sender's holdings are
- * archived), so the sender must appear elsewhere in the same committed update.
+ * The largest CC amount a committed update transfers from `sender` to `receiver`,
+ * or null if none. Both parties and the instrument are bound structurally from
+ * the transfer spec. When `agreementRef` is given, the transfer must also carry
+ * that stream's `cantonstreams.dev/agreement` metadata, so an unrelated transfer
+ * between the same two parties cannot be recorded as one of its cycles.
  */
 function verifiedDelivery(
   updateBody: string,
   config: V1LaneConfig,
-  expected: { sender: string; receiver: string; minAmount: number },
+  expected: { sender: string; receiver: string; minAmount: number; agreementRef?: string },
 ): number | null {
-  const senderPresent = updateBody.includes(expected.sender);
   let best: number | null = null;
   for (const leg of collectDeliveryLegs(updateBody, config)) {
-    if (!leg.instrumentOk || leg.receiver !== expected.receiver) continue;
+    if (!leg.instrumentOk) continue;
+    if (leg.sender !== expected.sender || leg.receiver !== expected.receiver) continue;
     if (leg.amount + 1e-9 < expected.minAmount) continue;
-    if (leg.sender !== undefined) {
-      if (leg.sender !== expected.sender) continue;
-    } else if (!senderPresent) {
-      continue;
-    }
+    if (expected.agreementRef && leg.agreement !== expected.agreementRef) continue;
     if (best === null || leg.amount > best) best = leg.amount;
   }
   return best;
@@ -493,7 +490,7 @@ function verifiedDelivery(
 export async function verifyDeliveryOnScan(
   config: V1LaneConfig,
   updateId: string,
-  expected: { sender: string; receiver: string; minAmount: number },
+  expected: { sender: string; receiver: string; minAmount: number; agreementRef?: string },
 ): Promise<{ body: string; amount: number }> {
   const url = `${config.registryApiUrl}/api/scan/v2/updates/${encodeURIComponent(updateId)}`;
   const attempts = 8;
@@ -2596,6 +2593,12 @@ export class V1LaneService {
     streamId: string,
     input: { updateId: string; cycle?: number; receiverClaimCid?: string; allocationCid?: string },
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.recordClaimImpl(streamId, input));
+  }
+  private async recordClaimImpl(
+    streamId: string,
+    input: { updateId: string; cycle?: number; receiverClaimCid?: string; allocationCid?: string },
+  ): Promise<SettleOutcome> {
     if (!input.updateId) {
       throw new V1LaneError(400, 'missing_update_id', 'updateId is required');
     }
@@ -2667,6 +2670,12 @@ export class V1LaneService {
     streamId: string,
     input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.recordSettleImpl(streamId, input));
+  }
+  private async recordSettleImpl(
+    streamId: string,
+    input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
+  ): Promise<SettleOutcome> {
     const store = loadStore(this.config);
     const agreement = store.agreements[streamId];
     if (!agreement) {
@@ -2684,10 +2693,16 @@ export class V1LaneService {
     if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
       throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
     }
-    // The updateId is a client claim — verify the transfer committed on chain and
-    // actually delivered payer -> recipient in CC before crediting. Credit the
-    // on-chain amount it returns, never the client's amount.
-    const { body: updateBody, amount } = await verifyTransferOnScan(this.config, input.updateId, agreement);
+    // The updateId is a client claim — verify the transfer committed on chain,
+    // moved payer -> recipient in CC, and carries this stream's agreement tag
+    // (so an unrelated transfer between the same parties can't be recorded as a
+    // cycle). Credit the on-chain amount it returns, never the client's amount.
+    const { body: updateBody, amount } = await verifyDeliveryOnScan(this.config, input.updateId, {
+      sender: agreement.payerParty,
+      receiver: agreement.recipientParty,
+      minAmount: 0,
+      agreementRef: streamId,
+    });
 
     // Classify the on-chain outcome from the committed transaction:
     //  - a created TransferInstruction → the receiver had NO pre-approval, so
@@ -2852,6 +2867,12 @@ export class V1LaneService {
   /** Record Bob's accepted transfer once Scan confirms it committed. NOW the
    * cycle counts: settled/cycles advance and StreamAdmin syncs. Idempotent. */
   async recordAcceptTransfer(
+    streamId: string,
+    input: { updateId: string; transferInstructionCid?: string; cycle?: number },
+  ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.recordAcceptTransferImpl(streamId, input));
+  }
+  private async recordAcceptTransferImpl(
     streamId: string,
     input: { updateId: string; transferInstructionCid?: string; cycle?: number },
   ): Promise<SettleOutcome> {

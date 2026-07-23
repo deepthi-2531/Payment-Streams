@@ -1029,6 +1029,12 @@ export class EscrowLane {
           }
         }
         if (l.offerStatus !== next) {
+          // A release offer that reverted (expired, swept back to escrow) returns
+          // its funds to custody, so undo its advance of `released` — otherwise
+          // `remaining` under-counts and the funds are stranded.
+          if (next === 'expired' && l.kind === 'release') {
+            e.released = dec(Math.max(0, Number(e.released) - Number(l.amount)));
+          }
           l.offerStatus = next;
           mutated = true;
         }
