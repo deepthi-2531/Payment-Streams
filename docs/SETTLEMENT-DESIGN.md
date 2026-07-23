@@ -168,7 +168,7 @@ stakeholder** vets its package. That shapes the roles above:
 | Recipient accept / received view | **Live** | Pending-offer accept path proven cross-node. |
 | Mandate — bookkeeping (create / RecordPull / Revoke) | **Template proven** | Rate-limited record; proxy endpoints pending. |
 | Mandate — trust-minimized pull | **Blocked** | The in-choice `PullCycle` that executes the transfer needs a consistent token-standard DAR set; descoped until the transfer-instruction dep hashes align. Until then the operator can pull only for parties it hosts. |
-| Custodial escrow flow | **To build** | Escrow party + deposit-with-meta + streamer + refund. Gated on the custody decision. |
+| Custodial escrow flow | **Live (hardening in progress)** | Escrow party + proxy-submitted deposit + streamer + refund move real CC (`packages/proxy/src/escrow.ts`). In place: payer-only + cadence-gated release, validated inputs, atomic store. Outstanding before real-fund use: on-chain deposit verification (client-attested deposits are disabled by default) and per-escrow fund segregation (funds are currently commingled in one escrow party). |
 | Recipient one-click preapproval | **To build** | Preapproval *creation* is a wallet/validator action; we detect + trigger, not sign. |
 | Allocation settle (custody / Flow money leg) | **Blocked** | `Allocation_Settle` DSO-gated on this network — record-only until settlement rights exist. |
 

@@ -90,6 +90,10 @@ export interface V1LaneConfig {
   validatorAuthSecret: string;
   /** Escrow streamer tick interval in seconds (auto-release cadence check). */
   escrowTickSeconds: number;
+  /** Opt-in: trust a client-supplied `fundingTransferId` as proof of deposit.
+   * Default false — the deposit is not verified on-chain, so trusting it would
+   * let a forged id mint a funded escrow with no real deposit. */
+  escrowTrustClientDeposit: boolean;
   /** TransferFactory interface id on the TransferFactory_Transfer exercise. */
   transferFactoryInterfaceId: string;
   /** v2 TransferFactory interface id (v2 direct-delivery money leg). */
@@ -145,6 +149,7 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     validatorAuthAudience: get('VALIDATOR_AUTH_AUDIENCE'),
     validatorAuthSecret: get('VALIDATOR_AUTH_SECRET'),
     escrowTickSeconds: Number(get('ESCROW_STREAM_TICK_SECONDS', '30')),
+    escrowTrustClientDeposit: get('ESCROW_TRUST_CLIENT_DEPOSIT') === 'true',
     transferFactoryInterfaceId: get(
       'TRANSFER_FACTORY_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferFactory',
@@ -392,9 +397,11 @@ function v1Sleep(ms: number): Promise<void> {
  * as settled. Polls briefly to absorb Scan ingestion lag (a 404 right after the
  * wallet returns is "not yet ingested", not "never committed").
  *
- * Throws V1LaneError unless the update is present on Scan AND names the payer
- * (the transfer sender), so a recorded settle always corresponds to a real,
- * on-chain transfer out of the payer's wallet.
+ * The update must be present on Scan AND name both the payer and the recipient,
+ * so a transfer to one payee can't be replayed on another's stream. This is a
+ * co-occurrence check over the Scan JSON, not a full structural decode: it does
+ * not yet bind the sender, receiver, instrument, or amount, so callers must not
+ * treat the client-supplied amount as chain-verified.
  */
 async function verifyTransferOnScan(
   config: V1LaneConfig,
@@ -427,7 +434,8 @@ async function verifyTransferOnScan(
     }
     // 200 — Scan only holds COMMITTED updates, so existence already disproves a
     // phantom. Bind it to this stream: the returned update must be the one we
-    // asked for and must name the payer (the transfer's sender).
+    // asked for and must name BOTH parties of this stream (so a transfer to a
+    // different payee can't be replayed here).
     let parsed: { update_id?: string; updateId?: string };
     try {
       parsed = JSON.parse(text);
@@ -436,11 +444,12 @@ async function verifyTransferOnScan(
     }
     const idOk = (parsed.update_id ?? parsed.updateId) === updateId;
     const namesPayer = text.includes(agreement.payerParty);
-    if (idOk && namesPayer) return text; // verified on chain — return the body
+    const namesRecipient = text.includes(agreement.recipientParty);
+    if (idOk && namesPayer && namesRecipient) return text; // present + names both parties
     throw new V1LaneError(
       422,
       'settlement_mismatch',
-      `update ${updateId} committed on chain but does not match this stream's payer; refusing to record.`,
+      `update ${updateId} committed on chain but does not name both parties of this stream; refusing to record.`,
     );
   }
   throw new V1LaneError(
@@ -1731,6 +1740,18 @@ function emptyState(): V1StreamState {
   return { settled: 0, cycles: 0, history: [], receiverClaims: [], pendingTransfers: [] };
 }
 
+/** An on-chain updateId may back at most one recorded cycle across all streams,
+ * so a real transfer to one payee can't be replayed as a cycle on another
+ * same-payer stream. Excludes `streamId`, whose own history is checked at the
+ * call site, so a same-stream re-record stays idempotent. */
+function updateIdRecordedElsewhere(store: V1Store, streamId: string, updateId: string): boolean {
+  for (const [id, st] of Object.entries(store.state)) {
+    if (id === streamId) continue;
+    if (st.history?.some((h) => h.updateId === updateId)) return true;
+  }
+  return false;
+}
+
 // ---------------------------------------------------------------------------
 // Public service API consumed by the proxy routes
 // ---------------------------------------------------------------------------
@@ -1835,22 +1856,26 @@ export class V1LaneService {
    * Idempotent — stopping an already-stopped stream is a no-op.
    */
   async stopStream(streamId: string): Promise<V1StreamView & { onLedger?: Record<string, unknown> }> {
-    const store = loadStore(this.config);
-    const agreement = store.agreements[streamId];
-    if (!agreement) {
-      throw new V1LaneError(404, 'stream_not_found', `V1 stream "${streamId}" not found`);
-    }
-    agreement.status = 'stopped';
-    agreement.ratePerPeriod = '0';
-    saveStore(this.config, store);
-    try {
-      await markStreamRecordStopped(this.config, agreement);
-    } catch {
-      // StreamRecord index is best-effort.
-    }
-    // Scope the returned view to the payer (a stakeholder) — getStream 404s for
-    // an undefined caller.
-    return this.getStream(streamId, agreement.payerParty);
+    // Run under the same per-stream lock as settle so a stop can't interleave a
+    // settle mid-flight and let a cycle pull after the intended stop.
+    return this.runLocked(streamId, async () => {
+      const store = loadStore(this.config);
+      const agreement = store.agreements[streamId];
+      if (!agreement) {
+        throw new V1LaneError(404, 'stream_not_found', `V1 stream "${streamId}" not found`);
+      }
+      agreement.status = 'stopped';
+      agreement.ratePerPeriod = '0';
+      saveStore(this.config, store);
+      try {
+        await markStreamRecordStopped(this.config, agreement);
+      } catch {
+        // StreamRecord index is best-effort.
+      }
+      // Scope the returned view to the payer (a stakeholder) — getStream 404s for
+      // an undefined caller.
+      return this.getStream(streamId, agreement.payerParty);
+    });
   }
 
   /**
@@ -2093,20 +2118,19 @@ export class V1LaneService {
     streamId: string,
     opts: { force?: boolean; amount?: string } = {},
   ): Promise<SettleOutcome> {
+    return this.runLocked(streamId, () => this.settleOnce(streamId, opts));
+  }
+
+  /** Serialize a mutation for one stream after any in-flight settle/stop, so the
+   * read → submit → write sequence runs atomically within this process. A
+   * multi-process deployment would still need a shared lock; this proxy owns the
+   * V1 state file as a single writer. */
+  private runLocked<T>(streamId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.settleLocks.get(streamId) ?? Promise.resolve();
-    // Run after the previous settle resolves OR rejects (don't poison the chain).
-    const task = prev.then(
-      () => this.settleOnce(streamId, opts),
-      () => this.settleOnce(streamId, opts),
-    );
+    // Run after the previous task resolves OR rejects (don't poison the chain).
+    const task = prev.then(fn, fn);
     // Park a non-rejecting tail so the next caller waits for us either way.
-    this.settleLocks.set(
-      streamId,
-      task.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    this.settleLocks.set(streamId, task.then(() => undefined, () => undefined));
     return task;
   }
 
@@ -2125,14 +2149,24 @@ export class V1LaneService {
     if (!agreement) {
       throw new V1LaneError(404, 'stream_not_found', `V1 stream "${streamId}" not found`);
     }
+    // A stopped stream must never settle again — not even via `force` or an
+    // explicit `amount`, which otherwise bypass the accrual/status gate.
+    if (agreement.status === 'stopped') {
+      return { settled: false, reason: 'stopped' };
+    }
     const st = store.state[streamId] ?? emptyState();
     store.state[streamId] = st;
 
     const nowMs = Date.now();
     let due: number;
     if (opts.amount !== undefined) {
-      due = Number(opts.amount);
-      if (!(due > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
+      const requested = Number(opts.amount);
+      if (!(requested > 0)) throw new V1LaneError(400, 'invalid_amount', 'amount must be > 0');
+      // An explicit amount may top a cycle up to — but never beyond — what has
+      // accrued. `force` still permits one period when nothing has accrued yet.
+      const accruedDue = dueAmount(agreement, st.settled, nowMs);
+      const cap = Math.max(accruedDue, opts.force ? Number(agreement.ratePerPeriod) : 0);
+      due = Math.min(requested, cap);
     } else {
       due = dueAmount(agreement, st.settled, nowMs);
       // On-demand demo: if nothing has accrued yet but the caller wants to
@@ -2480,6 +2514,10 @@ export class V1LaneService {
     if (record.claimUpdateId === input.updateId || st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
     }
+    // Reject a cross-stream replay of the same on-chain update.
+    if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
+      throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
+    }
     if (record.status === 'claimed') {
       return { settled: false, reason: 'already_claimed', cycle: st.cycles };
     }
@@ -2542,6 +2580,11 @@ export class V1LaneService {
     // Idempotent: never double-count the same committed transfer.
     if (input.updateId && st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
+    }
+    // And never let one real transfer be replayed as a cycle on a different
+    // stream (the check above only covers this stream).
+    if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
+      throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
     }
     // The updateId is a CLIENT claim — verify the transfer actually committed on
     // chain (via Scan) BEFORE crediting the cycle. Throws unless it is real and
@@ -2731,6 +2774,10 @@ export class V1LaneService {
     }
     if (record.finalUpdateId === input.updateId || st.history.some((h) => h.updateId === input.updateId)) {
       return { settled: false, reason: 'already_recorded', cycle: st.cycles };
+    }
+    // Reject a cross-stream replay of the same on-chain update.
+    if (updateIdRecordedElsewhere(store, streamId, input.updateId)) {
+      throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
     }
     if (record.status === 'accepted') {
       return { settled: false, reason: 'already_accepted', cycle: st.cycles };

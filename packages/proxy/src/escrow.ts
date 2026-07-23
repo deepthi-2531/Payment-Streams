@@ -19,7 +19,8 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
+import { requireAmount, requirePartyId, requireId } from './validation.js';
 import {
   settleCycle,
   submit,
@@ -159,8 +160,9 @@ export interface EscrowReconciliation {
     operatorReleased?: string;
     operatorTotalDeposited?: string;
     operatorStatus?: string;
-    /** Whole escrow party's free Amulet balance — commingled across escrows. */
-    escrowFreeBalance: string;
+    /** Whether the custodian holds at least this escrow's remaining. The absolute
+     * pool balance is commingled across escrows, so it is not exposed. */
+    custodianSolvent?: boolean;
     commingled: boolean;
   };
   offers: Array<{
@@ -212,16 +214,31 @@ function escrowStateFile(config: V1LaneConfig): string {
 function loadEscrows(config: V1LaneConfig): EscrowStore {
   const f = escrowStateFile(config);
   if (!existsSync(f)) return { escrows: {} };
+  const raw = readFileSync(f, 'utf8');
   try {
-    const raw = JSON.parse(readFileSync(f, 'utf8'));
-    return { escrows: raw.escrows ?? {} };
+    const parsed = JSON.parse(raw);
+    return { escrows: parsed.escrows ?? {} };
   } catch {
+    // A parse failure of a non-empty file means the store is corrupt, not absent.
+    // Overwriting it with {} would discard every escrow record, so fail loud.
+    if (raw.trim() !== '') {
+      throw new V1LaneError(
+        500,
+        'escrow_store_corrupt',
+        `escrow store ${f} exists but is unparseable; refusing to overwrite it`,
+      );
+    }
     return { escrows: {} };
   }
 }
 
 function saveEscrows(config: V1LaneConfig, store: EscrowStore): void {
-  writeFileSync(escrowStateFile(config), JSON.stringify(store, null, 2));
+  // Write to a temp file then rename, so a crash mid-write can't truncate the
+  // live store (rename is atomic on the same filesystem).
+  const f = escrowStateFile(config);
+  const tmp = `${f}.tmp`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, f);
 }
 
 const dec = (x: string | number): string => Number(x).toFixed(10);
@@ -619,25 +636,55 @@ export class EscrowLane {
   }
   private async createEscrowImpl(input: CreateEscrowInput): Promise<EscrowAgreement> {
     this.requireEnabled();
-    if (!input.originalPayer) throw new V1LaneError(400, 'missing_payer', 'originalPayer required');
-    if (!input.recipient) throw new V1LaneError(400, 'missing_recipient', 'recipient required');
-    if (!(Number(input.totalDeposit) > 0)) throw new V1LaneError(400, 'invalid_deposit', 'totalDeposit must be > 0');
-    if (!(Number(input.ratePerCycle) > 0)) throw new V1LaneError(400, 'invalid_rate', 'ratePerCycle must be > 0');
+    // Validate every field before any transfer or ledger write, so a bad input
+    // can't fire the on-chain deposit and then fail the create, stranding funds.
+    const originalPayer = requirePartyId(input.originalPayer, 'originalPayer');
+    const recipient = requirePartyId(input.recipient, 'recipient');
+    const totalDeposit = requireAmount(input.totalDeposit, 'totalDeposit').toString();
+    const ratePerCycle = requireAmount(input.ratePerCycle, 'ratePerCycle').toString();
+    const cadenceSeconds = input.cadenceSeconds;
+    if (!Number.isInteger(cadenceSeconds) || cadenceSeconds <= 0) {
+      throw new V1LaneError(400, 'invalid_cadence', 'cadenceSeconds must be a positive integer');
+    }
 
-    const escrowId = input.escrowId ?? `esc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const escrowId = input.escrowId
+      ? requireId(input.escrowId, 'escrowId')
+      : `esc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const store = loadEscrows(this.config);
     if (store.escrows[escrowId]) throw new V1LaneError(409, 'escrow_exists', `escrow "${escrowId}" already exists`);
 
     // Deposit leg. Either the wallet already did it (fundingTransferId given) or
     // the proxy submits it as the payer (hosted payer only).
-    let fundingTransferId = input.fundingTransferId ?? '';
+    let fundingTransferId = input.fundingTransferId ? requireId(input.fundingTransferId, 'fundingTransferId') : '';
+    if (fundingTransferId) {
+      // A client-supplied fundingTransferId claims a deposit the proxy has not
+      // verified on-chain, so a forged (or too-small) id would mint an escrow
+      // that pays out of the commingled pool. Refuse it unless an operator opts
+      // in; fund via a proxy-submitted deposit instead.
+      if (!this.config.escrowTrustClientDeposit) {
+        throw new V1LaneError(
+          501,
+          'deposit_verification_unavailable',
+          'client-attested escrow deposits are disabled: the deposit is not yet verified on-chain. ' +
+            'Fund via a proxy-submitted deposit (omit fundingTransferId), or set ' +
+            'ESCROW_TRUST_CLIENT_DEPOSIT=true only if the deposit is verified out-of-band.',
+        );
+      }
+      // Global dedup: one fundingTransferId may back at most one escrow, so a
+      // single real deposit can't be replayed to fund several escrows.
+      for (const other of Object.values(store.escrows)) {
+        if (other.fundingTransferId && other.fundingTransferId === fundingTransferId) {
+          throw new V1LaneError(409, 'funding_reused', 'fundingTransferId already backs another escrow');
+        }
+      }
+    }
     let depositPending: string | undefined;
     let depositExpires: string | undefined;
     if (!fundingTransferId) {
       const deposit = await settleCycle(
         this.config,
-        leg(input.originalPayer, this.config.escrowParty, `${escrowId}:deposit`),
-        Number(input.totalDeposit),
+        leg(originalPayer, this.config.escrowParty, `${escrowId}:deposit`),
+        Number(totalDeposit),
         0,
       );
       fundingTransferId = deposit.updateId;
@@ -648,11 +695,11 @@ export class EscrowLane {
     const now = new Date();
     const e: EscrowAgreement = {
       escrowId,
-      originalPayer: input.originalPayer,
-      recipient: input.recipient,
-      ratePerCycle: dec(input.ratePerCycle),
-      cadenceSeconds: input.cadenceSeconds,
-      totalDeposited: dec(input.totalDeposit),
+      originalPayer,
+      recipient,
+      ratePerCycle: dec(ratePerCycle),
+      cadenceSeconds,
+      totalDeposited: dec(totalDeposit),
       released: dec(0),
       fundingTransferId,
       status: 'active',
@@ -669,9 +716,9 @@ export class EscrowLane {
     appendLedger(e, this.config, {
       kind: 'deposit',
       direction: 'in',
-      from: input.originalPayer,
+      from: originalPayer,
       to: this.config.escrowParty,
-      amount: dec(input.totalDeposit),
+      amount: dec(totalDeposit),
       updateId: fundingTransferId || undefined,
       contractCid: e.operatorEscrowCid,
       delivery: depositPending ? 'pending_offer' : 'direct',
@@ -687,9 +734,9 @@ export class EscrowLane {
   }
 
   /** Release one cycle to the payee (operator-signed). Bounded by the remaining
-   * deposited balance; advances `released` and the schedule. Idempotent per
-   * tick via `nextDueAt`. `initiatedBy` distinguishes the automated streamer
-   * from a manual operator trigger for the audit trail. */
+   * deposited balance and the cadence schedule: a release is refused until
+   * `nextDueAt` has passed. Advances `released` and `nextDueAt`. `initiatedBy`
+   * distinguishes the automated streamer from a payer-triggered release. */
   async releaseEscrowOnce(
     escrowId: string,
     initiatedBy: EscrowInitiator = 'streamer',
@@ -705,6 +752,12 @@ export class EscrowLane {
     const e = store.escrows[escrowId];
     if (!e) throw new V1LaneError(404, 'escrow_not_found', `escrow "${escrowId}" not found`);
     if (e.status !== 'active') return e;
+
+    // Enforce the cadence on every release path, not just the streamer, so no
+    // caller can fire releases back-to-back and drain the deposit early.
+    if (Date.parse(e.nextDueAt) > Date.now()) {
+      throw new V1LaneError(409, 'cycle_not_due', `next release for "${escrowId}" is not due until ${e.nextDueAt}`);
+    }
 
     const remaining = remainingOf(e);
     if (remaining <= 0) {
@@ -913,10 +966,20 @@ export class EscrowLane {
         if (activeCids.has(l.transferInstructionCid)) {
           next = 'active'; // still locked (may be past deadline but not yet swept)
         } else {
-          // Consumed from the ACS. Past its executeBefore it could not have been
-          // accepted (accept fails deadline-exceeded), so it was swept = expired.
           const pastDeadline = l.offerExpiresAt ? Date.parse(l.offerExpiresAt) <= nowMs : false;
-          next = pastDeadline ? 'expired' : 'accepted';
+          if (pastDeadline) {
+            // Past executeBefore, an accept can no longer succeed → it was swept.
+            next = 'expired';
+          } else if (l.direction === 'out') {
+            // An outgoing offer (escrow is the sender) that leaves the ACS before
+            // its deadline can only have been accepted — the operator never
+            // withdraws its own releases.
+            next = 'accepted';
+          } else {
+            // An incoming deposit offer can leave the ACS by accept OR a payer
+            // withdraw; exit alone can't tell them apart, so don't infer delivery.
+            next = 'active';
+          }
         }
         if (l.offerStatus !== next) {
           l.offerStatus = next;
@@ -978,7 +1041,7 @@ export class EscrowLane {
       checks.push({
         name: 'escrowSolvency',
         ok: escrowFreeBalance + dust >= Number(sum.remaining),
-        detail: `escrow free balance ${escrowFreeBalance.toFixed(4)} CC ≥ this escrow's remaining ${sum.remaining} (commingled lower bound)`,
+        detail: `custodian holds at least this escrow's remaining ${sum.remaining} (commingled lower bound)`,
       });
     }
 
@@ -1017,7 +1080,7 @@ export class EscrowLane {
         operatorReleased: op?.createArgument?.released,
         operatorTotalDeposited: op?.createArgument?.totalDeposited,
         operatorStatus: op?.createArgument?.status,
-        escrowFreeBalance: dec(escrowFreeBalance),
+        custodianSolvent: acsOk ? escrowFreeBalance + dust >= Number(sum.remaining) : undefined,
         commingled: true,
       },
       offers,

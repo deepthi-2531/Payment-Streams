@@ -161,6 +161,8 @@ export function createHostWalletClient(
     const prepared = await requestJson<{
       readonly sessionId?: string;
       readonly expectedPublicKey?: string;
+      readonly action?: string;
+      readonly payload?: { readonly contractId?: string };
       readonly prepared?: {
         readonly preparedTransactionHash?: string;
       };
@@ -195,6 +197,20 @@ export function createHostWalletClient(
       throw new Error(
         `wallet-gateway expected recipient public key ${expectedPublicKey}, ` +
         `but the configured signer for ${party} uses ${credentials.publicKey}.`,
+      );
+    }
+
+    // The preparedTransactionHash is opaque, so this signer trusts the gateway to
+    // have prepared exactly the requested transfer_accept for `contractId`. Where
+    // the gateway echoes the action/contractId, verify they match before signing.
+    if (prepared.action && prepared.action !== 'transfer_accept') {
+      throw new Error(
+        `wallet-gateway prepared a "${prepared.action}", not the requested transfer_accept for ${party}.`,
+      );
+    }
+    if (prepared.payload?.contractId && prepared.payload.contractId !== contractId) {
+      throw new Error(
+        `wallet-gateway prepared an accept for a different offer than the intended ${contractId}.`,
       );
     }
 

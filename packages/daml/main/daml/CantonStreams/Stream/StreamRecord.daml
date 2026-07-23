@@ -60,6 +60,10 @@ template StreamRecord
       -- ^ Opt-in visibility. Adding the payer/payee here lets them see the
       -- record, but requires their participant to vet this package — so it is
       -- used only for parties on nodes that run the application.
+      -- CAUTION: `totalPaid`/`cyclesSettled` are operator-written and not yet
+      -- bound to verified on-chain transfers, so do not add the payee as an
+      -- observer to show progress — a fabricated total would read to them as a
+      -- "you were paid" signal. Bind cycles to on-chain transfers first.
   where
     signatory operator
     observer observers
@@ -82,6 +86,10 @@ template StreamRecord
       do
         assertMsg "Stream not active" (status == Active)
         assertMsg "Cycle amount must be positive" (amount > 0.0)
+        -- Bound each cycle by the rate and reject a repeat of the preceding
+        -- transferId, so a retried call can't double-advance `totalPaid`.
+        assertMsg "Cycle amount exceeds rate per cycle" (amount <= ratePerCycle)
+        assertMsg "Duplicate transferId" (Some transferId /= lastTransferId)
         optional (pure ()) (assertNotInFuture "settledAt") settledAt
         create this with
           totalPaid = totalPaid + amount

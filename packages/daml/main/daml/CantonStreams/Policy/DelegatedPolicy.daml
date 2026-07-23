@@ -16,9 +16,12 @@
 -- current state, validates limits, creates the next state, and emits an
 -- `ExecutionLog` for audit.
 --
--- This module replaces the executor's TypeScript-side validation logic with
--- contract-enforced rules so that the executor cannot exceed its delegated
--- authority even if its code is compromised.
+-- Deployment status: as wired today, `ExecutePolicy` records and rate-limits the
+-- executor's declared actions and emits an audit log, but it does not itself
+-- fetch or exercise the stream contract — settlement is not routed through the
+-- policy. So the "cannot exceed its authority even if compromised" property
+-- holds only once the money leg is exercised through this contract. Until then
+-- this is a consented, rate-limited executor ledger, not an enforcement boundary.
 module CantonStreams.Policy.DelegatedPolicy where
 
 import DA.Time (RelTime, addRelTime, microseconds)
@@ -262,8 +265,8 @@ template ExecutionLog
   where
     signatory sender, executor
 
-    -- | Sender can prune old logs after an audit window. This is the only
-    -- mutator on the log to keep the audit shape simple.
+    -- | Prune old logs after an audit window. Requires both signatories (sender
+    -- and executor), so neither party can unilaterally erase the audit trail.
     choice PruneExecutionLog : ()
-      controller sender
+      controller sender, executor
       do pure ()

@@ -649,11 +649,12 @@ function extractToken(req: Request): string | undefined {
   const authHeader = req.headers['authorization'];
   const fromHeader = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
   if (fromHeader) return fromHeader;
-  // Dev-only fallback: `PROXY_DEFAULT_TOKEN` substituted for missing
-  // Authorization made the default a master credential when paired with
-  // attacker-controlled X-Canton-Party. Restrict to PROXY_AUTH_MODE=dev only.
+  // Dev-only fallback: `PROXY_DEFAULT_TOKEN` for a missing Authorization header.
+  // Only hand it out when dev auth is explicitly acknowledged
+  // (PROXY_ALLOW_DEV_AUTH=true), the same gate required to boot in dev mode.
   const mode = process.env['PROXY_AUTH_MODE'] ?? 'dev';
-  if (mode === 'dev') {
+  const devAcknowledged = process.env['PROXY_ALLOW_DEV_AUTH'] === 'true';
+  if (mode === 'dev' && devAcknowledged) {
     return process.env['PROXY_DEFAULT_TOKEN'] ?? undefined;
   }
   return undefined;

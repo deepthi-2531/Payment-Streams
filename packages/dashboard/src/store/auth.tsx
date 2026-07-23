@@ -63,15 +63,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Dev-mode fallback — populated only when no wallet is connected. Persisted to
-  // localStorage so a page refresh doesn't silently log the dev session out (the
-  // dev JWT only names a public party id; it is not a credential to anything
-  // sensitive). A real wallet connection always takes precedence over this.
+  // Dev-mode fallback — populated only when no wallet is connected. This token is
+  // the proxy bearer credential in dev-auth mode, so it lives in sessionStorage
+  // (per-tab, cleared on close), not localStorage. A real wallet connection
+  // always takes precedence.
   const [devToken, setDevToken] = useState<string | null>(() => {
-    try { return localStorage.getItem('cs.devToken'); } catch { return null; }
+    try { return sessionStorage.getItem('cs.devToken'); } catch { return null; }
   });
   const [devParty, setDevParty] = useState<string | null>(() => {
-    try { return localStorage.getItem('cs.devParty'); } catch { return null; }
+    try { return sessionStorage.getItem('cs.devParty'); } catch { return null; }
   });
 
   // Let StrictMode remount this effect naturally. The cleanup detaches the
@@ -195,8 +195,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setDevToken(token);
     setDevParty(party);
     try {
-      localStorage.setItem('cs.devToken', token);
-      localStorage.setItem('cs.devParty', party);
+      sessionStorage.setItem('cs.devToken', token);
+      sessionStorage.setItem('cs.devParty', party);
     } catch {
       /* web storage unavailable — fall back to in-memory only */
     }

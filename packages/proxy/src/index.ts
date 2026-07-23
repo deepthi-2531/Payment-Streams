@@ -136,6 +136,9 @@ import {
 // ---------------------------------------------------------------------------
 
 const PROXY_PORT = parseInt(process.env['PROXY_PORT'] ?? '4000', 10);
+// Interface to bind. Unset binds all interfaces (0.0.0.0). In dev auth mode
+// assertAuthConfigSafe requires this to be loopback, so it must reach app.listen.
+const PROXY_BIND_HOST = process.env['PROXY_BIND_HOST']?.trim() || undefined;
 const CANTON_HOST = process.env['CANTON_HOST'] ?? 'localhost';
 const CANTON_PORT = parseInt(process.env['CANTON_PORT'] ?? '6865', 10);
 const CANTON_USE_TLS = process.env['CANTON_USE_TLS'] === 'true';
@@ -220,6 +223,15 @@ app.use(express.json({ limit: process.env['PROXY_BODY_LIMIT'] ?? '64kb' }));
 // with a real gateway (nginx, API gateway) can disable it via
 // PROXY_RATE_LIMIT_DISABLE=true. Tune with PROXY_RATE_LIMIT_MAX (requests)
 // and PROXY_RATE_LIMIT_WINDOW_MS (window).
+// Behind a reverse proxy the real client IP is in X-Forwarded-For. Set
+// PROXY_TRUST_PROXY to the number of trusted hops so the rate limiter keys on the
+// client IP without trusting a spoofed XFF; unset keeps the socket address.
+const TRUST_PROXY = process.env['PROXY_TRUST_PROXY'];
+if (TRUST_PROXY) {
+  const hops = Number(TRUST_PROXY);
+  app.set('trust proxy', Number.isInteger(hops) && hops > 0 ? hops : TRUST_PROXY);
+}
+
 const RATE_LIMIT_DISABLED = process.env['PROXY_RATE_LIMIT_DISABLE'] === 'true';
 const RATE_LIMIT_MAX = parseInt(process.env['PROXY_RATE_LIMIT_MAX'] ?? '120', 10);
 const RATE_LIMIT_WINDOW_MS = parseInt(
@@ -2265,8 +2277,8 @@ async function start(): Promise<void> {
     );
   }
 
-  app.listen(PROXY_PORT, () => {
-    console.log(`Canton Streams proxy listening on :${PROXY_PORT}`);
+  const onListen = () => {
+    console.log(`Canton Streams proxy listening on ${PROXY_BIND_HOST ?? '0.0.0.0'}:${PROXY_PORT}`);
     console.log(`  Canton participant: ${CANTON_HOST}:${CANTON_PORT} (TLS: ${CANTON_USE_TLS})`);
     if (CANTON_SYNCHRONIZER_ID) {
       console.log(`  Synchronizer: ${CANTON_SYNCHRONIZER_ID}`);
@@ -2284,7 +2296,10 @@ async function start(): Promise<void> {
     } else {
       console.log('  Escrow lane: off (set ESCROW_PARTY to enable)');
     }
-  });
+  };
+  // Pass the bind host so the loopback confinement dev mode requires is applied.
+  if (PROXY_BIND_HOST) app.listen(PROXY_PORT, PROXY_BIND_HOST, onListen);
+  else app.listen(PROXY_PORT, onListen);
 }
 
 // ---------------------------------------------------------------------------
@@ -2295,9 +2310,11 @@ async function start(): Promise<void> {
 // funds mid-flight (see docs/SETTLEMENT-DESIGN.md).
 // ---------------------------------------------------------------------------
 
-/** Public escrow config — the deposit target + instrument a wallet needs. */
-app.get('/api/v1/escrow-info', (_req, res) => {
+/** Escrow config — the deposit target + instrument a wallet needs. Authenticated:
+ * it discloses the escrow party/instrument/tick, so it must not be public. */
+app.get('/api/v1/escrow-info', async (req, res) => {
   try {
+    await authorizeRequest(req, 'query', authConfig);
     res.json(serializeForJson(escrowLane.info()));
   } catch (err) {
     handleError(res, err, 'escrowInfo');
@@ -2374,12 +2391,15 @@ app.get('/api/v1/escrows/:id', async (req, res) => {
   }
 });
 
-/** Manually release one cycle now (normally the streamer does this on schedule). */
+/** Manually release one cycle now (normally the streamer does this on schedule).
+ * Payer only: the recipient must never force releases, and the cadence gate in
+ * releaseEscrowOnce still applies so even the payer can't accelerate. */
 app.post('/api/v1/escrows/:id/release', async (req, res) => {
   try {
     const auth = await authorizeRequest(req, 'create', authConfig);
-    escrowLane.getEscrow(req.params['id']!, auth.party); // authorize: payer or recipient
-    const out = await escrowLane.releaseEscrowOnce(req.params['id']!, 'operator');
+    const esc = escrowLane.getEscrow(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', esc.originalPayer);
+    const out = await escrowLane.releaseEscrowOnce(req.params['id']!, 'payer');
     res.json(serializeForJson(out));
   } catch (err) {
     handleError(res, err, 'releaseEscrow');

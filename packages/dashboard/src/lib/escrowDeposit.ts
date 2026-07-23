@@ -18,8 +18,9 @@ import { submitAndWait } from './hostedWalletLedger.js';
 import { readPayerHoldings, extractUpdateId, walletSubmitError } from './settleV1Wallet.js';
 import type { CreateEscrowParams, EscrowPreparedDeposit, EscrowView } from '../api/client.js';
 
-/** The two proxy calls this orchestrator needs from the API client. */
+/** The proxy calls this orchestrator needs from the API client. */
 export interface EscrowWalletClient {
+  escrowInfo(): Promise<{ readonly escrowParty: string }>;
   prepareEscrowDeposit(body: {
     payerParty?: string;
     totalDeposit: string;
@@ -46,6 +47,21 @@ export async function createEscrowViaWallet(
     totalDeposit: params.totalDeposit,
     holdings,
   });
+
+  // Don't blind-sign the proxy-formed command: verify it acts as the payer and
+  // targets the escrow party, so a mis-formed command can't send the funds
+  // elsewhere. The exact amount is bound on-chain by the proxy's deposit checks.
+  if (!prepared.actAs?.includes(params.payerParty)) {
+    throw new Error(
+      'Refusing to sign: the deposit is not authorized as your wallet. No escrow was created.',
+    );
+  }
+  const { escrowParty } = await client.escrowInfo();
+  if (!JSON.stringify(prepared.command ?? {}).includes(escrowParty)) {
+    throw new Error(
+      'Refusing to sign: the deposit does not target the escrow custody party. No escrow was created.',
+    );
+  }
 
   // 3. The payer's wallet signs + submits it through its own participant.
   const res = await submitAndWait([prepared.command as Record<string, unknown>], prepared.actAs, {

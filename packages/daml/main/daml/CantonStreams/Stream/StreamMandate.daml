@@ -30,6 +30,19 @@
 -- cross-node deployments; it requires binding the transfer-instruction package
 -- as a dependency (a consistent token-standard DAR set). See
 -- `docs/SETTLEMENT-DESIGN.md`.
+--
+-- ## Deployment status — the non-custodial guarantee is not yet enforced
+--
+-- As currently deployed, `RecordPull`/`PullCycle` are not wired into the proxy:
+-- the money leg runs through `settleCycle`, a `TransferFactory_Transfer`
+-- submitted with `actAs = [payer]` under the shared operator ledger token. For a
+-- payer co-hosted on the operator's participant, whoever holds that token can
+-- submit any transfer as the payer, so the rate/cap/cadence bounds above and
+-- unilateral revocation are honored off-ledger by the operator, not enforced
+-- on-ledger. Until the in-choice pull gates the money leg (or the payer is hosted
+-- on their own participant), treat this model as operator-trusted, not
+-- non-custodial. The bullets describe the template's intended authority, not the
+-- current runtime.
 module CantonStreams.Stream.StreamMandate where
 
 import DA.Time (addRelTime, seconds)
@@ -101,10 +114,12 @@ template StreamMandate
           cyclesPulled = cyclesPulled + 1
           lastPulledAt = Some now
 
-    -- | The payer revokes the mandate. No operator cooperation required.
-    choice Revoke : ()
+    -- | The payer revokes the mandate. No operator cooperation required. Flips
+    -- `active` to False (rather than archiving), so the `RecordPull` guard is a
+    -- live check and the revocation is an auditable on-ledger state.
+    choice Revoke : ContractId StreamMandate
       controller payer
-      do pure ()
+      do create this with active = False
 
     nonconsuming choice GetMandateInfo : MandateInfo
       with

@@ -243,10 +243,11 @@ testInvariantRenewable = script do
     exerciseCmd escrowCid Withdraw_Stream with withdrawTime = t1
   assertInvariant "renew-after-w1" deposit accrued1 r1.newTotalWithdrawn
 
-  -- Renew
+  -- The renewed curve must not price below what Bob already accrued at renewal
+  -- time; extending to May 1 keeps it above.
   escrows <- query @StreamEscrow bob
   let (cid2, _) = head escrows
-  let newEnd = time (date 2025 Jul 1) 0 0 0
+  let newEnd = time (date 2025 May 1) 0 0 0
       addDeposit = 6000.0
   submit alice do
     exerciseCmd cid2 Renew_Stream with

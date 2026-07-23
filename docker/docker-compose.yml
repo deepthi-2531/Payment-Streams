@@ -70,7 +70,10 @@ services:
         VITE_PARTYLAYER_NETWORK: ${VITE_PARTYLAYER_NETWORK:-devnet}
         VITE_PARTYLAYER_APP_NAME: ${VITE_PARTYLAYER_APP_NAME:-Canton Payment Streams}
     ports:
-      - '3000:8080'
+      # Publish to loopback by default (like canton/proxy above). The dashboard
+      # sits in front of the proxy's dev identity layer, so front it with a
+      # reverse proxy to serve it beyond localhost.
+      - '${DOCKER_BIND_HOST:-127.0.0.1}:3000:8080'
     depends_on:
       proxy:
         condition: service_healthy
