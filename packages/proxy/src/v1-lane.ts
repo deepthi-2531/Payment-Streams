@@ -99,6 +99,8 @@ export interface V1LaneConfig {
   transferVersion: 'v1' | 'v2';
   /** TransferInstruction interface id for Accept/Withdraw of pending offers. */
   transferInstructionInterfaceId: string;
+  /** v2 TransferInstruction interface id (v2 accept/withdraw of pending offers). */
+  transferInstructionInterfaceIdV2: string;
   /** Registry AllocationFactory interface id for receiver-claim funding. */
   allocationFactoryInterfaceId: string;
   /** V1 Allocation interface id exercised through ReceiverClaimV1. */
@@ -168,6 +170,10 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     transferInstructionInterfaceId: get(
       'TRANSFER_INSTRUCTION_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction',
+    ),
+    transferInstructionInterfaceIdV2: get(
+      'TRANSFER_INSTRUCTION_INTERFACE_ID_V2',
+      '#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction',
     ),
     allocationFactoryInterfaceId: get(
       'V1_ALLOCATION_FACTORY_INTERFACE_ID',
@@ -294,7 +300,7 @@ export interface ReceiverClaimRecord {
  * (retry) after expiry. A `pending` offer has NOT moved money — `settled`/
  * `cycles` advance only when it becomes `accepted`.
  */
-export type PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn';
+export type PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn' | 'expired';
 
 export interface PendingTransferRecord {
   cycle: number;
