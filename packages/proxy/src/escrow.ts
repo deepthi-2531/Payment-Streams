@@ -201,6 +201,11 @@ export interface EscrowAgreement {
   totalDeposited: string;
   /** Amount streamed to the payee so far. */
   released: string;
+  /** Consecutive releases reclaimed because they expired unaccepted (non-CC only).
+   *  When this reaches MAX_DELIVERY_STALLS the streamer stops auto-releasing to a
+   *  payee that never accepts, so it can't churn a release+withdraw every cadence
+   *  forever; reset to 0 once reconcile sees a delivery. */
+  deliveryStalls?: number;
   /** updateId of the payer's signed deposit transfer (intent receipt). */
   fundingTransferId: string;
   /** Contract id of the on-ledger OperatorEscrow record. */
@@ -252,6 +257,11 @@ function saveEscrows(config: V1LaneConfig, store: EscrowStore): void {
   writeFileSync(tmp, JSON.stringify(store, null, 2));
   renameSync(tmp, f);
 }
+
+/** After this many consecutive reclaimed (expired-unaccepted) releases, the
+ * streamer stops auto-releasing to a payee that never accepts, so a preapproval-
+ * less recipient can't make one vault churn a release+withdraw every cadence. */
+const MAX_DELIVERY_STALLS = 3;
 
 const dec = (x: string | number): string => Number(x).toFixed(10);
 const remainingOf = (e: EscrowAgreement): number =>
@@ -1308,6 +1318,9 @@ export class EscrowLane {
             e.released = dec(Math.max(0, Number(e.released) - Number(l.amount)));
             if (e.status === 'completed') e.status = 'active';
           }
+          // A confirmed delivery clears the stall counter, so a payee that starts
+          // accepting resumes auto-streaming (see MAX_DELIVERY_STALLS in tick).
+          if (next === 'accepted' && l.kind === 'release') e.deliveryStalls = 0;
           l.offerStatus = next;
           mutated = true;
         }
@@ -1476,6 +1489,11 @@ export class EscrowLane {
     if (!e) throw new V1LaneError(404, 'escrow_not_found', `escrow "${escrowId}" not found`);
     const asset = assetOf(this.config, e);
     if (asset.key === 'cc') return { reclaimed: 0 };
+    // A refunded vault has already returned its balance to the payer; reclaiming a
+    // still-locked release into custody there has no disbursement path, so leave it
+    // in the (recoverable) offer rather than strand it in the commingled pool.
+    // active + completed proceed (completed reopens below so refund can recover it).
+    if (e.status === 'refunded') return { reclaimed: 0 };
     const nowMs = Date.now();
     const stuck = (e.ledger ?? []).filter(
       (l) =>
@@ -1510,6 +1528,7 @@ export class EscrowLane {
       l.offerStatus = 'withdrawn';
       e.released = dec(Math.max(0, Number(e.released) - Number(l.amount)));
       if (e.status === 'completed') e.status = 'active';
+      e.deliveryStalls = (e.deliveryStalls ?? 0) + 1;
       reclaimed += 1;
       mutated = true;
     }
@@ -1527,6 +1546,15 @@ export class EscrowLane {
     const active = Object.values(store.escrows).filter((e) => e.status === 'active');
     for (const e of active) {
       if (Date.parse(e.nextDueAt) > now) continue;
+      // A payee that never accepts (no preapproval) would otherwise churn a
+      // release+reclaim every cadence; pause auto-release after repeated stalls
+      // (the payer can still refund, and a delivery resets the counter).
+      if ((e.deliveryStalls ?? 0) >= MAX_DELIVERY_STALLS) {
+        console.warn(
+          `escrow_delivery_stalled escrow=${e.escrowId} stalls=${e.deliveryStalls} — auto-release paused; refund or enable recipient preapproval`,
+        );
+        continue;
+      }
       try {
         await this.releaseEscrowOnce(e.escrowId);
       } catch (err) {
