@@ -184,3 +184,98 @@ actions stay V2-only). The path to the full feature set is:
    `transferEventsV2: true` (if the asset publishes the V2 events
    package).
 4. Done — the library integrates automatically.
+
+---
+
+## Streaming a non-CC asset at the proxy
+
+The registry above is the SDK-side asset catalogue. The **proxy** carries its
+own, narrower whitelist for the V1 transfer-instruction lane
+(`POST /api/v1/streams`): the assets it will actually create and settle a stream
+against. That whitelist is resolved from the proxy's environment at runtime by
+`getSupportedAssets()` (`packages/proxy/src/assets.ts`) and surfaced at
+`GET /api/assets`.
+
+Two asset slots are wired:
+
+* **Canton Coin** (`key: cc`) — the default. Streamable as soon as
+  `CC_ADMIN_PARTY` (or `CANTON_CC_ADMIN`) is set. CC's transfer-instruction
+  factory is served by its own Scan, so it reuses the proxy's global
+  `REGISTRY_API_URL` and needs no per-asset registry base.
+* **USDCx** (`key: usdcx`) — the reference non-CC slot. Streamable only once
+  **both** its registrar admin and its **own** registry base are configured.
+
+### Configuring a non-CC asset
+
+Set the per-asset environment before starting the proxy:
+
+| Env var | Required | Default | What it is |
+|---|---|---|---|
+| `USDCX_ADMIN_PARTY` | yes | — | Party id of the asset's registrar / issuer (the instrument admin) |
+| `USDCX_REGISTRY_API_URL` | yes | — | Base URL of this asset's transfer-instruction registry (distinct from CC's Scan) |
+| `USDCX_HOLDING_TEMPLATE_ID` | no | (empty) | Concrete holding template the asset is funded from / verified against |
+| `USDCX_INSTRUMENT_ID` | no | `USDCx` | Instrument id under that admin |
+| `USDCX_TRANSFER_VERSION` | no | `v1` | Token-standard transfer API version (`v1` / `v2`) |
+| `USDCX_DECIMALS` | no | `6` | Display decimals |
+
+Both `USDCX_ADMIN_PARTY` **and** `USDCX_REGISTRY_API_URL` must be present, or the
+asset is omitted from the whitelist entirely — a stream is never created against
+an unroutable instrument. A party id left as a `TBD` placeholder counts as unset.
+
+> There is no standardized admin → registry discovery: the registry base URL is
+> configured out-of-band, per asset. You get it from the asset's issuer, not by
+> querying the admin party.
+
+Example (placeholders — substitute your network's real values):
+
+```bash
+USDCX_ADMIN_PARTY=<usdcx-registrar-party>
+USDCX_REGISTRY_API_URL=https://<usdcx-registry-host>
+USDCX_HOLDING_TEMPLATE_ID=<package-id>:<Module>:<Template>
+USDCX_TRANSFER_VERSION=v1
+USDCX_DECIMALS=6
+```
+
+### Creating a stream against it
+
+1. Confirm the asset is whitelisted — it appears in the `GET /api/assets`
+   array under the `key` you'll use:
+
+   ```bash
+   curl -s "$PROXY_URL/api/assets" | jq '.[].key'
+   # "cc"
+   # "usdcx"
+   ```
+
+2. Create with `assetKey` in the `POST /api/v1/streams` body:
+
+   ```jsonc
+   { "streamId": "...", "recipientParty": "...", "assetKey": "usdcx" /* ... */ }
+   ```
+
+* `assetKey` **absent** or `"cc"` ⇒ Canton Coin (CC streams settle exactly as
+  before; no per-stream instrument is stored).
+* An **unknown or unconfigured** `assetKey` ⇒ `400 { "reason": "unknown_asset" }`.
+
+The chosen instrument — admin, instrument id, registry base, holding template,
+transfer version — is **frozen onto the stream at create time**. Every later
+settle and on-chain-verify for that stream reads the frozen instrument, so
+registry drift or an env change can't retarget a live stream.
+
+### Settlement is one factory for every asset
+
+CIP-56 is the token standard; every streamable asset — CC or non-CC — settles
+through the same transfer-instruction factory. There is no per-asset
+money-moving code path. USDCx's burn / mint is its **issuance** surface (how the
+asset is minted or redeemed), not part of the streaming path; a stream only ever
+moves existing holdings via a transfer.
+
+### Recipients without a TransferPreapproval
+
+If the recipient has registered a `TransferPreapproval`, each cycle delivers
+directly. If not, the cycle's transfer lands as a **pending offer** (a
+`TransferInstruction`) the recipient must `Accept` before money moves — the cycle
+counts as settled only once accepted. Each offer carries an `executeBefore`
+deadline: once it passes, the recipient can no longer accept, and the sender can
+reclaim the funds with `TransferInstruction_Withdraw`. The offer / expiry
+lifecycle itself is covered in [SETTLEMENT-DESIGN.md](../SETTLEMENT-DESIGN.md).

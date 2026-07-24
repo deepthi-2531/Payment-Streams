@@ -87,6 +87,14 @@ Create a new payment stream. The caller becomes the stream's sender.
 | `settlementMode` | string | yes | Must be `TokenStandardCustody`; the asset registry selects the V2 lane when available or the transitional V1 lane for registered V1 assets |
 | `asset` | object | yes | `{ instrumentId, admin }` — must match a registered asset in `config/asset-registry.json` |
 
+> **Multi-asset on the V1 transfer-instruction lane:** the V1 create route
+> (`POST /api/v1/streams`) picks the asset by an optional `assetKey` string
+> instead of the `asset` object. Absent or `"cc"` ⇒ Canton Coin; any other key
+> must resolve to a whitelisted, env-configured asset (see `GET /api/assets`) or
+> the create returns `400 { "reason": "unknown_asset" }`. The chosen instrument
+> is frozen onto the stream and drives its settle + on-chain-verify path. See
+> [per-asset-config.md](integration-guide/per-asset-config.md#streaming-a-non-cc-asset-at-the-proxy).
+
 **Vesting modes:**
 
 ```jsonc
@@ -303,6 +311,7 @@ Common reason codes:
 | `forbidden` | 403 | Caller not authorized for this action on this stream |
 | `not_found` / `stream_not_found` / `request_not_found` | 404 | Stream / request not found |
 | `self_stream` | 400 | Stream sender and recipient are the same party |
+| `unknown_asset` | 400 | `assetKey` did not resolve to a whitelisted / env-configured asset (V1 lane create) |
 | `settlement_mismatch` | 422 | Settled amount did not match the expected accrual |
 | `deposit_undelivered` | 422 | Escrow deposit holding was not delivered on-ledger |
 | `escrow_cap_exceeded` | 409 | Deposit would exceed the aggregate custody cap (`ESCROW_MAX_TOTAL_CC`) |

@@ -3330,7 +3330,7 @@ export class V1LaneService {
     if (record.status === 'accepted') return { prepared: false, reason: 'already_accepted' };
     if (record.status === 'withdrawn') return { prepared: false, reason: 'withdrawn' };
     const prepared = await prepareInstructionActionCommand(
-      this.config,
+      configForStream(this.config, agreement),
       record,
       'accept',
       agreement.recipientParty,
@@ -3453,7 +3453,7 @@ export class V1LaneService {
     if (record.status === 'accepted') return { settled: false, reason: 'already_accepted', cycle: st.cycles };
     if (record.status === 'withdrawn') return { settled: false, reason: 'withdrawn', cycle: st.cycles };
     const prepared = await prepareInstructionActionCommand(
-      this.config,
+      configForStream(this.config, agreement),
       record,
       'accept',
       agreement.recipientParty,
@@ -3492,7 +3492,7 @@ export class V1LaneService {
     if (record.status === 'accepted') return { prepared: false, reason: 'already_accepted' };
     if (record.status === 'withdrawn') return { prepared: false, reason: 'already_withdrawn' };
     const prepared = await prepareInstructionActionCommand(
-      this.config,
+      configForStream(this.config, agreement),
       record,
       'withdraw',
       agreement.payerParty,
