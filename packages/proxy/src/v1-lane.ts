@@ -1490,11 +1490,15 @@ export function resolveInstrument(
   };
 }
 
-/** A shallow copy of the lane config with the instrument-specific fields
- *  overridden to a stream's chosen asset. Lets the existing verify helpers
- *  (which read config.instrumentId / ccAdminParty / holdingTemplateId /
- *  registryApiUrl) validate against the right asset with no signature changes;
- *  a stream with no instrument yields the config unchanged. */
+/** A shallow copy of the lane config with the instrument-*identity* fields
+ *  overridden to a stream's chosen asset, so the verify helpers (which read
+ *  config.instrumentId / ccAdminParty / holdingTemplateId) match the right asset
+ *  with no signature changes; a stream with no instrument yields config
+ *  unchanged. `registryApiUrl` is deliberately NOT overridden: every asset
+ *  settles on the same synchronizer, so on-chain confirmation is read from the
+ *  one network Scan (config.registryApiUrl). The per-asset token-standard
+ *  registry base is a separate concern, passed explicitly to the registry
+ *  factory / choice-context calls (resolveInstrument().registryApiUrl). */
 export function configForStream(config: V1LaneConfig, agreement: V1Agreement): V1LaneConfig {
   const inst = resolveInstrument(config, agreement);
   return {
@@ -1502,7 +1506,6 @@ export function configForStream(config: V1LaneConfig, agreement: V1Agreement): V
     ccAdminParty: inst.admin,
     instrumentId: inst.id,
     holdingTemplateId: inst.holdingTemplateId,
-    registryApiUrl: inst.registryApiUrl,
     transferVersion: inst.transferVersion,
   };
 }
@@ -1848,12 +1851,14 @@ async function prepareInstructionActionCommand(
   record: PendingTransferRecord,
   action: 'accept' | 'withdraw',
   actAs: string,
+  registryBaseUrl?: string,
 ): Promise<PreparedInstructionAction> {
   const choice = action === 'accept' ? 'TransferInstruction_Accept' : 'TransferInstruction_Withdraw';
   const body = await registryPost(
     config,
     `/registry/transfer-instruction/v1/${encodeURIComponent(record.transferInstructionCid)}/choice-contexts/${action}`,
     {},
+    registryBaseUrl,
   );
   const ctx = body.choiceContext ?? body.choice_context ?? body;
   const command = {
@@ -3370,10 +3375,11 @@ export class V1LaneService {
     if (record.status === 'accepted') return { prepared: false, reason: 'already_accepted' };
     if (record.status === 'withdrawn') return { prepared: false, reason: 'withdrawn' };
     const prepared = await prepareInstructionActionCommand(
-      configForStream(this.config, agreement),
+      this.config,
       record,
       'accept',
       agreement.recipientParty,
+      resolveInstrument(this.config, agreement).registryApiUrl,
     );
     return { prepared: true, ...prepared };
   }
@@ -3493,10 +3499,11 @@ export class V1LaneService {
     if (record.status === 'accepted') return { settled: false, reason: 'already_accepted', cycle: st.cycles };
     if (record.status === 'withdrawn') return { settled: false, reason: 'withdrawn', cycle: st.cycles };
     const prepared = await prepareInstructionActionCommand(
-      configForStream(this.config, agreement),
+      this.config,
       record,
       'accept',
       agreement.recipientParty,
+      resolveInstrument(this.config, agreement).registryApiUrl,
     );
     const res = await submit(
       this.config,
@@ -3532,10 +3539,11 @@ export class V1LaneService {
     if (record.status === 'accepted') return { prepared: false, reason: 'already_accepted' };
     if (record.status === 'withdrawn') return { prepared: false, reason: 'already_withdrawn' };
     const prepared = await prepareInstructionActionCommand(
-      configForStream(this.config, agreement),
+      this.config,
       record,
       'withdraw',
       agreement.payerParty,
+      resolveInstrument(this.config, agreement).registryApiUrl,
     );
     return { prepared: true, ...prepared };
   }
