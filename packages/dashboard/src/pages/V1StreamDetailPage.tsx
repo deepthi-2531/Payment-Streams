@@ -593,6 +593,11 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
           {[...pending].reverse().map((p, i) => {
             const expired = Date.parse(p.executeBefore) <= nowMs;
             const isOpen = p.status === 'pending';
+            // Reclaimable = an open offer whose accept-by deadline has passed (or
+            // one the proxy already flagged 'expired'). The sender's CC is still
+            // locked on-ledger and can be claimed back via the withdraw path.
+            const isExpiredStatus = p.status === 'expired';
+            const reclaimable = (isOpen && expired) || isExpiredStatus;
             const last = i === pending.length - 1;
             return (
               <div
@@ -613,12 +618,19 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                 <div>
                   <span
                     className="badge"
-                    style={{ fontSize: 11, color: p.status === 'accepted' ? 'var(--accent)' : 'var(--fg-2)' }}
+                    style={{
+                      fontSize: 11,
+                      color: reclaimable
+                        ? 'var(--warn)'
+                        : p.status === 'accepted'
+                          ? 'var(--accent)'
+                          : 'var(--fg-2)',
+                    }}
                   >
-                    {pendingStatusLabel(p.status)}
+                    {reclaimable ? 'Expired — reclaimable' : pendingStatusLabel(p.status)}
                   </span>
-                  <span style={{ display: 'block', fontSize: 10.5, color: expired && isOpen ? 'var(--warn)' : 'var(--fg-4)', marginTop: 4 }}>
-                    {isOpen ? (expired ? `expired ${fmt(p.executeBefore)}` : `expires ${fmt(p.executeBefore)}`) : ''}
+                  <span style={{ display: 'block', fontSize: 10.5, color: reclaimable ? 'var(--warn)' : 'var(--fg-4)', marginTop: 4 }}>
+                    {isOpen || isExpiredStatus ? (expired ? `expired ${fmt(p.executeBefore)}` : `expires ${fmt(p.executeBefore)}`) : ''}
                   </span>
                 </div>
                 <div style={{ minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
@@ -635,20 +647,20 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                         <><HandCoins size={13} /> Accept</>
                       )}
                     </button>
-                  ) : isOpen && isPayer ? (
+                  ) : (isOpen || isExpiredStatus) && isPayer ? (
                     <button
                       className="btn btn-ghost"
                       onClick={() => onWithdraw(p)}
                       disabled={withdraw.isPending}
-                      title={expired
-                        ? 'Reclaim the locked CC so you can settle this cycle again.'
+                      title={reclaimable
+                        ? 'This offer expired unaccepted — claim the locked CC back to your wallet.'
                         : 'Reclaim the offer early (the recipient has not accepted yet).'}
                       style={{ minWidth: 96, justifyContent: 'center', padding: '6px 12px', fontSize: 12 }}
                     >
                       {withdraw.isPending ? (
                         <Loader2 size={13} style={{ animation: 'spin 800ms linear infinite' }} />
                       ) : (
-                        <><Undo2 size={13} /> {expired ? 'Retry' : 'Withdraw'}</>
+                        <><Undo2 size={13} /> {reclaimable ? 'Claim back' : 'Withdraw'}</>
                       )}
                     </button>
                   ) : isVerifiableUpdateId(p.finalUpdateId) ? (
@@ -662,9 +674,9 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                     >
                       {p.status} · {p.finalUpdateId} ↗
                     </a>
-                  ) : isOpen && expired ? (
+                  ) : (isOpen || isExpiredStatus) && expired ? (
                     <span style={{ fontSize: 11, color: 'var(--warn)' }}>
-                      {isRecipient ? 'expired — ask payer to retry' : 'expired'}
+                      {isRecipient ? 'expired — ask the payer to claim it back' : 'expired'}
                     </span>
                   ) : (
                     <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>
@@ -1050,6 +1062,8 @@ function pendingStatusLabel(status: V1PendingTransferRecord['status']): string {
       return 'Accepted';
     case 'withdrawn':
       return 'Reclaimed';
+    case 'expired':
+      return 'Expired — reclaimable';
     default:
       return status;
   }

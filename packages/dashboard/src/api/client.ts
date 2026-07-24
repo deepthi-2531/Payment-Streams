@@ -1145,6 +1145,9 @@ export type V1ArrearsPolicy = 'catch-up' | 'skip-missed';
 export interface V1CreateStreamParams {
   readonly streamId?: string;
   readonly appId?: string;
+  /** Whitelisted asset key (GET /api/assets). Absent or 'cc' ⇒ Canton Coin. An
+   *  unknown/unconfigured key is rejected by the proxy with `unknown_asset`. */
+  readonly assetKey?: string;
   /** REQUIRED on-chain payer; must equal the caller party. */
   readonly payerParty: string;
   /** REQUIRED recipient; must hold a TransferPreapproval. */
@@ -1202,7 +1205,7 @@ export interface V1ReceiverClaimRecord {
   readonly status: V1ReceiverClaimStatus;
 }
 
-export type V1PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn';
+export type V1PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn' | 'expired';
 
 /** A pending transfer offer — a cycle whose transfer landed as a
  * TransferInstruction (recipient had no pre-approval) and awaits the
@@ -1699,6 +1702,10 @@ export interface SupportedAsset {
   instrumentId: string;
   standard: string;
   note?: string;
+  holdingTemplateId?: string;
+  registryApiUrl?: string;
+  transferVersion?: string;
+  decimals?: number;
 }
 
 /** Create-flow request body (POST /api/flows). */

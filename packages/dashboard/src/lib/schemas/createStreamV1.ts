@@ -46,6 +46,12 @@ export const createStreamV1Schema = z.object({
     .optional()
     .or(z.literal('')),
   recipientParty: partyIdSchema,
+  /**
+   * Whitelisted asset key from GET /api/assets (e.g. 'cc', 'usdcx'). Blank or
+   * absent ⇒ the proxy defaults to Canton Coin. Only whitelisted keys are
+   * accepted server-side, so no free-text validation is needed here.
+   */
+  assetKey: z.string().trim().max(64, 'Asset key is too long').optional().or(z.literal('')),
   /** Accrued per cadence period; aliased to `ratePerCycle` on the wire. */
   ratePerCycle: decimalStringSchema,
   cadence: z.enum(['second', 'minute', 'hourly', 'daily']),
