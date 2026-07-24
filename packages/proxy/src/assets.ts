@@ -16,6 +16,16 @@ export interface SupportedAsset {
   instrumentId: string;
   standard: string;
   note?: string;
+  /** Concrete holding template this asset is funded from / verified against. */
+  holdingTemplateId: string;
+  /** Registry base for this asset's transfer-instruction factory. Empty string
+   *  ⇒ the proxy's global REGISTRY_API_URL (Canton Coin's Scan). A non-CC asset
+   *  must set its own base to be streamable. */
+  registryApiUrl: string;
+  /** Token-standard transfer API version for this asset's money leg. */
+  transferVersion: 'v1' | 'v2';
+  /** Display decimals. */
+  decimals: number;
 }
 
 function usable(party: string | undefined): party is string {
@@ -36,22 +46,45 @@ export function getSupportedAssets(): SupportedAsset[] {
       displayName: 'Canton Coin (Amulet)',
       instrumentAdmin: ccAdmin,
       instrumentId: (process.env['CC_INSTRUMENT_ID'] ?? 'Amulet').trim(),
-      standard: 'CIP-56 V1 (transitional)',
+      standard: 'CIP-56 Token Standard',
       note: 'Canton Coin — the DSO admin is resolved for this network.',
+      holdingTemplateId: (
+        process.env['HOLDING_TEMPLATE_ID'] ?? '#splice-amulet:Splice.Amulet:Amulet'
+      ).trim(),
+      // Empty ⇒ the global REGISTRY_API_URL (CC's Scan already serves the
+      // transfer-instruction factory at /registry/... directly).
+      registryApiUrl: '',
+      transferVersion: (process.env['TRANSFER_VERSION'] ?? 'v1') === 'v2' ? 'v2' : 'v1',
+      decimals: 10,
     });
   }
 
   const usdcxAdmin = process.env['USDCX_ADMIN_PARTY']?.trim();
-  if (usable(usdcxAdmin)) {
+  const usdcxRegistry = process.env['USDCX_REGISTRY_API_URL']?.trim();
+  // USDCx is streamable only once BOTH its registrar admin and its own
+  // transfer-instruction registry base are configured (the Circle xReserve
+  // token-standard registry, distinct from CC's Scan). Until then it stays off
+  // the whitelist so a stream can't be created against an unroutable asset.
+  if (usable(usdcxAdmin) && usdcxRegistry) {
     out.push({
       key: 'usdcx',
       displayName: 'USDCx',
       instrumentAdmin: usdcxAdmin,
       instrumentId: (process.env['USDCX_INSTRUMENT_ID'] ?? 'USDCx').trim(),
-      standard: 'CIP-56 V1 (transitional)',
+      standard: 'CIP-56 Token Standard',
       note: 'Circle USDC on Canton via xReserve.',
+      holdingTemplateId: (process.env['USDCX_HOLDING_TEMPLATE_ID'] ?? '').trim(),
+      registryApiUrl: usdcxRegistry.replace(/\/+$/, ''),
+      transferVersion: (process.env['USDCX_TRANSFER_VERSION'] ?? 'v1') === 'v2' ? 'v2' : 'v1',
+      decimals: Number(process.env['USDCX_DECIMALS'] ?? '6'),
     });
   }
 
   return out;
+}
+
+/** Resolve a whitelisted asset by its registry key, or undefined if the key is
+ *  unknown / not configured for this deployment (used to gate stream creation). */
+export function resolveStreamAsset(key: string): SupportedAsset | undefined {
+  return getSupportedAssets().find((a) => a.key === key);
 }

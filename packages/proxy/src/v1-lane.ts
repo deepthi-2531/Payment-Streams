@@ -516,6 +516,11 @@ function pickKey(o: any, keys: string[]): any {
 function ccInstrumentMatches(instId: unknown, config: V1LaneConfig): boolean {
   if (instId == null) return false;
   if (typeof instId === 'string') return instId === config.instrumentId;
+  // Bind the admin too when the on-chain instrument carries it: an id string
+  // ('Amulet', 'USDCx', …) is only unique within an admin, so two assets can
+  // share an id across different registrars. id alone is not a safe match.
+  const admin = pickKey(instId, ['admin']);
+  if (admin != null && String(admin) !== config.ccAdminParty) return false;
   return String(pickKey(instId, ['id', 'instrumentId'])) === config.instrumentId;
 }
 
@@ -1439,6 +1444,23 @@ export function resolveInstrument(
   };
 }
 
+/** A shallow copy of the lane config with the instrument-specific fields
+ *  overridden to a stream's chosen asset. Lets the existing verify helpers
+ *  (which read config.instrumentId / ccAdminParty / holdingTemplateId /
+ *  registryApiUrl) validate against the right asset with no signature changes;
+ *  a stream with no instrument yields the config unchanged. */
+export function configForStream(config: V1LaneConfig, agreement: V1Agreement): V1LaneConfig {
+  const inst = resolveInstrument(config, agreement);
+  return {
+    ...config,
+    ccAdminParty: inst.admin,
+    instrumentId: inst.id,
+    holdingTemplateId: inst.holdingTemplateId,
+    registryApiUrl: inst.registryApiUrl,
+    transferVersion: inst.transferVersion,
+  };
+}
+
 export async function prepareSettleCommand(
   config: V1LaneConfig,
   agreement: V1Agreement,
@@ -2243,6 +2265,12 @@ export interface CreateV1StreamInput {
   createAdminRecord?: boolean;
   cancellable?: boolean;
   observers?: string[];
+  /** Whitelisted asset-registry key this stream pays (e.g. 'usdcx'). Absent ⇒
+   *  the proxy's default CC asset. */
+  assetKey?: string;
+  /** Resolved per-stream settlement instrument; validated against the asset
+   *  whitelist by the create route before it reaches here. */
+  instrument?: V1Agreement['instrument'];
 }
 
 export interface V1StreamView {
@@ -2440,6 +2468,8 @@ export class V1LaneService {
       ...(streamRecordCid ? { streamRecordCid } : {}),
       totalDeposited,
       createdAt: new Date().toISOString(),
+      ...(input.assetKey ? { assetKey: input.assetKey } : {}),
+      ...(input.instrument ? { instrument: input.instrument } : {}),
     };
 
     store.agreements[streamId] = agreement;
@@ -3056,7 +3086,7 @@ export class V1LaneService {
     // Bind to the exact allocation being claimed and require the committed update
     // deliver at least the tracked amount to the recipient; credit the on-chain
     // amount, never the stored figure off an unrelated transfer.
-    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(configForStream(this.config, agreement), input.updateId, {
       trackedCid: record.allocationCid || record.receiverClaimCid || input.allocationCid,
       recipient: agreement.recipientParty,
       minAmount: Number(record.amount),
@@ -3132,7 +3162,7 @@ export class V1LaneService {
     // moved payer -> recipient in CC, and carries this stream's agreement tag
     // (so an unrelated transfer between the same parties can't be recorded as a
     // cycle). Credit the on-chain amount it returns, never the client's amount.
-    const { body: updateBody, amount } = await verifyDeliveryOnScan(this.config, input.updateId, {
+    const { body: updateBody, amount } = await verifyDeliveryOnScan(configForStream(this.config, agreement), input.updateId, {
       sender: agreement.payerParty,
       receiver: agreement.recipientParty,
       minAmount: 0,
@@ -3352,7 +3382,7 @@ export class V1LaneService {
     // update deliver at least the tracked amount to the recipient; credit the
     // on-chain amount, so a dust or unrelated transfer can't mark the cycle
     // accepted for the full pending figure.
-    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(configForStream(this.config, agreement), input.updateId, {
       trackedCid: record.transferInstructionCid || input.transferInstructionCid,
       recipient: agreement.recipientParty,
       minAmount: Number(record.amount),
