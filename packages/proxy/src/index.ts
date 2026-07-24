@@ -104,6 +104,7 @@ import {
   V1LaneService,
   V1LaneError,
   type CreateV1StreamInput,
+  type TransferProof,
 } from './v1-lane.js';
 import {
   listStreamsViaJson,
@@ -1528,11 +1529,13 @@ app.post('/api/v1/streams/:id/record-settle', async (req, res) => {
     const view = await v1Lane.getStream(req.params['id']!, auth.party);
     enforceRole(auth.party, 'sender', view.agreement.payerParty);
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const proof = body['transferProof'];
     const result = await v1Lane.recordSettle(req.params['id']!, {
       updateId: body['updateId'] as string,
       amount: body['amount'] as string,
       ref: body['ref'] as string | undefined,
       executeBefore: body['executeBefore'] as string | undefined,
+      ...(proof && typeof proof === 'object' ? { transferProof: proof as TransferProof } : {}),
     });
     res.json(serializeForJson(result));
   } catch (err) {

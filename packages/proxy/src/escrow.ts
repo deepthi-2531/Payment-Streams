@@ -29,6 +29,9 @@ import {
   prepareSettleCommand,
   prepareSettleCommandV2,
   verifyHoldingDeliveryOnScan,
+  acceptOfferByCid,
+  findEscrowDepositOffer,
+  escrowOwnedHoldings,
   resolveInstrument,
   configForStream,
   buildOfferWithdrawCommand,
@@ -950,17 +953,63 @@ export class EscrowLane {
           throw new V1LaneError(409, 'funding_reused', 'fundingTransferId already backs another escrow');
         }
       }
-      // Verify the deposit actually DELIVERED CC into the escrow party — a created
-      // holding it owns, not merely a transfer authorization — for at least the
-      // requested amount, and take the verified on-chain amount as the funded
-      // total. Requiring delivery (not a transfer spec) stops a locked, still-
-      // withdrawable transfer instruction from being recorded as a funded deposit,
-      // which would phantom-inflate the pool's owed balance and freeze it.
-      const verified = await verifyHoldingDeliveryOnScan(streamCfg, fundingTransferId, {
-        recipient: this.config.escrowParty,
-        minAmount: Number(totalDeposit),
-      });
-      depositAmount = dec(verified.amount);
+      if (instrument && instrument.holdingTemplateId) {
+        // Non-CC (e.g. USDCx): no preapproval, so the payer's transfer created a
+        // pending offer, not a delivery. Bind the escrow's matching offer (must be
+        // from the declared payer, of the declared instrument, covering the amount),
+        // accept it via that asset's registrar, and credit the offer's on-ledger
+        // amount only after the escrow's confirmed balance actually rose.
+        const offer = await findEscrowDepositOffer(this.config, {
+          expectedSender: originalPayer,
+          instrumentId: instrument.id,
+          minAmount: Number(totalDeposit),
+        });
+        if (!offer) {
+          throw new V1LaneError(
+            422,
+            'deposit_offer_not_found',
+            `no pending ${assetCapKey.toUpperCase()} offer from ${originalPayer} for at least ${totalDeposit} ` +
+              `is deliverable to the escrow; no escrow was created.`,
+          );
+        }
+        const offerAmount = Number(offer.amount);
+        const ownedBefore = await escrowOwnedHoldings(this.config, instrument.holdingTemplateId);
+        await acceptOfferByCid(
+          this.config,
+          this.config.escrowParty,
+          offer.transferInstructionCid,
+          instrument.registryApiUrl,
+        );
+        const ownedAfter = await escrowOwnedHoldings(this.config, instrument.holdingTemplateId);
+        // The accept has committed on-ledger; a failure past this point stranded
+        // the payer's now-custodied funds, so log an out-of-band refund alert.
+        if (ownedAfter + 1e-6 < ownedBefore + offerAmount) {
+          console.error(
+            `escrow_deposit_underdelivered_funded party=${this.config.escrowParty} asset=${assetCapKey} ` +
+              `payer=${originalPayer} offer=${offer.transferInstructionCid} expected=${offerAmount.toFixed(4)} ` +
+              `rose=${(ownedAfter - ownedBefore).toFixed(4)} refund_required=true`,
+          );
+          throw new V1LaneError(
+            422,
+            'deposit_not_delivered',
+            `deposit accepted but the escrow's confirmed ${assetCapKey.toUpperCase()} balance rose only ` +
+              `${(ownedAfter - ownedBefore).toFixed(4)} (expected ${offerAmount.toFixed(4)}); no escrow was created.`,
+          );
+        }
+        // Credit the offer's on-ledger amount, bounded — never the commingled pool.
+        depositAmount = dec(offerAmount);
+      } else {
+        // CC: the escrow's Amulet preapproval delivers directly. Require a
+        // delivered holding the escrow owns (not a transfer authorization) for at
+        // least the requested amount, and fund by the verified on-chain amount. A
+        // locked, still-withdrawable instruction recorded as funded would phantom-
+        // inflate the pool's owed balance and freeze it.
+        const verified = await verifyHoldingDeliveryOnScan(streamCfg, fundingTransferId, {
+          recipient: this.config.escrowParty,
+          minAmount: Number(totalDeposit),
+        });
+        depositAmount = dec(verified.amount);
+      }
     }
     // Aggregate custody cap: refuse to grow the total tracked obligation beyond a
     // configured ceiling, so a single commingled key can never be trusted with

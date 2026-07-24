@@ -241,10 +241,19 @@ async function subscribeStatus(listener: StreamsWalletStatusHandler) {
   const onExpired = client.on('session:expired', () => {
     listener(emptyStatus());
   });
+  // An error can accompany a dropped session (e.g. a failed submit that also
+  // tears down the handshake). It doesn't always mean disconnect, so re-read
+  // the session and forward the real status instead of forcing a sign-out.
+  const onError = client.on('error', () => {
+    void snapshotStatus()
+      .then((s) => listener(s))
+      .catch(() => {});
+  });
   subscriptions.set(listener as unknown as object, () => {
     onConnected();
     onDisconnected();
     onExpired();
+    onError();
   });
 }
 

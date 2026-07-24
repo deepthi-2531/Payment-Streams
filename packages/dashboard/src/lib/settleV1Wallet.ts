@@ -26,8 +26,10 @@ import {
   queryActiveContractsRaw,
   queryActiveContractsByInterfaceRaw,
   submitAndWait,
+  fetchUpdateById,
 } from './hostedWalletLedger.js';
 import type {
+  V1TransferProof,
   V1PreparedAllocation,
   V1PreparedClaim,
   V1PreparedInstructionAction,
@@ -171,6 +173,39 @@ function decodeInterfaceHolding(
   return null;
 }
 
+/** Decode a holding read via a non-CC asset's concrete template (a wallet-safe
+ *  template filter — Loop rejects interface filters). Returns null unless it's an
+ *  unlocked holding the payer owns of the wanted instrument with a spendable
+ *  amount — registrar-custody assets surface registrar-owned, locked holdings in
+ *  the owner's ACS as an observer, and those aren't spendable inputs. */
+function decodeConcreteHolding(
+  entry: Record<string, unknown>,
+  opts: { instrumentId?: string; admin?: string; owner?: string },
+): Holding | null {
+  const ev = findCreatedEvent(entry);
+  if (!ev) return null;
+  const cid = (ev['contractId'] ?? ev['contract_id']) as string | undefined;
+  if (!cid) return null;
+  const args =
+    asRecord(ev['createArgument']) ??
+    asRecord(ev['createArguments']) ??
+    asRecord(ev['create_arguments']);
+  if (!args) return null;
+  // A locked holding can't be spent as a transfer input.
+  if (args['lock'] != null) return null;
+  // Only spend what the payer actually owns — the ACS also surfaces holdings the
+  // payer merely observes (registrar-custodied), whose owner is the registrar.
+  if (opts.owner && args['owner'] != null && String(args['owner']) !== opts.owner) return null;
+  if (opts.instrumentId) {
+    const inst = asRecord(args['instrument']) ?? asRecord(args['instrumentId']);
+    const id = inst ? String(inst['id'] ?? '') : String(args['instrument'] ?? '');
+    if (id && id !== opts.instrumentId) return null;
+    if (opts.admin && inst && inst['admin'] != null && String(inst['admin']) !== opts.admin) return null;
+  }
+  const amount = holdingAmount(args);
+  return amount > 0 ? { cid, amount } : null;
+}
+
 function decodeContract(entry: Record<string, unknown>): { cid: string; args: Record<string, unknown> } | null {
   const ev = findCreatedEvent(entry);
   if (!ev) return null;
@@ -228,21 +263,33 @@ async function discoverReceiverClaimCid(party: string, ref: string): Promise<str
  */
 export async function readPayerHoldings(
   payerParty: string,
-  opts?: { instrumentId?: string; instrumentAdmin?: string },
+  opts?: { instrumentId?: string; instrumentAdmin?: string; holdingTemplateId?: string },
 ): Promise<Holding[]> {
   const wantId = opts?.instrumentId?.trim();
-  // Non-CC asset (e.g. USDCx): read via the standardized Holding interface and
-  // keep only holdings of the requested instrument. CC keeps its proven concrete-
-  // template read below.
+  // Non-CC asset (e.g. USDCx). Prefer the asset's concrete holding template via a
+  // template filter — the only shape hosted wallets like Loop accept (they reject
+  // interface filters). Fall back to the standardized Holding interface when the
+  // concrete template isn't configured. CC keeps its concrete-template read below.
   if (wantId && wantId !== 'Amulet') {
-    const rows = await queryActiveContractsByInterfaceRaw([HOLDING_INTERFACE_ID], payerParty);
-    const holdings = rows
-      .map((r) => decodeInterfaceHolding(r, wantId, opts?.instrumentAdmin))
-      .filter((h): h is Holding => h !== null);
+    const tmpl = opts?.holdingTemplateId?.trim();
+    const holdings = tmpl
+      ? (await queryActiveContractsRaw([tmpl], payerParty))
+          .map((r) =>
+            decodeConcreteHolding(r, {
+              instrumentId: wantId,
+              admin: opts?.instrumentAdmin,
+              owner: payerParty,
+            }),
+          )
+          .filter((h): h is Holding => h !== null)
+      : (await queryActiveContractsByInterfaceRaw([HOLDING_INTERFACE_ID], payerParty))
+          .map((r) => decodeInterfaceHolding(r, wantId, opts?.instrumentAdmin))
+          .filter((h): h is Holding => h !== null);
     if (holdings.length === 0) {
       throw new Error(
-        `No ${wantId} holdings found in your wallet. Fund your wallet with ${wantId} ` +
-          `first, then try again — the deposit is drawn from your own ${wantId}.`,
+        `No spendable ${wantId} holdings found in your wallet. This wallet must OWN unlocked ` +
+          `${wantId} (holdings you only receive-and-hold through a registrar's custody are not ` +
+          `spendable). Fund it with ${wantId} you control, then try again.`,
       );
     }
     return holdings;
@@ -322,17 +369,169 @@ export function walletSubmitError(res: unknown, depth = 0): string | undefined {
   return undefined;
 }
 
+/** A created event decoded out of a committed update tree: its template id, flat
+ *  create arguments, and any standardized interface views. */
+interface CreatedNode {
+  templateId: string;
+  args?: Record<string, unknown>;
+  views: Record<string, unknown>[];
+}
+
+/** Walk a committed update (from `fetchUpdateById`) and collect every node that
+ *  looks like a created event — one carrying a templateId plus create arguments
+ *  or interface views. Shape-tolerant (LEDGER_EFFECTS events, flat `createdEvent`
+ *  wrappers, snake/camel spellings) so it works across wallet passthroughs. */
+function collectCreatedNodes(root: unknown): CreatedNode[] {
+  const out: CreatedNode[] = [];
+  const stack: unknown[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (const v of node) stack.push(v);
+      continue;
+    }
+    const obj = node as Record<string, unknown>;
+    const tid = obj['templateId'] ?? obj['template_id'];
+    const args =
+      asRecord(obj['createArgument']) ??
+      asRecord(obj['createArguments']) ??
+      asRecord(obj['create_arguments']);
+    const rawViews = (obj['interfaceViews'] ?? obj['interface_views']) as unknown[] | undefined;
+    const views = Array.isArray(rawViews)
+      ? rawViews.map((v) => asRecord(v)).filter((v): v is Record<string, unknown> => v !== undefined)
+      : [];
+    if (typeof tid === 'string' && (args || views.length > 0)) {
+      out.push({ templateId: tid, args, views });
+    }
+    for (const v of Object.values(obj)) stack.push(v);
+  }
+  return out;
+}
+
+/** Read an `{ id, admin }` instrument off a holding's args or a transfer record,
+ *  tolerating both the nested-record and flat-string spellings. */
+function readInstrumentId(src: Record<string, unknown>): { id?: string; admin?: string } {
+  const inst = asRecord(src['instrument']) ?? asRecord(src['instrumentId']);
+  if (inst) {
+    return {
+      id: inst['id'] != null ? String(inst['id']) : undefined,
+      admin: inst['admin'] != null ? String(inst['admin']) : undefined,
+    };
+  }
+  const flat = src['instrument'] ?? src['instrumentId'];
+  return { id: typeof flat === 'string' ? flat : undefined };
+}
+
+/** Read a holding's amount as a raw decimal string (preserving precision). The
+ *  utility-registry holding carries a flat decimal; Amulet nests it under
+ *  `amount.initialAmount`. */
+function rawHoldingAmount(args: Record<string, unknown>): string | undefined {
+  const a = args['amount'];
+  if (a && typeof a === 'object') {
+    const init = (a as Record<string, unknown>)['initialAmount'];
+    if (init != null) return String(init);
+  }
+  if (typeof a === 'string') return a;
+  if (typeof a === 'number') return String(a);
+  return undefined;
+}
+
+/**
+ * Build a wallet-side proof-of-transfer for a non-CC direct settle by walking
+ * the committed update the payer's wallet just submitted. Prefers a created
+ * Holding of the asset OWNED BY the recipient (a completed direct delivery);
+ * falls back to a created TransferOffer to the recipient (a pending offer read
+ * from its transfer-instruction-v1 interface view). Returns undefined when
+ * neither is found, so the caller omits the proof and the proxy falls back to
+ * its interim trust path rather than hard-failing the settle.
+ */
+export function extractTransferProof(
+  update: unknown,
+  opts: { payerParty: string; recipientParty?: string; instrumentId: string; instrumentAdmin?: string },
+): V1TransferProof | undefined {
+  const nodes = collectCreatedNodes(update);
+  const wantOwner = (owner: string): boolean =>
+    opts.recipientParty ? owner === opts.recipientParty : owner !== opts.payerParty;
+
+  // 1. A created Holding owned by the recipient = a completed direct delivery.
+  for (const n of nodes) {
+    if (!n.args) continue;
+    const owner = n.args['owner'];
+    if (typeof owner !== 'string' || !wantOwner(owner)) continue;
+    const inst = readInstrumentId(n.args);
+    if (inst.id && inst.id !== opts.instrumentId) continue;
+    if (opts.instrumentAdmin && inst.admin && inst.admin !== opts.instrumentAdmin) continue;
+    const amount = rawHoldingAmount(n.args);
+    if (!amount || !(Number(amount) > 0)) continue;
+    const admin = inst.admin ?? opts.instrumentAdmin;
+    return {
+      receiver: owner,
+      amount,
+      instrumentId: inst.id ?? opts.instrumentId,
+      ...(admin ? { instrumentAdmin: admin } : {}),
+      delivered: true,
+    };
+  }
+
+  // 2. A created TransferOffer to the recipient = a pending offer (not delivered).
+  for (const n of nodes) {
+    const transfers: Record<string, unknown>[] = [];
+    const argTransfer = n.args ? asRecord(n.args['transfer']) : undefined;
+    if (argTransfer) transfers.push(argTransfer);
+    for (const v of n.views) {
+      const vv = asRecord(v['viewValue'] ?? v['view_value']);
+      const t = vv ? asRecord(vv['transfer']) : undefined;
+      if (t) transfers.push(t);
+    }
+    for (const t of transfers) {
+      const receiver = t['receiver'];
+      if (typeof receiver !== 'string' || !wantOwner(receiver)) continue;
+      const inst = readInstrumentId(t);
+      if (inst.id && inst.id !== opts.instrumentId) continue;
+      if (opts.instrumentAdmin && inst.admin && inst.admin !== opts.instrumentAdmin) continue;
+      const amt = t['amount'];
+      const amount = typeof amt === 'string' ? amt : amt != null ? String(amt) : undefined;
+      if (!amount || !(Number(amount) > 0)) continue;
+      const sender = t['sender'];
+      const admin = inst.admin ?? opts.instrumentAdmin;
+      return {
+        ...(typeof sender === 'string' ? { sender } : {}),
+        receiver,
+        amount,
+        instrumentId: inst.id ?? opts.instrumentId,
+        ...(admin ? { instrumentAdmin: admin } : {}),
+        delivered: false,
+      };
+    }
+  }
+  return undefined;
+}
+
 export async function settleV1ViaWallet(
   client: V1WalletSettleClient,
   id: string,
   payerParty: string,
-  opts: { force?: boolean; amount?: string } = {},
+  opts: {
+    force?: boolean;
+    amount?: string;
+    assetInstrumentId?: string;
+    assetInstrumentAdmin?: string;
+    assetHoldingTemplateId?: string;
+    /** The stream recipient — lets a non-CC settle bind its proof-of-transfer to
+     *  the delivery holding/offer that lands on the recipient. */
+    recipientParty?: string;
+  } = {},
 ): Promise<V1SettleResult> {
-  // 1. The payer's spendable Canton Coin holdings live on its own participant.
-  //    For Loop this reads the balance from Loop's REST API and the input cids
-  //    from its active-contracts rows; throws a clear, actionable error when the
-  //    wallet is empty or the holding records can't be read.
-  const holdings = await readPayerHoldings(payerParty);
+  // 1. Read the payer's spendable holdings of this stream's asset from its own
+  //    participant — CC by default; a non-CC stream (e.g. USDCx) supplies its
+  //    instrument so the right holdings are drawn, not Amulet. Throws a clear,
+  //    actionable error when the wallet is empty or the records can't be read.
+  const holdings = await readPayerHoldings(payerParty, {
+    ...(opts.assetInstrumentId ? { instrumentId: opts.assetInstrumentId } : {}),
+    ...(opts.assetInstrumentAdmin ? { instrumentAdmin: opts.assetInstrumentAdmin } : {}),
+    ...(opts.assetHoldingTemplateId ? { holdingTemplateId: opts.assetHoldingTemplateId } : {}),
+  });
 
   // 2. Proxy forms the transfer (registry choice-context; whitelisted egress).
   const prepared = await client.prepareSettleV1(id, {
@@ -405,7 +604,25 @@ export async function settleV1ViaWallet(
     );
   }
 
-  // 4. Record the committed cycle, now backed by a real ledger update id
+  // 4a. Non-CC direct settle: the payer's own participant can witness the update
+  //     it just submitted (the proxy can't). Fetch it and extract a validated
+  //     transfer object so the proxy credits proof, not blind trust. Best-effort —
+  //     if it can't be fetched/parsed, omit the proof and let the proxy fall back
+  //     to its interim path rather than failing the settle. CC is unchanged.
+  let transferProof: V1TransferProof | undefined;
+  if (opts.assetInstrumentId && opts.assetInstrumentId !== 'Amulet') {
+    const update = await fetchUpdateById(updateId).catch(() => null);
+    if (update) {
+      transferProof = extractTransferProof(update, {
+        payerParty,
+        ...(opts.recipientParty ? { recipientParty: opts.recipientParty } : {}),
+        instrumentId: opts.assetInstrumentId,
+        ...(opts.assetInstrumentAdmin ? { instrumentAdmin: opts.assetInstrumentAdmin } : {}),
+      });
+    }
+  }
+
+  // 4b. Record the committed cycle, now backed by a real ledger update id
   //    (idempotent on updateId). The proxy classifies the on-chain outcome from
   //    the Scan update: a transfer that landed as a pending offer (recipient has
   //    no pre-approval) comes back as `{ settled: false, pending }` — the
@@ -415,6 +632,7 @@ export async function settleV1ViaWallet(
     amount: prepared.amount!,
     ref: prepared.ref,
     executeBefore: prepared.executeBefore,
+    ...(transferProof ? { transferProof } : {}),
   });
 }
 

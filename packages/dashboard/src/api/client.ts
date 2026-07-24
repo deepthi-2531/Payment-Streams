@@ -1165,6 +1165,17 @@ export interface V1CreateStreamParams {
   readonly observers?: readonly string[];
 }
 
+/** Settlement instrument frozen onto a stream / vault. Absent on a view ⇒ the
+ *  global Canton Coin asset. */
+export interface StreamInstrument {
+  readonly id: string;
+  readonly admin?: string;
+  readonly decimals?: number;
+  readonly holdingTemplateId?: string;
+  readonly registryApiUrl?: string;
+  readonly transferVersion?: 'v1' | 'v2';
+}
+
 export interface V1Agreement {
   readonly agreementId: string;
   readonly appId?: string;
@@ -1180,6 +1191,10 @@ export interface V1Agreement {
   readonly createdAt: string;
   /** Lifecycle: 'stopped' means the stream was halted (no more accrual/settle). */
   readonly status?: 'active' | 'stopped';
+  /** Whitelisted asset key ('cc'/absent ⇒ Canton Coin). */
+  readonly assetKey?: string;
+  /** Settlement instrument frozen at create time; absent ⇒ Canton Coin. */
+  readonly instrument?: StreamInstrument;
 }
 
 export interface V1HistoryEntry {
@@ -1187,6 +1202,9 @@ export interface V1HistoryEntry {
   readonly amount: string;
   readonly ref: string;
   readonly updateId: string;
+  /** Set when a non-CC cycle was recorded against a wallet-verified delivered
+   *  transfer object (proof-of-transfer), rather than the interim trust path. */
+  readonly verified?: boolean;
 }
 
 export type V1ReceiverClaimStatus = 'allocated' | 'claim_ready' | 'claimed' | 'withdrawn';
@@ -1373,6 +1391,10 @@ export interface EscrowView {
   readonly ledger: readonly EscrowLedgerEntry[];
   /** Computed audit roll-up. */
   readonly summary: EscrowSummary;
+  /** Whitelisted asset key ('cc'/absent ⇒ Canton Coin). */
+  readonly assetKey?: string;
+  /** Settlement instrument frozen at create time; absent ⇒ Canton Coin. */
+  readonly instrument?: StreamInstrument;
 }
 
 export interface EscrowInfo {
@@ -1396,6 +1418,10 @@ export interface CreateEscrowParams {
    *  right holdings (not CC) when funding a non-CC vault. Frontend-only. */
   readonly assetInstrumentId?: string;
   readonly assetInstrumentAdmin?: string;
+  /** The chosen asset's concrete holding template (`#name:Module:Entity`), used
+   *  to read the payer's spendable holdings via a wallet-compatible template
+   *  filter. Non-CC only; Loop rejects interface filters. Frontend-only. */
+  readonly assetHoldingTemplateId?: string;
   /** When the payer's WALLET signed the deposit itself, its updateId. Omit to
    * have the proxy submit the deposit (hosted/dev payer only). */
   readonly fundingTransferId?: string;
@@ -1486,6 +1512,21 @@ export interface V1PreparedSettle {
   readonly disclosedContracts?: ReadonlyArray<Record<string, unknown>>;
 }
 
+/** Wallet-side proof-of-transfer for a non-CC direct settle. The payer wallet's
+ *  own participant witnessed the update it submitted (the operator/proxy can't —
+ *  both parties are remote and the asset isn't on Canton Coin's Scan), so it
+ *  supplies the transfer object the proxy validates before crediting the cycle. */
+export interface V1TransferProof {
+  readonly sender?: string;
+  readonly receiver: string;
+  readonly amount: string;
+  readonly instrumentId: string;
+  readonly instrumentAdmin?: string;
+  /** true = a completed direct delivery (recipient Holding created); false = a
+   *  pending TransferOffer awaiting the recipient's accept. */
+  readonly delivered: boolean;
+}
+
 /** Model 2 — record a cycle the wallet already committed. */
 export interface V1RecordSettleParams {
   readonly updateId: string;
@@ -1493,6 +1534,8 @@ export interface V1RecordSettleParams {
   readonly ref?: string;
   /** transfer.executeBefore — passed through so a pending offer carries its expiry. */
   readonly executeBefore?: string;
+  /** Wallet-supplied, validated transfer object (non-CC settle only). */
+  readonly transferProof?: V1TransferProof;
 }
 
 export interface V1PrepareAllocationParams extends V1PrepareSettleParams {

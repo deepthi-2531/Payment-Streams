@@ -13,7 +13,7 @@ import { useEscrow, useRefundEscrow, useReconcileEscrow } from '../hooks/useEscr
 import { useAuth } from '../store/auth.js';
 import { Skeleton, ErrorState, PageHeader } from '../components/common/index.js';
 import { explorerUpdateUrl, isVerifiableUpdateId, explorerName } from '../lib/scanLink.js';
-import { fmtCc, displayName, fmtWhen } from '../lib/format.js';
+import { fmtAsset, assetOfView, displayName, fmtWhen, type DisplayAsset } from '../lib/format.js';
 import type { EscrowView, EscrowLedgerEntry } from '../api/client.js';
 
 const STATUS: Record<EscrowView['status'], { label: string; cls: string }> = {
@@ -51,6 +51,7 @@ function EscrowDetail({ view }: { view: EscrowView }) {
 
   const isPayer = party != null && view.originalPayer === party;
   const counterparty = isPayer ? view.recipient : view.originalPayer;
+  const asset = assetOfView(view);
   const s = view.summary;
   const pct = Number(s.totalIn) > 0 ? Math.min(100, Math.round((Number(s.totalStreamed) / Number(s.totalIn)) * 100)) : 0;
   const status = STATUS[view.status];
@@ -68,7 +69,7 @@ function EscrowDetail({ view }: { view: EscrowView }) {
     <>
       <PageHeader
         title={`${isPayer ? 'To' : 'From'} ${displayName(counterparty)}`}
-        subtitle={`${fmtCc(view.ratePerCycle)} every ${cadenceLabel(view.cadenceSeconds)}`}
+        subtitle={`${fmtAsset(view.ratePerCycle, asset)} every ${cadenceLabel(view.cadenceSeconds)}`}
         actions={
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className={`badge ${status.cls}`} style={{ fontSize: 12 }}>{status.label}</span>
@@ -83,11 +84,11 @@ function EscrowDetail({ view }: { view: EscrowView }) {
 
       {/* Money summary */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 18 }}>
-        <Metric label="Funded" value={fmtCc(s.totalIn)} />
-        <Metric label="Paid out" value={fmtCc(s.totalDelivered)} tone="good" />
-        {Number(s.totalPending) > 0 && <Metric label="Awaiting acceptance" value={fmtCc(s.totalPending)} tone="warn" />}
-        {Number(s.totalRefunded) > 0 && <Metric label="Returned to you" value={fmtCc(s.totalRefunded)} />}
-        <Metric label="Still in vault" value={fmtCc(s.remaining)} />
+        <Metric label="Funded" value={fmtAsset(s.totalIn, asset)} />
+        <Metric label="Paid out" value={fmtAsset(s.totalDelivered, asset)} tone="good" />
+        {Number(s.totalPending) > 0 && <Metric label="Awaiting acceptance" value={fmtAsset(s.totalPending, asset)} tone="warn" />}
+        {Number(s.totalRefunded) > 0 && <Metric label="Returned to you" value={fmtAsset(s.totalRefunded, asset)} />}
+        <Metric label="Still in vault" value={fmtAsset(s.remaining, asset)} />
       </div>
 
       {/* Progress */}
@@ -112,7 +113,7 @@ function EscrowDetail({ view }: { view: EscrowView }) {
 
       {Number(s.totalRefundPending) > 0 && (
         <div className="card" style={{ padding: 10, marginBottom: 18, borderColor: 'var(--warn)', fontSize: 12, color: 'var(--warn)' }}>
-          A refund of {fmtCc(s.totalRefundPending)} is on its way back to you — accept it in your wallet to receive it.
+          A refund of {fmtAsset(s.totalRefundPending, asset)} is on its way back to you — accept it in your wallet to receive it.
         </div>
       )}
 
@@ -132,6 +133,7 @@ function PaymentHistory({ view }: { view: EscrowView }) {
   const [open, setOpen] = useState(false);
   const reconQ = useReconcileEscrow(view.escrowId, open);
   const verified = reconQ.data ? reconQ.data.checks.every((c) => c.ok) : null;
+  const asset = assetOfView(view);
 
   return (
     <div className="card" style={{ padding: 16 }}>
@@ -153,7 +155,7 @@ function PaymentHistory({ view }: { view: EscrowView }) {
           ) : (
             <div style={{ display: 'grid', gap: 2 }}>
               {view.ledger.map((l) => (
-                <LedgerRow key={l.eventId} l={l} />
+                <LedgerRow key={l.eventId} l={l} asset={asset} />
               ))}
             </div>
           )}
@@ -173,7 +175,7 @@ function PaymentHistory({ view }: { view: EscrowView }) {
   );
 }
 
-function LedgerRow({ l }: { l: EscrowLedgerEntry }) {
+function LedgerRow({ l, asset }: { l: EscrowLedgerEntry; asset: DisplayAsset }) {
   const kind = l.kind === 'deposit' ? 'Funded' : l.kind === 'refund' ? 'Returned' : 'Payment';
   const delivered = l.delivery === 'direct' || l.offerStatus === 'accepted';
   const state =
@@ -193,7 +195,7 @@ function LedgerRow({ l }: { l: EscrowLedgerEntry }) {
         <ArrowRight size={11} style={{ color: 'var(--fg-4)', flexShrink: 0 }} />
         <span title={l.to}>{displayName(l.to)}</span>
       </span>
-      <span style={{ color: 'var(--fg)' }}>{fmtCc(l.amount)}</span>
+      <span style={{ color: 'var(--fg)' }}>{fmtAsset(l.amount, asset)}</span>
       <span style={{ fontSize: 11, color: delivered ? 'var(--accent)' : l.delivery === 'pending_offer' ? 'var(--warn)' : 'var(--fg-3)' }} title={`${by} · ${fmtWhen(l.at)}`}>
         {state}
       </span>

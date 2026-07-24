@@ -61,6 +61,7 @@ export function CreateEscrowPage() {
               assetKey,
               ...(selAsset?.instrumentId ? { assetInstrumentId: selAsset.instrumentId } : {}),
               ...(selAsset?.instrumentAdmin ? { assetInstrumentAdmin: selAsset.instrumentAdmin } : {}),
+              ...(selAsset?.holdingTemplateId ? { assetHoldingTemplateId: selAsset.holdingTemplateId } : {}),
             }
           : {}),
       });

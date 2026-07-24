@@ -16,13 +16,63 @@ import {
 } from 'react';
 import {
   walletClient,
+  WALLET_LAYER,
   type StreamsWalletAccount,
   type StreamsWalletNetwork,
   type StreamsWalletProviderInfo,
   type StreamsWalletStatus,
+  type WalletLayer,
 } from './wallet/index.js';
 
 type WalletProvider = StreamsWalletProviderInfo | null;
+
+/**
+ * A non-secret hint of the last wallet session, persisted to localStorage so a
+ * refresh can keep the user signed in while the wallet SDK reconnects. Holds only
+ * the party id, wallet layer, and wallet id — never a token or credential.
+ */
+const SESSION_KEY = 'cs.session';
+
+interface PersistedSession {
+  party: string;
+  layer: WalletLayer;
+  walletId?: string;
+}
+
+function loadSession(): PersistedSession | null {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as Partial<PersistedSession>;
+    return s.party && s.layer ? { party: s.party, layer: s.layer, walletId: s.walletId } : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(s: PersistedSession): void {
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+  } catch {
+    /* web storage unavailable — session hint is best-effort */
+  }
+}
+
+function clearSession(): void {
+  try {
+    localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** A persisted session is reconnectable when its layer belongs to the active
+ * wallet client. The combined client owns both layers (partylayer + dapp-sdk),
+ * so its `.layer` getter reads 'dapp-sdk' before connect — match on the config
+ * instead so a remembered Loop session still surfaces the reconnect card. */
+function sessionMatchesActiveLayer(s: PersistedSession): boolean {
+  return WALLET_LAYER === 'combined' || s.layer === walletClient.layer;
+}
 
 interface AuthContextValue {
   // Session
@@ -53,6 +103,15 @@ interface AuthContextValue {
    * custody create lane would fail there, so the UI routes it to direct
    * delivery instead. */
   readonly canCreateCustodyStream: boolean;
+
+  /** True when a returning user has a persisted session hint for the active
+   * wallet layer but no live connection — drives the "Welcome back" reconnect
+   * card. UI only: it never counts as an authenticated/connected session. */
+  readonly canReconnect: boolean;
+  /** Remembered party id from the last session (non-secret hint), or null. */
+  readonly rememberedParty: string | null;
+  /** Remembered wallet id to pass back to `connect()` on reconnect. */
+  readonly rememberedWalletId: string | undefined;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -72,6 +131,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   });
   const [devParty, setDevParty] = useState<string | null>(() => {
     try { return sessionStorage.getItem('cs.devParty'); } catch { return null; }
+  });
+
+  // Rehydrated party from the last session, used only as a bridge while the
+  // wallet SDK reconnects on refresh (the account list can lag the connection).
+  // Trusted only when it matches the active layer and the wallet reports
+  // connected, so a stale hint can never fake an authenticated session.
+  const [rememberedParty, setRememberedParty] = useState<string | null>(() => {
+    const s = loadSession();
+    return s && sessionMatchesActiveLayer(s) ? s.party : null;
+  });
+  const [connectedWalletId, setConnectedWalletId] = useState<string | undefined>(() => {
+    const s = loadSession();
+    return s && sessionMatchesActiveLayer(s) ? s.walletId : undefined;
   });
 
   // Let StrictMode remount this effect naturally. The cleanup detaches the
@@ -168,6 +240,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         /* ignore */
       }
+      // Remember which wallet was connected so a refresh can rehydrate it.
+      setConnectedWalletId(walletId);
       // Real wallet wins over dev-mode credentials.
       setDevToken(null);
       setDevParty(null);
@@ -189,6 +263,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
     setDevToken(null);
     setDevParty(null);
+    setRememberedParty(null);
+    setConnectedWalletId(undefined);
+    clearSession();
   }, []);
 
   const setDevCredentials = useCallback((token: string, party: string) => {
@@ -210,11 +287,64 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const walletToken = status?.network?.accessToken ?? status?.session?.accessToken ?? null;
   const walletParty = primaryAccount?.partyId ?? null;
   const walletConnected = Boolean(status?.connection.isConnected);
+  const hostedConnected = walletConnected && walletClient.capabilities.hostedMultiWallet;
+
+  // On refresh the connection can restore a beat before the account list; bridge
+  // the party from the persisted session so the user stays signed in instead of
+  // bouncing to the connect screen. Only while connected, and a freshly loaded
+  // account takes over as soon as it lands.
+  const connectedParty = walletParty ?? (walletConnected ? rememberedParty : null);
+
+  // Persist the (non-secret) session hint while a real wallet party is live; never
+  // while disconnected (disconnect clears it explicitly). The combined picker
+  // chooses the wallet id internally, so fall back to the account's
+  // signingProviderId, which carries the connected PartyLayer wallet id.
+  useEffect(() => {
+    if (walletConnected && walletParty) {
+      setRememberedParty(walletParty);
+      const walletId = connectedWalletId ?? primaryAccount?.signingProviderId ?? undefined;
+      if (walletId && walletId !== connectedWalletId) setConnectedWalletId(walletId);
+      saveSession({ party: walletParty, layer: walletClient.layer, walletId });
+    }
+  }, [walletConnected, walletParty, connectedWalletId, primaryAccount]);
+
+  // Hosted wallets (Loop) can drop their in-memory session silently — a failed
+  // submit or expired handshake doesn't always fire a disconnect event. Re-read
+  // status on refocus and a slow interval so a dropped session flips back to the
+  // connect screen without a manual refresh.
+  useEffect(() => {
+    if (!hostedConnected) return;
+    let cancelled = false;
+    const recheck = () => {
+      void walletClient
+        .status()
+        .then((latest) => {
+          if (cancelled) return;
+          setStatus(latest);
+          if (!latest.connection.isConnected) setAccounts([]);
+        })
+        .catch(() => {
+          /* transient read failure — don't sign the user out on a blip */
+        });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') recheck();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', recheck);
+    const timer = window.setInterval(recheck, 30_000);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', recheck);
+      window.clearInterval(timer);
+    };
+  }, [hostedConnected]);
 
   // Wallet session takes precedence; dev-mode fills the gap only when
   // no real wallet is connected.
   const token = walletConnected ? walletToken : devToken;
-  const party = walletConnected ? walletParty : devParty;
+  const party = walletConnected ? connectedParty : devParty;
   const devMode = !walletConnected && Boolean(devToken && devParty);
 
   // Hosted wallets may route ledger access through their own provider rather
@@ -224,9 +354,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     walletConnected &&
     walletClient.capabilities.hostedMultiWallet &&
     !walletToken &&
-    Boolean(walletParty);
+    Boolean(connectedParty);
 
   const isAuthenticated = hostedWalletAuth || Boolean(token && party);
+
+  // A returning user with a matching session hint but no live connection and no
+  // dev session. Drives the "Welcome back" card — UI only; never fabricates a session.
+  const canReconnect =
+    !isAuthenticated &&
+    !isConnecting &&
+    !walletConnected &&
+    !devMode &&
+    rememberedParty !== null;
 
   // A live custodial multi-wallet (Loop) routes ledger access through its own
   // participant, which does NOT vet our canton-streams DAR — so it cannot create
@@ -264,6 +403,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       devMode,
       setDevCredentials,
       canCreateCustodyStream,
+      canReconnect,
+      rememberedParty,
+      rememberedWalletId: connectedWalletId,
     }),
     [
       token,
@@ -279,6 +421,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       devMode,
       setDevCredentials,
       canCreateCustodyStream,
+      canReconnect,
+      rememberedParty,
+      connectedWalletId,
     ],
   );
 

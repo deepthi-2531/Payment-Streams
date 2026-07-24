@@ -405,6 +405,52 @@ export async function submitAndWait(
 }
 
 /**
+ * Fetch a committed update by id from the connected wallet's own participant
+ * (POST /v2/updates/update-by-id). Backs wallet-side proof-of-transfer on a
+ * non-CC direct settle — the payer's participant can witness the update it just
+ * submitted, even though the proxy can't. Returns the parsed update, or null when
+ * the wallet can't answer / didn't witness it.
+ */
+export async function fetchUpdateById(updateId: string): Promise<unknown> {
+  if (!isHostedLedgerAvailable() || !updateId) return null;
+  const wc = walletClient.ledgerApi!;
+  const body = {
+    updateId,
+    updateFormat: {
+      includeTransactions: {
+        eventFormat: {
+          filtersByParty: {},
+          filtersForAnyParty: {
+            cumulative: [
+              { identifierFilter: { WildcardFilter: { value: { includeCreatedEventBlob: false } } } },
+            ],
+          },
+          verbose: false,
+        },
+        transactionShape: 'TRANSACTION_SHAPE_LEDGER_EFFECTS',
+      },
+    },
+  };
+  try {
+    const raw = await wc({
+      requestMethod: 'post',
+      resource: '/v2/updates/update-by-id',
+      body: JSON.stringify(body),
+    });
+    if (raw && typeof (raw as LedgerApiResponseWrapper).response === 'string') {
+      try {
+        return JSON.parse((raw as LedgerApiResponseWrapper).response!);
+      } catch {
+        return null;
+      }
+    }
+    return raw ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Decode a `StreamEscrow` create_arguments record into the
  * dashboard's `Stream` shape. The Daml record on disk has
  * (roughly) the same field names as `RawStream` from the REST

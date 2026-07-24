@@ -37,6 +37,44 @@ export function instrumentLabel(id?: string | null): string {
   return id;
 }
 
+/** A display asset: symbol + decimals for a stream/vault's settlement asset.
+ *  `assetKey` absent or 'cc' means Canton Coin. */
+export interface DisplayAsset {
+  assetKey?: string;
+  symbol?: string;
+  decimals?: number;
+}
+
+/** True when the asset is (or defaults to) Canton Coin. */
+function isCcAsset(asset?: DisplayAsset): boolean {
+  const key = asset?.assetKey?.trim().toLowerCase();
+  return !key || key === 'cc';
+}
+
+/** Derive a DisplayAsset from a view carrying `assetKey` + `instrument`. */
+export function assetOfView(
+  view: { assetKey?: string; instrument?: { id?: string; decimals?: number } } | null | undefined,
+): DisplayAsset {
+  return {
+    assetKey: view?.assetKey,
+    symbol: view?.instrument?.id,
+    decimals: view?.instrument?.decimals,
+  };
+}
+
+/** An amount with its asset's unit. For CC (assetKey absent or 'cc') this is
+ * byte-for-byte `fmtCc`; a non-CC asset uses its instrument id as the unit and
+ * trims trailing zeros: "1 USDCx", "0.5 USDCx". */
+export function fmtAsset(raw: string | number | null | undefined, asset?: DisplayAsset): string {
+  if (isCcAsset(asset)) return fmtCc(raw);
+  if (raw === null || raw === undefined || raw === '') return '—';
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return `${raw}`;
+  const dp = Math.min(Math.max(asset?.decimals ?? 4, 0), 10);
+  const s = n.toFixed(dp).replace(/\.?0+$/, '');
+  return `${s} ${asset?.symbol || instrumentLabel(asset?.assetKey)}`;
+}
+
 /** A locale date-time, or a dash for anything unparseable. */
 export function fmtWhen(iso: string | null | undefined): string {
   if (!iso) return '—';

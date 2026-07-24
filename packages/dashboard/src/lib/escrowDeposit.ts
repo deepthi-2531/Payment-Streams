@@ -44,6 +44,7 @@ export async function createEscrowViaWallet(
   const holdings = await readPayerHoldings(params.payerParty, {
     ...(params.assetInstrumentId ? { instrumentId: params.assetInstrumentId } : {}),
     ...(params.assetInstrumentAdmin ? { instrumentAdmin: params.assetInstrumentAdmin } : {}),
+    ...(params.assetHoldingTemplateId ? { holdingTemplateId: params.assetHoldingTemplateId } : {}),
   });
 
   // 2. Proxy forms the payer→escrow deposit transfer.

@@ -288,6 +288,27 @@ export interface CycleRecord {
   amount: string;
   ref: string;
   updateId: string;
+  /** Set when a non-CC cycle was recorded against a wallet-verified delivered
+   *  transfer object (proof-of-transfer), not the interim trust path. */
+  verified?: boolean;
+}
+
+/**
+ * Wallet-side proof-of-transfer for a non-CC direct settle. The payer wallet's
+ * own participant witnessed the update it submitted (the proxy can't — both
+ * parties are remote and the asset isn't on Canton Coin's Scan), so it supplies
+ * the transfer object recorded here. Structurally validated in `recordSettle`
+ * against the agreement before any credit; a mismatch fails closed.
+ */
+export interface TransferProof {
+  sender?: string;
+  receiver: string;
+  amount: string;
+  instrumentId: string;
+  instrumentAdmin?: string;
+  /** true = a completed direct delivery (recipient Holding created); false = a
+   *  pending TransferOffer awaiting the recipient's accept. */
+  delivered: boolean;
 }
 
 export type ReceiverClaimStatus =
@@ -922,9 +943,12 @@ function findCreatedInstructionCid(updateBody: string): string | undefined {
       obj['create_arguments'] !== undefined ||
       obj['createArguments'] !== undefined ||
       obj['createArgument'] !== undefined;
+    // A pending offer's contract is CC's `…:AmuletTransferInstruction` or a
+    // registry asset's `…:Transfer:TransferOffer` (USDCx). Match either, else a
+    // non-CC offer is mis-recorded as a direct delivery and never reclaimed.
     if (
       typeof tid === 'string' &&
-      tid.includes('TransferInstruction') &&
+      (tid.includes('TransferInstruction') || tid.includes('TransferOffer')) &&
       typeof cid === 'string' &&
       cid.length > 0 &&
       hasCreateArgs
@@ -973,10 +997,17 @@ async function senderHoldings(
     .map((r) => r.contractEntry?.JsActiveContract)
     .filter(Boolean)
     .filter((a) => a.createdEvent.createArgument.owner === party)
-    .map((a) => ({
-      cid: a.createdEvent.contractId,
-      amount: Number(a.createdEvent.createArgument.amount?.initialAmount ?? 0),
-    }));
+    // A locked holding can't be a transfer input (it's collateral in a pending
+    // transfer/allocation). Amulet has no such field so CC is unaffected; a
+    // registry holding (USDCx) sets `lock` while locked.
+    .filter((a) => a.createdEvent.createArgument.lock == null)
+    .map((a) => {
+      // Amulet nests the spendable figure as amount.initialAmount; a registry
+      // holding (USDCx) carries a flat decimal string. Tolerate both.
+      const amt = a.createdEvent.createArgument.amount;
+      const n = amt && typeof amt === 'object' ? Number(amt.initialAmount ?? 0) : Number(amt ?? 0);
+      return { cid: a.createdEvent.contractId, amount: n };
+    });
 }
 
 interface OnLedgerInstruction {
@@ -1226,6 +1257,7 @@ async function prepareAcceptOfferByCid(
   config: V1LaneConfig,
   party: string,
   transferInstructionCid: string,
+  registryBaseUrl?: string,
 ): Promise<PreparedInstructionAction & { amount: string; sender: string }> {
   const offer = (await incomingOffers(config, party)).find(
     (o) => o.transferInstructionCid === transferInstructionCid,
@@ -1252,23 +1284,97 @@ async function prepareAcceptOfferByCid(
     createdAt: new Date().toISOString(),
     status: 'pending',
   };
-  const prepared = await prepareInstructionActionCommand(config, record, 'accept', party);
+  const prepared = await prepareInstructionActionCommand(config, record, 'accept', party, registryBaseUrl);
   return { ...prepared, amount: offer.amount, sender: offer.sender };
 }
 
-/** Model 1 (hosted party): proxy forms AND submits the accept. */
-async function acceptOfferByCid(
+/** Model 1 (hosted party): proxy forms AND submits the accept. `registryBaseUrl`
+ *  selects the per-asset registrar for the accept choice-context; omit for CC. */
+export async function acceptOfferByCid(
   config: V1LaneConfig,
   party: string,
   transferInstructionCid: string,
+  registryBaseUrl?: string,
 ): Promise<{ updateId: string; amount: string; sender: string }> {
-  const prepared = await prepareAcceptOfferByCid(config, party, transferInstructionCid);
+  const prepared = await prepareAcceptOfferByCid(config, party, transferInstructionCid, registryBaseUrl);
   const res = await submit(config, 'recv-accept', [party], [prepared.command], prepared.disclosedContracts as unknown[]);
   const updateId = (res?.updateId ?? res?.transactionTree?.updateId) as string | undefined;
   if (!updateId) {
     throw new V1LaneError(502, 'submit_no_update', 'accept submitted but the ledger returned no updateId');
   }
   return { updateId, amount: prepared.amount, sender: prepared.sender };
+}
+
+/**
+ * The escrow's matching pending offer for a wallet-signed non-CC deposit. It must
+ * be incoming to the escrow, sent by the declared payer, of the declared
+ * instrument, unexpired, and cover the amount — so a caller can never bind a third
+ * party's offer or a different asset. Returns undefined when none matches (caller
+ * then fails closed).
+ */
+export async function findEscrowDepositOffer(
+  config: V1LaneConfig,
+  opts: { expectedSender: string; instrumentId: string; minAmount: number },
+): Promise<ReceivedPendingOffer | undefined> {
+  const escrow = config.escrowParty;
+  if (!escrow) return undefined;
+  const offers = await incomingOffers(config, escrow);
+  const matches = offers.filter(
+    (o) =>
+      o.sender === opts.expectedSender &&
+      String(o.instrumentId) === opts.instrumentId &&
+      !o.expired &&
+      Number(o.amount) + 1e-6 >= opts.minAmount,
+  );
+  // Prefer the closest-amount offer (this deposit's own offer is formed for
+  // exactly its amount), then the freshest, so a new deposit binds its own offer
+  // rather than an older larger one that would over-fund the vault.
+  matches.sort((a, b) => {
+    const da = Math.abs(Number(a.amount) - opts.minAmount);
+    const db = Math.abs(Number(b.amount) - opts.minAmount);
+    if (Math.abs(da - db) > 1e-6) return da - db;
+    return String(a.requestedAt ?? '') < String(b.requestedAt ?? '') ? 1 : -1;
+  });
+  return matches[0];
+}
+
+/**
+ * Sum the holdings the escrow OWNS and can spend (owner === escrow, unlocked) of a
+ * given concrete holding template. Used to credit a non-CC deposit by the amount
+ * the escrow's own participant confirms it actually received — never a client
+ * claim. Tolerates the Amulet-nested and flat (registry) `amount` shapes.
+ */
+export async function escrowOwnedHoldings(
+  config: V1LaneConfig,
+  holdingTemplateId: string,
+): Promise<number> {
+  if (!config.escrowParty || !holdingTemplateId) return 0;
+  const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: {
+      filtersByParty: {
+        [config.escrowParty]: {
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: { value: { templateId: holdingTemplateId, includeCreatedEventBlob: false } },
+              },
+            },
+          ],
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset: offset,
+  });
+  let sum = 0;
+  for (const r of rows) {
+    const a = r.contractEntry?.JsActiveContract?.createdEvent?.createArgument;
+    if (!a || a.lock != null || String(a.owner) !== config.escrowParty) continue;
+    const amt = a.amount;
+    sum += amt && typeof amt === 'object' ? Number(amt.initialAmount ?? 0) : Number(amt ?? 0);
+  }
+  return sum;
 }
 
 // ---------------------------------------------------------------------------
@@ -3216,13 +3322,13 @@ export class V1LaneService {
    */
   async recordSettle(
     streamId: string,
-    input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
+    input: { updateId: string; amount: string; ref?: string; executeBefore?: string; transferProof?: TransferProof },
   ): Promise<SettleOutcome> {
     return this.runLocked(streamId, () => this.recordSettleImpl(streamId, input));
   }
   private async recordSettleImpl(
     streamId: string,
-    input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
+    input: { updateId: string; amount: string; ref?: string; executeBefore?: string; transferProof?: TransferProof },
   ): Promise<SettleOutcome> {
     const store = loadStore(this.config);
     const agreement = store.agreements[streamId];
@@ -3240,6 +3346,69 @@ export class V1LaneService {
     // stream (the check above only covers this stream).
     if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
       throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
+    }
+    // Non-CC direct-delivery (e.g. USDCx): the proxy can't witness the transfer
+    // (both parties remote, asset not on CC's Scan), so verification is wallet-
+    // side. When the wallet supplies a transfer proof, validate it structurally
+    // against this agreement and credit the proven amount; when absent, fall back
+    // to the interim trust path (record on updateId + input.amount). The
+    // idempotency and cross-stream replay guards above hold either way, and this
+    // lane is non-custodial. CC keeps the Scan proof below.
+    const settleInst = resolveInstrument(this.config, agreement);
+    if (settleInst.id !== this.config.instrumentId) {
+      const proof = input.transferProof;
+      if (proof && typeof proof === 'object') {
+        // Fail closed on any mismatch — the proof must describe THIS stream's
+        // payer→recipient delivery of THIS instrument for at least the due amount.
+        if (proof.receiver !== agreement.recipientParty) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof receiver does not match the stream recipient; refusing to record.`);
+        }
+        if (proof.sender && proof.sender !== agreement.payerParty) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof sender does not match the stream payer; refusing to record.`);
+        }
+        if (proof.instrumentId !== settleInst.id) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof instrument ${proof.instrumentId} does not match the stream instrument ${settleInst.id}; refusing to record.`);
+        }
+        const proofAmount = Number(proof.amount);
+        const dueAmt = Number(input.amount);
+        if (!Number.isFinite(proofAmount) || proofAmount + 1e-9 < dueAmt) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof amount ${proof.amount} is less than the cycle amount ${input.amount}; refusing to record.`);
+        }
+        const credited = Number(proofAmount.toFixed(10));
+        st.settled = Number((st.settled + credited).toFixed(10));
+        st.cycles += 1;
+        const ref = input.ref ?? `${streamId}:cycle-${st.cycles}`;
+        st.history.push({
+          at: new Date().toISOString(),
+          amount: credited.toFixed(10),
+          ref,
+          updateId: input.updateId,
+          ...(proof.delivered ? { verified: true } : {}),
+        });
+        if (st.history.length > 500) st.history.splice(0, st.history.length - 500);
+        saveStore(this.config, store);
+        console.log(
+          `v1_settle_recorded_wallet_proof stream=${streamId} asset=${agreement.assetKey ?? settleInst.id} ` +
+            `amount=${credited.toFixed(4)} updateId=${input.updateId} delivered=${proof.delivered}`,
+        );
+        return { settled: true, cycle: st.cycles, amount: credited.toFixed(10), ref, updateId: input.updateId };
+      }
+      const credited = Number(input.amount);
+      st.settled = Number((st.settled + credited).toFixed(10));
+      st.cycles += 1;
+      const ref = input.ref ?? `${streamId}:cycle-${st.cycles}`;
+      st.history.push({ at: new Date().toISOString(), amount: credited.toFixed(10), ref, updateId: input.updateId });
+      if (st.history.length > 500) st.history.splice(0, st.history.length - 500);
+      saveStore(this.config, store);
+      console.log(
+        `v1_settle_recorded_unverified stream=${streamId} asset=${agreement.assetKey ?? settleInst.id} ` +
+          `amount=${credited.toFixed(4)} updateId=${input.updateId} reason=no_scan_vantage_for_non_cc`,
+      );
+      return { settled: true, cycle: st.cycles, amount: credited.toFixed(10), ref, updateId: input.updateId };
     }
     // The updateId is a client claim — verify the transfer committed on chain,
     // moved payer -> recipient in CC, and carries this stream's agreement tag
