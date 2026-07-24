@@ -241,6 +241,21 @@ export interface V1Agreement {
   createdAt?: string;
   /** Lifecycle: 'stopped' halts accrual + settlement. Undefined ⇒ active. */
   status?: 'active' | 'stopped';
+  /** Whitelisted asset-registry key this stream pays (e.g. 'cc', 'usdcx').
+   *  Absent ⇒ the proxy's global/default asset (CC). */
+  assetKey?: string;
+  /** Per-stream settlement instrument, resolved from the asset registry at
+   *  create time and frozen here so registry drift cannot retarget a live
+   *  stream. Absent fields fall back to the proxy's global CC config — so a
+   *  stream created without an instrument settles exactly as before. */
+  instrument?: {
+    admin: string;
+    id: string;
+    holdingTemplateId?: string;
+    registryApiUrl?: string;
+    transferVersion?: 'v1' | 'v2';
+    decimals?: number;
+  };
 }
 
 export interface CycleRecord {
@@ -425,8 +440,14 @@ async function assertNotUndisclosedCustody(config: V1LaneConfig, sender: string,
   }
 }
 
-async function registryPost(config: V1LaneConfig, path: string, body: unknown): Promise<any> {
-  const res = await fetch(`${config.registryApiUrl}${path}`, {
+async function registryPost(
+  config: V1LaneConfig,
+  path: string,
+  body: unknown,
+  baseUrl?: string,
+): Promise<any> {
+  const base = (baseUrl || config.registryApiUrl).replace(/\/+$/, '');
+  const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -890,7 +911,11 @@ interface Holding {
   amount: number;
 }
 
-async function senderHoldings(config: V1LaneConfig, party: string): Promise<Holding[]> {
+async function senderHoldings(
+  config: V1LaneConfig,
+  party: string,
+  holdingTemplateId?: string,
+): Promise<Holding[]> {
   const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
   const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
     filter: {
@@ -900,7 +925,10 @@ async function senderHoldings(config: V1LaneConfig, party: string): Promise<Hold
             {
               identifierFilter: {
                 TemplateFilter: {
-                  value: { templateId: config.holdingTemplateId, includeCreatedEventBlob: false },
+                  value: {
+                    templateId: holdingTemplateId || config.holdingTemplateId,
+                    includeCreatedEventBlob: false,
+                  },
                 },
               },
             },
@@ -1378,6 +1406,39 @@ function selectClaimRecord(
  * its own participant, so the proxy can't read them); otherwise they are read
  * from this participant's ACS (model 1: a payer this participant hosts).
  */
+/** The per-stream settlement instrument, with every field resolved to a
+ *  concrete value: the agreement's own instrument where present, else the
+ *  proxy's global CC config. The concrete TransferInstruction/holding template
+ *  for offers is NOT carried here — the registry returns it per-asset in each
+ *  choice-context response, so it is read at exercise time. */
+export interface ResolvedInstrument {
+  admin: string;
+  id: string;
+  holdingTemplateId: string;
+  registryApiUrl: string;
+  transferVersion: 'v1' | 'v2';
+  decimals: number;
+}
+
+/** Resolve a stream's effective settlement instrument. A stream created without
+ *  an instrument (every CC stream today) resolves to the global config, so its
+ *  money leg is byte-for-byte unchanged; a stream carrying a per-asset
+ *  instrument settles that asset instead. */
+export function resolveInstrument(
+  config: V1LaneConfig,
+  agreement: V1Agreement,
+): ResolvedInstrument {
+  const i = agreement.instrument;
+  return {
+    admin: i?.admin || config.ccAdminParty,
+    id: i?.id || config.instrumentId,
+    holdingTemplateId: i?.holdingTemplateId || config.holdingTemplateId,
+    registryApiUrl: (i?.registryApiUrl || config.registryApiUrl).replace(/\/+$/, ''),
+    transferVersion: i?.transferVersion || config.transferVersion,
+    decimals: typeof i?.decimals === 'number' ? i.decimals : 10,
+  };
+}
+
 export async function prepareSettleCommand(
   config: V1LaneConfig,
   agreement: V1Agreement,
@@ -1386,7 +1447,9 @@ export async function prepareSettleCommand(
   holdingsIn?: HoldingInput[],
 ): Promise<PreparedSettle> {
   const ref = `${agreement.agreementId}:cycle-${cycleNo}`;
-  const holdings = holdingsIn ?? (await senderHoldings(config, agreement.payerParty));
+  const inst = resolveInstrument(config, agreement);
+  const holdings =
+    holdingsIn ?? (await senderHoldings(config, agreement.payerParty, inst.holdingTemplateId));
   const total = holdings.reduce((s, h) => s + h.amount, 0);
   if (total < amount) {
     throw new V1LaneError(
@@ -1400,20 +1463,25 @@ export async function prepareSettleCommand(
     sender: agreement.payerParty,
     receiver: agreement.recipientParty,
     amount: amount.toFixed(10),
-    instrumentId: { admin: config.ccAdminParty, id: config.instrumentId },
+    instrumentId: { admin: inst.admin, id: inst.id },
     requestedAt: new Date(Date.now() - 1000).toISOString(),
     executeBefore,
     inputHoldingCids: holdings.map((h) => h.cid),
     meta: streamMeta(agreement, ref),
   };
-  const fac = await registryPost(config, '/registry/transfer-instruction/v1/transfer-factory', {
-    choiceArguments: {
-      expectedAdmin: config.ccAdminParty,
-      transfer,
-      extraArgs: { context: { values: {} }, meta: { values: {} } },
+  const fac = await registryPost(
+    config,
+    '/registry/transfer-instruction/v1/transfer-factory',
+    {
+      choiceArguments: {
+        expectedAdmin: inst.admin,
+        transfer,
+        extraArgs: { context: { values: {} }, meta: { values: {} } },
+      },
+      excludeDebugFields: true,
     },
-    excludeDebugFields: true,
-  });
+    inst.registryApiUrl,
+  );
   const ctx = fac.choiceContext ?? {};
   const disclosed = mapDisclosedContracts(ctx);
   const command = {
@@ -1422,7 +1490,7 @@ export async function prepareSettleCommand(
       contractId: fac.factoryId,
       choice: 'TransferFactory_Transfer',
       choiceArgument: {
-        expectedAdmin: config.ccAdminParty,
+        expectedAdmin: inst.admin,
         transfer,
         extraArgs: {
           context: choiceContextValues(ctx),
@@ -1460,7 +1528,9 @@ export async function prepareSettleCommandV2(
   holdingsIn?: HoldingInput[],
 ): Promise<PreparedSettle> {
   const ref = `${agreement.agreementId}:cycle-${cycleNo}`;
-  const holdings = holdingsIn ?? (await senderHoldings(config, agreement.payerParty));
+  const inst = resolveInstrument(config, agreement);
+  const holdings =
+    holdingsIn ?? (await senderHoldings(config, agreement.payerParty, inst.holdingTemplateId));
   const total = holdings.reduce((s, h) => s + h.amount, 0);
   if (total < amount) {
     throw new V1LaneError(
@@ -1476,20 +1546,25 @@ export async function prepareSettleCommandV2(
     sender: account(agreement.payerParty),
     receiver: account(agreement.recipientParty),
     amount: amount.toFixed(10),
-    instrumentId: { admin: config.ccAdminParty, id: config.instrumentId },
+    instrumentId: { admin: inst.admin, id: inst.id },
     requestedAt: new Date(Date.now() - 5000).toISOString(),
     executeBefore,
     inputHoldingCids: holdings.map((h) => h.cid),
     meta: streamMeta(agreement, ref),
   };
-  const fac = await registryPost(config, '/registry/transfer-instruction/v2/transfer-factory', {
-    choiceArguments: {
-      transfer,
-      actors: [agreement.payerParty],
-      extraArgs: { context: { values: {} }, meta: { values: {} } },
+  const fac = await registryPost(
+    config,
+    '/registry/transfer-instruction/v2/transfer-factory',
+    {
+      choiceArguments: {
+        transfer,
+        actors: [agreement.payerParty],
+        extraArgs: { context: { values: {} }, meta: { values: {} } },
+      },
+      excludeDebugFields: true,
     },
-    excludeDebugFields: true,
-  });
+    inst.registryApiUrl,
+  );
   const ctx = fac.choiceContext ?? {};
   const disclosed = mapDisclosedContracts(ctx);
   const command = {
@@ -1742,7 +1817,9 @@ export async function settleCycle(
   cycleNo: number,
 ): Promise<SettleResult> {
   const prepareFn =
-    config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+    resolveInstrument(config, agreement).transferVersion === 'v2'
+      ? prepareSettleCommandV2
+      : prepareSettleCommand;
   const prepared = await prepareFn(config, agreement, amount, cycleNo);
   // This is the one place the operator participant submits a transfer with a
   // party's own authority (actAs=[payerParty]). Refuse to do so for a co-hosted
@@ -2704,7 +2781,9 @@ export class V1LaneService {
     }
     if (due <= 0) return { prepared: false, reason: 'nothing_due' };
     const prepareFn =
-      this.config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+      resolveInstrument(this.config, agreement).transferVersion === 'v2'
+        ? prepareSettleCommandV2
+        : prepareSettleCommand;
     const prepared = await prepareFn(this.config, agreement, due, st.cycles + 1, opts.holdings);
     return { prepared: true, ...prepared };
   }
