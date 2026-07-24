@@ -39,8 +39,12 @@ export async function createEscrowViaWallet(
   client: EscrowWalletClient,
   params: CreateEscrowParams & { payerParty: string },
 ): Promise<EscrowView> {
-  // 1. Read the payer's spendable CC from its own participant.
-  const holdings = await readPayerHoldings(params.payerParty);
+  // 1. Read the payer's spendable holdings of the chosen asset from its own
+  //    participant (CC by default; the selected instrument for a non-CC vault).
+  const holdings = await readPayerHoldings(params.payerParty, {
+    ...(params.assetInstrumentId ? { instrumentId: params.assetInstrumentId } : {}),
+    ...(params.assetInstrumentAdmin ? { instrumentAdmin: params.assetInstrumentAdmin } : {}),
+  });
 
   // 2. Proxy forms the payer→escrow deposit transfer.
   const prepared = await client.prepareEscrowDeposit({

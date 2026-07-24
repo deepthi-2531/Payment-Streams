@@ -1392,6 +1392,10 @@ export interface CreateEscrowParams {
   readonly totalDeposit: string;
   /** Whitelisted asset to custody ('cc'/absent ⇒ Canton Coin). */
   readonly assetKey?: string;
+  /** The chosen asset's instrument identity, so the wallet deposit reads the
+   *  right holdings (not CC) when funding a non-CC vault. Frontend-only. */
+  readonly assetInstrumentId?: string;
+  readonly assetInstrumentAdmin?: string;
   /** When the payer's WALLET signed the deposit itself, its updateId. Omit to
    * have the proxy submit the deposit (hosted/dev payer only). */
   readonly fundingTransferId?: string;

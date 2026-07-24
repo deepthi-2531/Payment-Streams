@@ -22,7 +22,11 @@
  * have our DAR vetted; use direct delivery for public TestNet demos.
  */
 
-import { queryActiveContractsRaw, submitAndWait } from './hostedWalletLedger.js';
+import {
+  queryActiveContractsRaw,
+  queryActiveContractsByInterfaceRaw,
+  submitAndWait,
+} from './hostedWalletLedger.js';
 import type {
   V1PreparedAllocation,
   V1PreparedClaim,
@@ -44,6 +48,9 @@ import type {
 
 /** Amulet holding template in Loop's `#package:module:entity` form. */
 const AMULET_TID = '#splice-amulet:Splice.Amulet:Amulet';
+/** Token-standard Holding interface — lets us read a non-CC asset's holdings
+ *  (e.g. USDCx) by interface when its concrete template id isn't configured. */
+const HOLDING_INTERFACE_ID = '#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding';
 const AMULET_ALLOCATION_TID = '#splice-amulet:Splice.AmuletAllocation:AmuletAllocation';
 const RECEIVER_CLAIM_TID =
   '#canton-streams-v1-shim:CantonStreams.V1Shim.ReceiverClaim:ReceiverClaimV1';
@@ -134,6 +141,36 @@ function decodeHolding(entry: Record<string, unknown>): Holding | null {
   return { cid, amount: args ? holdingAmount(args) : 0 };
 }
 
+/** Decode a holding read via the Holding INTERFACE (used for non-CC assets whose
+ *  concrete template is unknown). Reads the standardized view's amount +
+ *  instrumentId; returns null unless it's an unlocked holding of the wanted
+ *  instrument with a spendable amount. */
+function decodeInterfaceHolding(
+  entry: Record<string, unknown>,
+  wantInstrumentId: string,
+  wantAdmin?: string,
+): Holding | null {
+  const ev = findCreatedEvent(entry);
+  if (!ev) return null;
+  const cid = (ev['contractId'] ?? ev['contract_id']) as string | undefined;
+  if (!cid) return null;
+  const views = (ev['interfaceViews'] ?? ev['interface_views']) as unknown[] | undefined;
+  for (const v of views ?? []) {
+    const vr = asRecord(v);
+    const vv = asRecord(vr?.['viewValue'] ?? vr?.['view_value']);
+    if (!vv) continue;
+    const inst = asRecord(vv['instrumentId']);
+    const id = inst ? String(inst['id'] ?? '') : String(vv['instrumentId'] ?? '');
+    if (id !== wantInstrumentId) continue;
+    if (wantAdmin && inst && inst['admin'] != null && String(inst['admin']) !== wantAdmin) continue;
+    // A locked holding can't be spent as a transfer input.
+    if (vv['lock'] != null) continue;
+    const amt = Number(vv['amount']);
+    if (Number.isFinite(amt) && amt > 0) return { cid, amount: amt };
+  }
+  return null;
+}
+
 function decodeContract(entry: Record<string, unknown>): { cid: string; args: Record<string, unknown> } | null {
   const ev = findCreatedEvent(entry);
   if (!ev) return null;
@@ -189,7 +226,28 @@ async function discoverReceiverClaimCid(party: string, ref: string): Promise<str
  * and decimal amount (summed for the proxy's funding pre-check). Throws a clear,
  * actionable error when the wallet is empty or the rows can't be decoded.
  */
-export async function readPayerHoldings(payerParty: string): Promise<Holding[]> {
+export async function readPayerHoldings(
+  payerParty: string,
+  opts?: { instrumentId?: string; instrumentAdmin?: string },
+): Promise<Holding[]> {
+  const wantId = opts?.instrumentId?.trim();
+  // Non-CC asset (e.g. USDCx): read via the standardized Holding interface and
+  // keep only holdings of the requested instrument. CC keeps its proven concrete-
+  // template read below.
+  if (wantId && wantId !== 'Amulet') {
+    const rows = await queryActiveContractsByInterfaceRaw([HOLDING_INTERFACE_ID], payerParty);
+    const holdings = rows
+      .map((r) => decodeInterfaceHolding(r, wantId, opts?.instrumentAdmin))
+      .filter((h): h is Holding => h !== null);
+    if (holdings.length === 0) {
+      throw new Error(
+        `No ${wantId} holdings found in your wallet. Fund your wallet with ${wantId} ` +
+          `first, then try again — the deposit is drawn from your own ${wantId}.`,
+      );
+    }
+    return holdings;
+  }
+
   const rows = await queryActiveContractsRaw([AMULET_TID], payerParty);
   const holdings = rows
     .map(decodeHolding)

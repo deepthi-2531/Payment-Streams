@@ -56,7 +56,13 @@ export function CreateEscrowPage() {
         ratePerCycle: String(rateNum),
         cadenceSeconds,
         totalDeposit: String(depositNum),
-        ...(assetKey && assetKey !== 'cc' ? { assetKey } : {}),
+        ...(assetKey && assetKey !== 'cc'
+          ? {
+              assetKey,
+              ...(selAsset?.instrumentId ? { assetInstrumentId: selAsset.instrumentId } : {}),
+              ...(selAsset?.instrumentAdmin ? { assetInstrumentAdmin: selAsset.instrumentAdmin } : {}),
+            }
+          : {}),
       });
       navigate(`/v1/escrows/${encodeURIComponent(escrow.escrowId)}`);
     } catch (e) {

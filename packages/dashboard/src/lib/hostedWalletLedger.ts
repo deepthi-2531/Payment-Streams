@@ -229,6 +229,59 @@ export async function queryActiveContractsRaw(
     []) as ReadonlyArray<Record<string, unknown>>;
 }
 
+/**
+ * Like queryActiveContractsRaw, but filters by token-standard INTERFACE id(s)
+ * with the interface view included. Used to read a non-CC asset's holdings from
+ * the wallet when its concrete template id is unknown — every token holding
+ * implements the standardized Holding interface, which exposes a uniform
+ * { owner, instrumentId, amount } view.
+ */
+export async function queryActiveContractsByInterfaceRaw(
+  interfaceIds: readonly string[],
+  party: string,
+): Promise<ReadonlyArray<Record<string, unknown>>> {
+  if (!isHostedLedgerAvailable()) {
+    throw new Error('Hosted wallet ledgerApi is not available on this session');
+  }
+  if (interfaceIds.length === 0) return [];
+  const wc = walletClient.ledgerApi!;
+  const activeAtOffset = await walletLedgerEndOffset(wc);
+  const body = {
+    filter: {
+      filtersByParty: {
+        [party]: {
+          inclusive: {
+            interfaceFilters: interfaceIds.map((i) => ({
+              interfaceId: i,
+              includeInterfaceView: true,
+            })),
+          },
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset,
+  };
+  const raw = await wc({
+    requestMethod: 'post',
+    resource: '/v2/state/acs',
+    body: JSON.stringify(body),
+  });
+  const parsed: AcsActiveContractsResponse = (() => {
+    if (raw && typeof (raw as LedgerApiResponseWrapper).response === 'string') {
+      try {
+        return JSON.parse((raw as LedgerApiResponseWrapper).response!);
+      } catch {
+        return {};
+      }
+    }
+    return (raw as AcsActiveContractsResponse) ?? {};
+  })();
+  return (parsed.activeContracts ??
+    parsed.active_contracts ??
+    []) as ReadonlyArray<Record<string, unknown>>;
+}
+
 export async function queryActiveContracts(
   templateIds: readonly string[],
   party: string,
