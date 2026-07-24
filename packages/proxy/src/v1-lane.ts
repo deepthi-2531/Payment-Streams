@@ -52,6 +52,17 @@
 
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { acquireStoreLock, releaseStoreLock } from './store-lock.js';
+import { getSupportedAssets } from './assets.js';
+
+// Standardized token-standard TransferInstruction interface package NAMES. The
+// ledger ACS InterfaceFilter requires the `#package-name` form; the exercise
+// path may instead be configured with a concrete package id, so these are kept
+// separate from config.transferInstructionInterfaceId to interface-filter the
+// ACS reliably regardless of how the exercise id is configured.
+export const TI_INTERFACE_NAME_V1 =
+  '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction';
+export const TI_INTERFACE_NAME_V2 =
+  '#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction';
 
 // ---------------------------------------------------------------------------
 // Configuration (V1 lane env — see the task's envAndIds spec)
@@ -1080,52 +1091,34 @@ function offerTransfer(ev: any): any {
 
 async function incomingOffers(config: V1LaneConfig, party: string): Promise<ReceivedPendingOffer[]> {
   const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
-  // CC keeps its exact template filter; the two interface filters additionally
-  // surface any other token-standard TransferInstruction (v1 or v2) to the party,
-  // so a non-CC pending offer shows in the inbox without needing its concrete
-  // template id configured up front.
-  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
-    filter: {
-      filtersByParty: {
-        [party]: {
-          cumulative: [
-            {
-              identifierFilter: {
-                TemplateFilter: {
-                  value: {
-                    templateId:
-                      '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
-                    includeCreatedEventBlob: false,
-                  },
-                },
-              },
-            },
-            {
-              identifierFilter: {
-                InterfaceFilter: {
-                  value: {
-                    interfaceId: config.transferInstructionInterfaceId,
-                    includeInterfaceView: true,
-                    includeCreatedEventBlob: false,
-                  },
-                },
-              },
-            },
-            {
-              identifierFilter: {
-                InterfaceFilter: {
-                  value: {
-                    interfaceId: config.transferInstructionInterfaceIdV2,
-                    includeInterfaceView: true,
-                    includeCreatedEventBlob: false,
-                  },
-                },
-              },
-            },
-          ],
+  // CC always uses its exact, proven template filter. Only when a non-CC asset is
+  // actually whitelisted do we add the standardized TransferInstruction interface
+  // filters (by package NAME — the ACS requires it) so a non-CC pending offer
+  // surfaces without needing its concrete template id up front. This keeps the
+  // CC-only inbox byte-for-byte the pre-multi-asset query.
+  const cumulative: unknown[] = [
+    {
+      identifierFilter: {
+        TemplateFilter: {
+          value: {
+            templateId: '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
+            includeCreatedEventBlob: false,
+          },
         },
       },
     },
+  ];
+  if (getSupportedAssets().some((a) => a.key !== 'cc')) {
+    for (const interfaceId of [TI_INTERFACE_NAME_V1, TI_INTERFACE_NAME_V2]) {
+      cumulative.push({
+        identifierFilter: {
+          InterfaceFilter: { value: { interfaceId, includeInterfaceView: true, includeCreatedEventBlob: false } },
+        },
+      });
+    }
+  }
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: { filtersByParty: { [party]: { cumulative } } },
     verbose: false,
     activeAtOffset: offset,
   });

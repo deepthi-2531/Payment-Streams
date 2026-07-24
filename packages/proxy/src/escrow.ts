@@ -32,6 +32,8 @@ import {
   resolveInstrument,
   configForStream,
   buildOfferWithdrawCommand,
+  TI_INTERFACE_NAME_V1,
+  TI_INTERFACE_NAME_V2,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
@@ -1260,7 +1262,7 @@ export class EscrowLane {
                 },
               },
             ]
-          : [this.config.transferInstructionInterfaceId, this.config.transferInstructionInterfaceIdV2].map(
+          : [TI_INTERFACE_NAME_V1, TI_INTERFACE_NAME_V2].map(
               (interfaceId) => ({
                 identifierFilter: {
                   InterfaceFilter: { value: { interfaceId, includeInterfaceView: false, includeCreatedEventBlob: false } },
@@ -1452,7 +1454,7 @@ export class EscrowLane {
               },
             },
           ]
-        : [this.config.transferInstructionInterfaceId, this.config.transferInstructionInterfaceIdV2].map(
+        : [TI_INTERFACE_NAME_V1, TI_INTERFACE_NAME_V2].map(
             (interfaceId) => ({
               identifierFilter: {
                 InterfaceFilter: { value: { interfaceId, includeInterfaceView: false, includeCreatedEventBlob: false } },
