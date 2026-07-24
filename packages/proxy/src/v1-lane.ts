@@ -74,6 +74,10 @@ export interface V1LaneConfig {
   instrumentId: string;
   /** Concrete holding template the payer funds from. */
   holdingTemplateId: string;
+  /** Standardized token Holding interface id — used to read a non-CC custody
+   *  balance by interface view when the concrete holding template's field shape
+   *  is unknown. CC keeps its concrete Amulet template read. */
+  holdingInterfaceId: string;
   /** On-ledger record template id (StreamAdmin) for create + Sync_Iteration. */
   streamAdminTemplateId: string;
   /** Operator-signed direct-transfer index template id (StreamRecord). */
@@ -141,6 +145,10 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     ccAdminParty: get('CC_ADMIN_PARTY'),
     instrumentId: get('INSTRUMENT_ID', 'Amulet'),
     holdingTemplateId: get('HOLDING_TEMPLATE_ID', '#splice-amulet:Splice.Amulet:Amulet'),
+    holdingInterfaceId: get(
+      'HOLDING_INTERFACE_ID',
+      '#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding',
+    ),
     streamAdminTemplateId: get(
       'STREAM_ADMIN_TEMPLATE_ID',
       '#canton-streams:CantonStreams.Stream.StreamAdmin:StreamAdmin',

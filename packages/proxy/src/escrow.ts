@@ -29,12 +29,15 @@ import {
   prepareSettleCommand,
   prepareSettleCommandV2,
   verifyHoldingDeliveryOnScan,
+  resolveInstrument,
+  configForStream,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
   type HoldingInput,
   type PreparedSettle,
 } from './v1-lane.js';
+import { resolveStreamAsset } from './assets.js';
 
 // ---------------------------------------------------------------------------
 // Types + store (own state file, independent of the V1 stream store)
@@ -184,6 +187,12 @@ export interface EscrowAgreement {
   /** The wallet that funded the escrow (recorded only; not a stakeholder). */
   originalPayer: string;
   recipient: string;
+  /** Whitelisted asset key this vault streams ('cc' or absent ⇒ Canton Coin). */
+  assetKey?: string;
+  /** Settlement instrument frozen at create time; absent ⇒ the global CC asset,
+   *  so a CC vault settles + reconciles exactly as before. Drives which
+   *  registry, holding template, transfer version, and custody pool apply. */
+  instrument?: V1Agreement['instrument'];
   /** Amount released per cycle. */
   ratePerCycle: string;
   cadenceSeconds: number;
@@ -254,21 +263,20 @@ const remainingOf = (e: EscrowAgreement): number =>
 const hasPendingRelease = (e: EscrowAgreement): boolean =>
   (e.ledger ?? []).some((l) => l.kind === 'release' && l.offerStatus === 'active');
 
-/** Total still owed across every active escrow — the floor the custody party
- * must always be able to cover. Shared by the per-action solvency interlock and
- * the continuous drift monitor so both read the same number. */
-const sumOwed = (store: EscrowStore): number =>
-  Object.values(store.escrows)
-    .filter((x) => x.status === 'active')
-    .reduce((s, x) => s + remainingOf(x), 0);
-
 function escrowLockFile(config: V1LaneConfig): string {
   return escrowStateFile(config).replace(/\.json$/i, '') + '.lock';
 }
 
 /** Minimal synthetic agreement so `settleCycle` can fire a sender→receiver
- * transfer for any pair of parties (deposit, release, refund legs). */
-function leg(payer: string, recipient: string, id: string): V1Agreement {
+ * transfer for any pair of parties (deposit, release, refund legs). Carrying the
+ * escrow's `instrument` makes settleCycle resolve the right asset, registry, and
+ * transfer version; omitting it settles the global CC asset exactly as before. */
+function leg(
+  payer: string,
+  recipient: string,
+  id: string,
+  instrument?: V1Agreement['instrument'],
+): V1Agreement {
   return {
     agreementId: id,
     payerParty: payer,
@@ -277,7 +285,42 @@ function leg(payer: string, recipient: string, id: string): V1Agreement {
     cadence: 'minute',
     effectiveFrom: new Date().toISOString(),
     arrearsPolicy: 'catch-up',
+    ...(instrument ? { instrument } : {}),
   };
+}
+
+/** Resolve a vault's effective settlement asset. A vault with no instrument
+ * (every CC vault) resolves to the global CC config, so its money leg, audit
+ * stamp, and custody pool are byte-for-byte unchanged. `key` groups vaults into
+ * per-asset custody pools for the solvency interlock + cap. */
+function assetOf(
+  config: V1LaneConfig,
+  e: Pick<EscrowAgreement, 'assetKey' | 'instrument' | 'escrowId' | 'originalPayer' | 'recipient' | 'createdAt'>,
+): ReturnType<typeof resolveInstrument> & { key: string } {
+  const inst = resolveInstrument(config, leg(e.originalPayer, e.recipient, e.escrowId, e.instrument));
+  return { ...inst, key: (e.assetKey || 'cc').trim() || 'cc' };
+}
+
+/** Per-asset custody cap (units of that asset). CC uses the existing
+ * ESCROW_MAX_TOTAL_CC; a non-CC key uses ESCROW_MAX_TOTAL_<KEY> (0 ⇒ disabled). */
+function capForAsset(config: V1LaneConfig, key: string): number {
+  if (key === 'cc') return config.escrowMaxTotalCC;
+  const raw = process.env[`ESCROW_MAX_TOTAL_${key.toUpperCase()}`];
+  const n = raw == null ? 0 : Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+/** Total still owed, grouped by asset key — each key is an independent custody
+ * pool (the interlock protects depositors within the same asset, never across
+ * assets, since one asset's balance can't cover another's obligation). */
+function owedByAsset(config: V1LaneConfig, store: EscrowStore): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const e of Object.values(store.escrows)) {
+    if (e.status !== 'active') continue;
+    const key = assetOf(config, e).key;
+    m.set(key, (m.get(key) ?? 0) + remainingOf(e));
+  }
+  return m;
 }
 
 // ---------------------------------------------------------------------------
@@ -293,12 +336,13 @@ function appendLedger(
     Partial<Pick<EscrowLedgerEntry, 'at'>>,
 ): EscrowLedgerEntry {
   const seq = (e.ledger?.length ?? 0) + 1;
+  const a = assetOf(config, e);
   const full: EscrowLedgerEntry = {
     seq,
     eventId: `${e.escrowId}:${seq}`,
     custodian: config.escrowParty,
-    instrumentAdmin: config.ccAdminParty,
-    instrumentId: config.instrumentId,
+    instrumentAdmin: a.admin,
+    instrumentId: a.id,
     at: entry.at ?? new Date().toISOString(),
     ...entry,
   };
@@ -311,11 +355,12 @@ function appendLedger(
  * Best-effort projection of already-recorded facts — marked reconstructed. */
 function ensureLedger(e: EscrowAgreement, config: V1LaneConfig): EscrowAgreement {
   if (e.ledger && e.ledger.length > 0) return e;
+  const a = assetOf(config, e);
   const ledger: EscrowLedgerEntry[] = [];
   const base = {
     custodian: config.escrowParty,
-    instrumentAdmin: config.ccAdminParty,
-    instrumentId: config.instrumentId,
+    instrumentAdmin: a.admin,
+    instrumentId: a.id,
     reasonCode: 'reconstructed',
   };
   let seq = 0;
@@ -441,12 +486,13 @@ async function createOperatorEscrow(
   config: V1LaneConfig,
   e: EscrowAgreement,
 ): Promise<string | undefined> {
+  const a = assetOf(config, e);
   const createArgument = {
     streamId: e.escrowId,
     operator: config.escrowParty,
     payer: e.originalPayer,
     payee: e.recipient,
-    instrumentId: { admin: config.ccAdminParty, id: config.instrumentId },
+    instrumentId: { admin: a.admin, id: a.id },
     ratePerCycle: dec(e.ratePerCycle),
     cadenceSeconds: String(e.cadenceSeconds),
     totalDeposited: dec(e.totalDeposited),
@@ -579,6 +625,8 @@ export interface CreateEscrowInput {
   ratePerCycle: string;
   cadenceSeconds: number;
   totalDeposit: string;
+  /** Whitelisted asset to custody ('cc'/absent ⇒ Canton Coin). */
+  assetKey?: string;
   /** If the payer's WALLET already made the deposit transfer, its updateId.
    * When omitted, the proxy submits the deposit as `originalPayer` (only works
    * for a party this participant hosts — e.g. dev/hosted payers). */
@@ -634,16 +682,52 @@ export class EscrowLane {
     }
   }
 
-  /** Live free CC balance held by the shared escrow custody party. */
-  private async poolFreeBalance(): Promise<number> {
-    const AMULET = '#splice-amulet:Splice.Amulet:Amulet';
+  /** Live free balance the shared escrow custody party holds in one asset. CC is
+   * read from its concrete Amulet template (the proven path, unchanged). A non-CC
+   * asset is read through the standardized Holding interface view — its concrete
+   * template's field layout is unknown, but the interface view exposes a uniform
+   * { owner, instrumentId, amount, lock }; only unlocked holdings of the matching
+   * instrument count toward free balance. */
+  private async poolFreeBalance(asset: ReturnType<typeof assetOf>): Promise<number> {
     const { offset } = await ledger(this.config, 'GET', '/v2/state/ledger-end');
+    if (asset.key === 'cc') {
+      const AMULET = '#splice-amulet:Splice.Amulet:Amulet';
+      const rows: any[] = await ledger(this.config, 'POST', '/v2/state/active-contracts', {
+        filter: {
+          filtersByParty: {
+            [this.config.escrowParty]: {
+              cumulative: [
+                { identifierFilter: { TemplateFilter: { value: { templateId: AMULET, includeCreatedEventBlob: false } } } },
+              ],
+            },
+          },
+        },
+        verbose: false,
+        activeAtOffset: offset,
+      });
+      let bal = 0;
+      for (const r of rows) {
+        const v = (r.contractEntry?.JsActiveContract?.createdEvent?.createArgument?.amount ?? {})?.initialAmount;
+        if (v !== undefined) bal += Number(v);
+      }
+      return bal;
+    }
     const rows: any[] = await ledger(this.config, 'POST', '/v2/state/active-contracts', {
       filter: {
         filtersByParty: {
           [this.config.escrowParty]: {
             cumulative: [
-              { identifierFilter: { TemplateFilter: { value: { templateId: AMULET, includeCreatedEventBlob: false } } } },
+              {
+                identifierFilter: {
+                  InterfaceFilter: {
+                    value: {
+                      interfaceId: this.config.holdingInterfaceId,
+                      includeInterfaceView: true,
+                      includeCreatedEventBlob: false,
+                    },
+                  },
+                },
+              },
             ],
           },
         },
@@ -653,8 +737,19 @@ export class EscrowLane {
     });
     let bal = 0;
     for (const r of rows) {
-      const v = (r.contractEntry?.JsActiveContract?.createdEvent?.createArgument?.amount ?? {})?.initialAmount;
-      if (v !== undefined) bal += Number(v);
+      const ev = r.contractEntry?.JsActiveContract?.createdEvent;
+      for (const view of (ev?.interfaceViews ?? [])) {
+        const vv = view?.viewValue;
+        if (!vv) continue;
+        const instId = vv.instrumentId ?? {};
+        if (String(instId.id ?? '') !== asset.id) continue;
+        if (instId.admin != null && String(instId.admin) !== asset.admin) continue;
+        // Locked holdings back a pending offer already counted as owed, so they
+        // are not free balance. lock === null/None ⇒ unlocked.
+        if (vv.lock != null) continue;
+        const amt = vv.amount;
+        if (amt !== undefined) bal += Number(amt);
+      }
     }
     return bal;
   }
@@ -665,15 +760,17 @@ export class EscrowLane {
    * refund, so one escrow can never spend another's deposit. This is a solvency
    * interlock over the commingled party, not literal per-escrow sub-accounts
    * (which would need separate parties or an on-ledger lock). */
-  private async assertPoolSolvent(store: EscrowStore): Promise<void> {
-    const owed = sumOwed(store);
+  private async assertPoolSolvent(store: EscrowStore, e: EscrowAgreement): Promise<void> {
+    const asset = assetOf(this.config, e);
+    const owed = owedByAsset(this.config, store).get(asset.key) ?? 0;
     if (owed <= 0) return;
-    const pool = await this.poolFreeBalance();
+    const pool = await this.poolFreeBalance(asset);
     if (pool + 1e-6 < owed) {
+      const u = asset.key.toUpperCase();
       throw new V1LaneError(
         409,
         'escrow_pool_insolvent',
-        `escrow custody balance ${pool.toFixed(4)} CC is below the ${owed.toFixed(4)} CC owed across active escrows; halting to protect other depositors`,
+        `escrow custody balance ${pool.toFixed(4)} ${u} is below the ${owed.toFixed(4)} ${u} owed across active ${u} escrows; halting to protect other depositors`,
       );
     }
   }
@@ -690,40 +787,48 @@ export class EscrowLane {
    * a signal for an external pager, not an enforcement point. */
   async checkSolvency(): Promise<void> {
     if (!this.enabled) return;
-    const owedBefore = sumOwed(loadEscrows(this.config));
-    if (owedBefore <= 0) {
+    const store1 = loadEscrows(this.config);
+    const owed1 = owedByAsset(this.config, store1);
+    if ([...owed1.values()].every((v) => v <= 0)) {
       this.solvencyBreachStreak = 0;
       return;
     }
-    let pool: number;
-    try {
-      pool = await this.poolFreeBalance();
-    } catch (err) {
-      console.error(`escrow_solvency_probe_unreadable owed=${owedBefore.toFixed(4)} err=${(err as Error).message}`);
-      return;
-    }
-    // Re-read owed after the balance. A release debits the chain before it
-    // persists `released`, so a probe landing in that window would otherwise read
-    // a debited pool against a stale-high owed. Taking the lower of the two owed
-    // snapshots biases an in-flight release toward not alerting; a real persistent
+    // Probe each asset's pool independently — one asset's balance can never cover
+    // another's obligation. Re-read owed after each balance so a probe landing in
+    // a release window (chain debited before `released` persists) reads the lower
+    // owed snapshot and biases an in-flight release toward not alerting; a real
     // drain trips both snapshots and, with the two-cycle streak, still fires.
-    const store = loadEscrows(this.config);
-    const owed = Math.min(owedBefore, sumOwed(store));
-    const active = Object.values(store.escrows).filter((x) => x.status === 'active').length;
-    if (pool + 1e-6 < owed) {
-      this.solvencyBreachStreak += 1;
-      const deficit = (owed - pool).toFixed(4);
-      if (this.solvencyBreachStreak >= 2) {
-        console.error(
-          `escrow_solvency_drift level=alert pool=${pool.toFixed(4)} owed=${owed.toFixed(4)} deficit=${deficit} active=${active} streak=${this.solvencyBreachStreak}`,
-        );
-      } else {
-        console.warn(
-          `escrow_solvency_drift level=warn pool=${pool.toFixed(4)} owed=${owed.toFixed(4)} deficit=${deficit} active=${active}`,
-        );
+    const breaches: { key: string; pool: number; owed: number; active: number }[] = [];
+    for (const [key, owedBefore] of owed1) {
+      if (owedBefore <= 0) continue;
+      const rep = Object.values(store1.escrows).find(
+        (x) => x.status === 'active' && assetOf(this.config, x).key === key,
+      );
+      if (!rep) continue;
+      let pool: number;
+      try {
+        pool = await this.poolFreeBalance(assetOf(this.config, rep));
+      } catch (err) {
+        console.error(`escrow_solvency_probe_unreadable asset=${key} owed=${owedBefore.toFixed(4)} err=${(err as Error).message}`);
+        continue;
       }
-    } else {
+      const store2 = loadEscrows(this.config);
+      const owed = Math.min(owedBefore, owedByAsset(this.config, store2).get(key) ?? 0);
+      const active = Object.values(store2.escrows).filter(
+        (x) => x.status === 'active' && assetOf(this.config, x).key === key,
+      ).length;
+      if (pool + 1e-6 < owed) breaches.push({ key, pool, owed, active });
+    }
+    if (breaches.length === 0) {
       this.solvencyBreachStreak = 0;
+      return;
+    }
+    this.solvencyBreachStreak += 1;
+    for (const b of breaches) {
+      const u = b.key.toUpperCase();
+      const line = `asset=${u} pool=${b.pool.toFixed(4)} owed=${b.owed.toFixed(4)} deficit=${(b.owed - b.pool).toFixed(4)} active=${b.active} streak=${this.solvencyBreachStreak}`;
+      if (this.solvencyBreachStreak >= 2) console.error(`escrow_solvency_drift level=alert ${line}`);
+      else console.warn(`escrow_solvency_drift level=warn ${line}`);
     }
   }
 
@@ -750,20 +855,39 @@ export class EscrowLane {
     payer: string;
     totalDeposit: string;
     holdings?: HoldingInput[];
+    assetKey?: string;
   }): Promise<PreparedSettle> {
     this.requireEnabled();
     if (!input.payer) throw new V1LaneError(400, 'missing_payer', 'payer required');
     const amount = Number(input.totalDeposit);
     if (!(amount > 0)) throw new V1LaneError(400, 'invalid_deposit', 'totalDeposit must be > 0');
+    const instrument = this.instrumentForAsset(input.assetKey);
+    const depositLeg = leg(input.payer, this.config.escrowParty, `deposit-${Date.now()}`, instrument);
     const prepareFn =
-      this.config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
-    return prepareFn(
-      this.config,
-      leg(input.payer, this.config.escrowParty, `deposit-${Date.now()}`),
-      amount,
-      0,
-      input.holdings,
-    );
+      resolveInstrument(this.config, depositLeg).transferVersion === 'v2'
+        ? prepareSettleCommandV2
+        : prepareSettleCommand;
+    return prepareFn(this.config, depositLeg, amount, 0, input.holdings);
+  }
+
+  /** Resolve a whitelisted asset key to a frozen settlement instrument. Absent or
+   * 'cc' ⇒ the global CC asset (no instrument stored). An unknown/unconfigured
+   * key is rejected so a vault is never stood up against an unroutable asset. */
+  private instrumentForAsset(assetKey?: string): V1Agreement['instrument'] {
+    const key = (assetKey || '').trim();
+    if (!key || key === 'cc') return undefined;
+    const asset = resolveStreamAsset(key);
+    if (!asset) {
+      throw new V1LaneError(400, 'unknown_asset', `unknown or unconfigured asset "${key}"`);
+    }
+    return {
+      admin: asset.instrumentAdmin,
+      id: asset.instrumentId,
+      holdingTemplateId: asset.holdingTemplateId || undefined,
+      registryApiUrl: asset.registryApiUrl || undefined,
+      transferVersion: asset.transferVersion,
+      decimals: asset.decimals,
+    };
   }
 
   /** Stand up an escrow: (deposit if needed) → create OperatorEscrow → schedule. */
@@ -782,6 +906,17 @@ export class EscrowLane {
     if (!Number.isInteger(cadenceSeconds) || cadenceSeconds <= 0) {
       throw new V1LaneError(400, 'invalid_cadence', 'cadenceSeconds must be a positive integer');
     }
+    // Freeze the settlement asset before any transfer fires (unknown_asset
+    // rejects here, not after the deposit). `instrument` undefined ⇒ CC, so every
+    // downstream leg, verify, and cap resolves exactly as the CC vault does today.
+    const instrument = this.instrumentForAsset(input.assetKey);
+    const assetKey = instrument ? (input.assetKey || '').trim() : undefined;
+    // A config view carrying this asset's identity but the global Scan, for the
+    // deposit-delivery verify (the holding it looks for is this asset's).
+    const streamCfg = instrument
+      ? configForStream(this.config, leg(originalPayer, recipient, 'verify', instrument))
+      : this.config;
+    const assetCapKey = assetKey || 'cc';
 
     const escrowId = input.escrowId
       ? requireId(input.escrowId, 'escrowId')
@@ -808,7 +943,7 @@ export class EscrowLane {
       // total. Requiring delivery (not a transfer spec) stops a locked, still-
       // withdrawable transfer instruction from being recorded as a funded deposit,
       // which would phantom-inflate the pool's owed balance and freeze it.
-      const verified = await verifyHoldingDeliveryOnScan(this.config, fundingTransferId, {
+      const verified = await verifyHoldingDeliveryOnScan(streamCfg, fundingTransferId, {
         recipient: this.config.escrowParty,
         minAmount: Number(totalDeposit),
       });
@@ -820,18 +955,20 @@ export class EscrowLane {
     // transfer fires, so it gates fund movement; on the wallet-signed path the CC
     // is already on chain when we reject, so a distinct alert is logged for the
     // out-of-band refund. Disabled when the cap is 0.
-    if (this.config.escrowMaxTotalCC > 0) {
-      const projected = sumOwed(store) + Number(depositAmount);
-      if (projected > this.config.escrowMaxTotalCC + 1e-6) {
+    const assetCap = capForAsset(this.config, assetCapKey);
+    if (assetCap > 0) {
+      const owedThisAsset = owedByAsset(this.config, store).get(assetCapKey) ?? 0;
+      const projected = owedThisAsset + Number(depositAmount);
+      if (projected > assetCap + 1e-6) {
         if (fundingTransferId) {
           console.error(
-            `escrow_cap_rejected_funded party=${this.config.escrowParty} payer=${originalPayer} amount=${Number(depositAmount).toFixed(4)} fundingTransferId=${fundingTransferId} refund_required=true`,
+            `escrow_cap_rejected_funded party=${this.config.escrowParty} asset=${assetCapKey} payer=${originalPayer} amount=${Number(depositAmount).toFixed(4)} fundingTransferId=${fundingTransferId} refund_required=true`,
           );
         }
         throw new V1LaneError(
           409,
           'escrow_cap_exceeded',
-          `deposit of ${Number(depositAmount).toFixed(4)} CC would raise tracked escrow obligation to ${projected.toFixed(4)} CC, over the ${this.config.escrowMaxTotalCC} CC aggregate cap`,
+          `deposit of ${Number(depositAmount).toFixed(4)} ${assetCapKey.toUpperCase()} would raise tracked ${assetCapKey.toUpperCase()} escrow obligation to ${projected.toFixed(4)}, over the ${assetCap} aggregate cap`,
         );
       }
     }
@@ -840,7 +977,7 @@ export class EscrowLane {
     if (!fundingTransferId) {
       const deposit = await settleCycle(
         this.config,
-        leg(originalPayer, this.config.escrowParty, `${escrowId}:deposit`),
+        leg(originalPayer, this.config.escrowParty, `${escrowId}:deposit`, instrument),
         Number(depositAmount),
         0,
       );
@@ -854,6 +991,8 @@ export class EscrowLane {
       escrowId,
       originalPayer,
       recipient,
+      ...(assetKey ? { assetKey } : {}),
+      ...(instrument ? { instrument } : {}),
       ratePerCycle: dec(ratePerCycle),
       cadenceSeconds,
       totalDeposited: dec(depositAmount),
@@ -931,10 +1070,10 @@ export class EscrowLane {
     const cycleNo = e.releases.length + 1;
     const scheduledDueAt = e.nextDueAt; // baseline for cadence-adherence
 
-    await this.assertPoolSolvent(store);
+    await this.assertPoolSolvent(store, e);
     const res = await settleCycle(
       this.config,
-      leg(this.config.escrowParty, e.recipient, `${escrowId}:release`),
+      leg(this.config.escrowParty, e.recipient, `${escrowId}:release`, e.instrument),
       amount,
       cycleNo,
     );
@@ -999,10 +1138,10 @@ export class EscrowLane {
     let refundTransferId = 'none';
     let refundPending: string | undefined;
     if (remaining > 0) {
-      await this.assertPoolSolvent(store);
+      await this.assertPoolSolvent(store, e);
       const res = await settleCycle(
         this.config,
-        leg(this.config.escrowParty, e.originalPayer, `${escrowId}:refund`),
+        leg(this.config.escrowParty, e.originalPayer, `${escrowId}:refund`, e.instrument),
         remaining,
         0,
       );
@@ -1085,37 +1224,48 @@ export class EscrowLane {
     // On-ledger authoritative record.
     const op = await resolveOperatorEscrowEvent(this.config, escrowId).catch(() => undefined);
 
-    // Escrow party live free balance + active pending-offer cids.
-    const AMULET = '#splice-amulet:Splice.Amulet:Amulet';
-    const TI = '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction';
+    // Escrow party live free balance + active pending-offer cids, in this vault's
+    // asset. CC reads its concrete Amulet templates; a non-CC vault reads the
+    // custody balance via the Holding interface and its pending offers via the
+    // standardized TransferInstruction interface (concrete template unknown).
+    const asset = assetOf(this.config, e);
     let escrowFreeBalance = 0;
     const activeCids = new Set<string>();
     let acsOk = false;
     try {
+      escrowFreeBalance = await this.poolFreeBalance(asset);
       const { offset } = await ledger(this.config, 'GET', '/v2/state/ledger-end');
-      const q = async (tid: string): Promise<any[]> =>
-        ledger(this.config, 'POST', '/v2/state/active-contracts', {
-          filter: {
-            filtersByParty: {
-              [this.config.escrowParty]: {
-                cumulative: [
-                  { identifierFilter: { TemplateFilter: { value: { templateId: tid, includeCreatedEventBlob: false } } } },
-                ],
+      const tiFilters =
+        asset.key === 'cc'
+          ? [
+              {
+                identifierFilter: {
+                  TemplateFilter: {
+                    value: {
+                      templateId: '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
+                      includeCreatedEventBlob: false,
+                    },
+                  },
+                },
               },
-            },
-          },
-          verbose: false,
-          activeAtOffset: offset,
-        });
-      for (const r of await q(AMULET)) {
-        const v = (r.contractEntry?.JsActiveContract?.createdEvent?.createArgument?.amount ?? {})?.initialAmount;
-        if (v !== undefined) escrowFreeBalance += Number(v);
-      }
-      for (const r of await q(TI)) {
+            ]
+          : [this.config.transferInstructionInterfaceId, this.config.transferInstructionInterfaceIdV2].map(
+              (interfaceId) => ({
+                identifierFilter: {
+                  InterfaceFilter: { value: { interfaceId, includeInterfaceView: false, includeCreatedEventBlob: false } },
+                },
+              }),
+            );
+      const rows: any[] = await ledger(this.config, 'POST', '/v2/state/active-contracts', {
+        filter: { filtersByParty: { [this.config.escrowParty]: { cumulative: tiFilters } } },
+        verbose: false,
+        activeAtOffset: offset,
+      });
+      for (const r of rows) {
         const cid = r.contractEntry?.JsActiveContract?.createdEvent?.contractId;
         if (cid) activeCids.add(cid);
       }
-      acsOk = true; // both queries returned — the ACS snapshot is trustworthy
+      acsOk = true; // both reads returned — the ACS snapshot is trustworthy
     } catch {
       /* leave acsOk=false: do NOT infer offer status from a partial snapshot */
     }
