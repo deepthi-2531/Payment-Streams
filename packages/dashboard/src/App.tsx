@@ -15,11 +15,29 @@ const queryClient = new QueryClient({
   },
 });
 
+/** Neutral first-paint panel shown while a persisted session is being restored,
+ * so a returning user doesn't flash the connect / reconnect screen. */
+function RestoreSplash() {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'grid',
+        placeItems: 'center',
+        color: 'var(--color-text-muted, #888)',
+        fontSize: 14,
+      }}
+    >
+      Restoring your session…
+    </div>
+  );
+}
+
 /** Render the dashboard only after a wallet or dev session is available. */
 function AuthGate() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isRestoring } = useAuth();
   useAccountsChangedInvalidation();
-  if (!isAuthenticated) return <ConnectFlow />;
+  if (!isAuthenticated) return isRestoring ? <RestoreSplash /> : <ConnectFlow />;
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AppRoutes />

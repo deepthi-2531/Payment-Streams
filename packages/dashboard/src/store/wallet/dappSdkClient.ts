@@ -12,13 +12,34 @@ import {
   openWalletPickerModal,
   type WalletPickerRow,
 } from './walletPickerModal.js';
+import { clearSwkPersistedSession, isSwkTokenExpired } from './swkSession.js';
 import type {
   StreamsWalletAccountsHandler,
   StreamsWalletClient,
   StreamsWalletEntry,
+  StreamsWalletStatus,
   StreamsWalletStatusHandler,
   StreamsWalletTxChangedHandler,
 } from './types.js';
+
+const DISCONNECTED: StreamsWalletStatus = {
+  provider: null,
+  connection: { isConnected: false },
+  network: null,
+  session: null,
+};
+
+/** Read the SDK's status, normalizing the pre-connect "Not connected" throw to
+ * a disconnected snapshot (the expected no-session state, not an error). */
+async function snapshotDappStatus(): Promise<StreamsWalletStatus> {
+  try {
+    return await sdk.status();
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    if (/not connected|call connect\(\) first/i.test(raw)) return DISCONNECTED;
+    throw err;
+  }
+}
 
 const REMOTE_PROVIDER_ID = `remote:${WALLET_GATEWAY_URL}`;
 
@@ -479,34 +500,32 @@ export const dappSdkWalletClient: StreamsWalletClient = {
   },
 
   async disconnect() {
-    await sdk.disconnect();
-    // The client is torn down; its provider listeners are dead. Forget the
-    // attachments so a later connect re-wires the still-buffered listeners.
-    forgetAttachments();
+    try {
+      await sdk.disconnect();
+    } finally {
+      // The client is torn down; its provider listeners are dead. Forget the
+      // attachments so a later connect re-wires the still-buffered listeners.
+      forgetAttachments();
+      // Clear the persisted session even if the SDK disconnect threw, so an
+      // explicitly-abandoned session can't be silently re-adopted next load.
+      clearSwkPersistedSession();
+    }
   },
 
   async status() {
-    try {
-      return await sdk.status();
-    } catch (err) {
-      // Before the user connects, the SDK has no client bound and
-      // `status()` throws `Not connected — call connect() first`. That is the
-      // expected no-session state, not an error — auth.tsx calls status() on
-      // mount, so throwing would flash a scary red banner on the connect
-      // screen before the user does anything. Normalize the no-session case
-      // to a well-formed disconnected status; rethrow anything else so genuine
-      // gateway/transport failures still surface.
-      const raw = err instanceof Error ? err.message : String(err);
-      if (/not connected|call connect\(\) first/i.test(raw)) {
-        return {
-          provider: null,
-          connection: { isConnected: false },
-          network: null,
-          session: null,
-        };
-      }
-      throw err;
-    }
+    // The pre-connect "Not connected" throw is the expected no-session state,
+    // not an error — auth.tsx calls status() on mount, so normalize it instead
+    // of flashing a red banner on the connect screen.
+    return snapshotDappStatus();
+  },
+
+  async restore() {
+    // `sdk.init()` (run at mount) already performed the SDK's own popup-free
+    // session restore, so status() reflects the restored client. Fail closed on
+    // a locally-expired access token so we never adopt a dead session — the
+    // gateway's status RPC is the final authority for everything else.
+    if (isSwkTokenExpired()) return DISCONNECTED;
+    return snapshotDappStatus();
   },
 
   async listAccounts() {

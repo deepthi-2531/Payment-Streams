@@ -50,6 +50,7 @@
  */
 
 import { walletClient } from '../store/wallet/index.js';
+import { stashLoopSession } from '../store/wallet/loopSessionVault.js';
 
 export interface LoopHolding {
   /** Loop's instrument admin party + canonical id — the (admin, id)
@@ -155,12 +156,10 @@ function readLoopToken(): string | null {
   const token = session.authToken ?? session.auth_token ?? null;
   if (!token) return null;
   loopAuthToken = token;
-  // Drop the persisted bearer now that it lives in memory.
-  try {
-    localStorage.removeItem('loop_connect');
-  } catch {
-    /* storage unavailable — token is still cached in memory */
-  }
+  // The bearer now lives in memory; move the persisted session into the
+  // encrypted-at-rest vault (and drop the plaintext copy) so no bearer/PII sits
+  // in plain localStorage. Async, fire-and-forget: the token is already cached.
+  void stashLoopSession();
   return token;
 }
 
