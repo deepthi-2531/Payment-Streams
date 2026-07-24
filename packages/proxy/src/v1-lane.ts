@@ -1059,8 +1059,23 @@ const TRANSFER_INSTRUCTION_RE = /TransferInstruction/;
 /** Active incoming offers: AmuletTransferInstruction where the caller is the
  *  transfer receiver. Unlike `activeTransferInstructions`, this is NOT scoped
  *  to a payer/stream — it surfaces every pending offer to the party. */
+/** The `transfer` record off a pending offer, whichever shape the ACS returned:
+ *  the concrete Amulet template exposes it as `createArgument.transfer`; a non-CC
+ *  token surfaces through the standardized TransferInstruction interface view. */
+function offerTransfer(ev: any): any {
+  if (ev?.createArgument?.transfer) return ev.createArgument.transfer;
+  for (const v of (ev?.interfaceViews ?? [])) {
+    if (v?.viewValue?.transfer) return v.viewValue.transfer;
+  }
+  return {};
+}
+
 async function incomingOffers(config: V1LaneConfig, party: string): Promise<ReceivedPendingOffer[]> {
   const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  // CC keeps its exact template filter; the two interface filters additionally
+  // surface any other token-standard TransferInstruction (v1 or v2) to the party,
+  // so a non-CC pending offer shows in the inbox without needing its concrete
+  // template id configured up front.
   const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
     filter: {
       filtersByParty: {
@@ -1077,6 +1092,28 @@ async function incomingOffers(config: V1LaneConfig, party: string): Promise<Rece
                 },
               },
             },
+            {
+              identifierFilter: {
+                InterfaceFilter: {
+                  value: {
+                    interfaceId: config.transferInstructionInterfaceId,
+                    includeInterfaceView: true,
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
+            },
+            {
+              identifierFilter: {
+                InterfaceFilter: {
+                  value: {
+                    interfaceId: config.transferInstructionInterfaceIdV2,
+                    includeInterfaceView: true,
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
+            },
           ],
         },
       },
@@ -1084,12 +1121,13 @@ async function incomingOffers(config: V1LaneConfig, party: string): Promise<Rece
     verbose: false,
     activeAtOffset: offset,
   });
-  return rows
-    .map((r) => r.contractEntry?.JsActiveContract?.createdEvent)
-    .filter(Boolean)
-    .map((ev: any) => ({ ev, tr: ev.createArgument?.transfer ?? {} }))
-    .filter(({ tr }: any) => tr.receiver === party)
-    .map(({ ev, tr }: any) => ({
+  const byCid = new Map<string, ReceivedPendingOffer>();
+  for (const r of rows) {
+    const ev = r.contractEntry?.JsActiveContract?.createdEvent;
+    if (!ev) continue;
+    const tr = offerTransfer(ev);
+    if (tr.receiver !== party) continue;
+    byCid.set(ev.contractId, {
       transferInstructionCid: ev.contractId,
       amount: String(tr.amount ?? '0'),
       sender: String(tr.sender ?? ''),
@@ -1100,7 +1138,9 @@ async function incomingOffers(config: V1LaneConfig, party: string): Promise<Rece
       requestedAt: tr.requestedAt,
       executeBefore: tr.executeBefore,
       expired: !!tr.executeBefore && Date.parse(tr.executeBefore) < Date.now(),
-    }));
+    });
+  }
+  return [...byCid.values()];
 }
 
 /** Delivered receipts: walk the party's flat update history and collect the
