@@ -31,6 +31,7 @@ import {
   verifyHoldingDeliveryOnScan,
   resolveInstrument,
   configForStream,
+  buildOfferWithdrawCommand,
   V1LaneError,
   type V1LaneConfig,
   type V1Agreement,
@@ -1419,21 +1420,127 @@ export class EscrowLane {
     };
   }
 
-  /** One streamer pass: release every active escrow whose next cycle is due. */
+  /** Contract ids of the escrow party's still-active (locked) pending offers in
+   *  one asset — CC via the concrete Amulet TI template, a non-CC asset via the
+   *  standardized TransferInstruction interface (concrete template unknown). */
+  private async activeOfferCids(asset: ReturnType<typeof assetOf>): Promise<Set<string>> {
+    const { offset } = await ledger(this.config, 'GET', '/v2/state/ledger-end');
+    const filters =
+      asset.key === 'cc'
+        ? [
+            {
+              identifierFilter: {
+                TemplateFilter: {
+                  value: {
+                    templateId: '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
+                    includeCreatedEventBlob: false,
+                  },
+                },
+              },
+            },
+          ]
+        : [this.config.transferInstructionInterfaceId, this.config.transferInstructionInterfaceIdV2].map(
+            (interfaceId) => ({
+              identifierFilter: {
+                InterfaceFilter: { value: { interfaceId, includeInterfaceView: false, includeCreatedEventBlob: false } },
+              },
+            }),
+          );
+    const rows: any[] = await ledger(this.config, 'POST', '/v2/state/active-contracts', {
+      filter: { filtersByParty: { [this.config.escrowParty]: { cumulative: filters } } },
+      verbose: false,
+      activeAtOffset: offset,
+    });
+    const s = new Set<string>();
+    for (const r of rows) {
+      const cid = r.contractEntry?.JsActiveContract?.createdEvent?.contractId;
+      if (cid) s.add(cid);
+    }
+    return s;
+  }
+
+  /** Reclaim the funds of any release that expired while still locked on-ledger:
+   *  a receiver with no preapproval never accepted it, and — unlike CC — a general
+   *  asset has no DSO auto-sweep, so the funds would otherwise strand in the dead
+   *  offer. The custodian is the release's sender, so it withdraws the offer
+   *  (exercisable at any time, incl. post-executeBefore), returning the value to
+   *  custody where it re-enters `remaining` for a re-release or refund. CC is a
+   *  no-op — its expired offers auto-sweep and reconcile already reverts them. */
+  async reclaimExpiredReleases(escrowId: string): Promise<{ reclaimed: number }> {
+    return this.withLock(() => this.reclaimExpiredReleasesImpl(escrowId));
+  }
+  private async reclaimExpiredReleasesImpl(escrowId: string): Promise<{ reclaimed: number }> {
+    this.requireEnabled();
+    const store = loadEscrows(this.config);
+    const e = store.escrows[escrowId];
+    if (!e) throw new V1LaneError(404, 'escrow_not_found', `escrow "${escrowId}" not found`);
+    const asset = assetOf(this.config, e);
+    if (asset.key === 'cc') return { reclaimed: 0 };
+    const nowMs = Date.now();
+    const stuck = (e.ledger ?? []).filter(
+      (l) =>
+        l.kind === 'release' &&
+        l.offerStatus === 'active' &&
+        l.transferInstructionCid &&
+        l.offerExpiresAt &&
+        Date.parse(l.offerExpiresAt) <= nowMs,
+    );
+    if (stuck.length === 0) return { reclaimed: 0 };
+    const active = await this.activeOfferCids(asset);
+    let reclaimed = 0;
+    let mutated = false;
+    for (const l of stuck) {
+      // Only withdraw an offer still locked on-ledger; one already gone is left to
+      // reconcile (accepted before its deadline, or previously reclaimed).
+      if (!active.has(l.transferInstructionCid!)) continue;
+      try {
+        const { command, disclosedContracts } = await buildOfferWithdrawCommand(
+          this.config,
+          l.transferInstructionCid!,
+          asset.registryApiUrl,
+        );
+        await submit(this.config, `escrow-reclaim-${l.seq}`, [this.config.escrowParty], [command], disclosedContracts);
+      } catch (err) {
+        console.warn(`[escrow] reclaim failed for ${escrowId} seq=${l.seq}: ${String((err as Error)?.message ?? err).slice(0, 160)}`);
+        continue;
+      }
+      // Withdraw committed → funds back in custody. Revert the release and
+      // un-advance `released` once (reconcile skips terminal statuses, so no
+      // double-count), reopening the escrow if this release had completed it.
+      l.offerStatus = 'withdrawn';
+      e.released = dec(Math.max(0, Number(e.released) - Number(l.amount)));
+      if (e.status === 'completed') e.status = 'active';
+      reclaimed += 1;
+      mutated = true;
+    }
+    if (mutated) saveEscrows(this.config, store);
+    return { reclaimed };
+  }
+
+  /** One streamer pass: release every active escrow whose next cycle is due, then
+   * reclaim any non-CC release that expired locked (no auto-sweep for general
+   * assets), so stuck funds return to custody instead of stranding. */
   async tick(): Promise<void> {
     if (!this.enabled) return;
     const store = loadEscrows(this.config);
     const now = Date.now();
-    const due = Object.values(store.escrows).filter(
-      (e) => e.status === 'active' && Date.parse(e.nextDueAt) <= now,
-    );
-    for (const e of due) {
+    const active = Object.values(store.escrows).filter((e) => e.status === 'active');
+    for (const e of active) {
+      if (Date.parse(e.nextDueAt) > now) continue;
       try {
         await this.releaseEscrowOnce(e.escrowId);
       } catch (err) {
         // Non-fatal: log and retry on the next tick (e.g. transient insufficient
         // holdings while a prior transfer settles).
         console.warn(`[escrow] release failed for ${e.escrowId}:`, String((err as Error)?.message ?? err).slice(0, 200));
+      }
+    }
+    for (const e of active) {
+      if ((e.assetKey || 'cc') === 'cc') continue;
+      try {
+        await this.reclaimExpiredReleases(e.escrowId);
+      } catch (err) {
+        console.warn(`[escrow] reclaim sweep failed for ${e.escrowId}:`, String((err as Error)?.message ?? err).slice(0, 160));
       }
     }
   }

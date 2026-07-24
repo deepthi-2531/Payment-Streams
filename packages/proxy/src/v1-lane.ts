@@ -1890,6 +1890,37 @@ async function prepareInstructionActionCommand(
   };
 }
 
+/**
+ * Build (no submit) a `TransferInstruction_Withdraw` for the offer's SENDER to
+ * reclaim the locked funds of a still-pending offer by its contract id. The
+ * sender's withdraw maps to the unguarded abort path, so it is exercisable at
+ * any time including after `executeBefore` — this is how a stuck, expired,
+ * unaccepted offer's funds are recovered when the receiver has no preapproval.
+ * `registryBaseUrl` selects the per-asset registrar; omit for CC.
+ */
+export async function buildOfferWithdrawCommand(
+  config: V1LaneConfig,
+  transferInstructionCid: string,
+  registryBaseUrl?: string,
+): Promise<{ command: unknown; disclosedContracts: unknown[] }> {
+  const body = await registryPost(
+    config,
+    `/registry/transfer-instruction/v1/${encodeURIComponent(transferInstructionCid)}/choice-contexts/withdraw`,
+    {},
+    registryBaseUrl,
+  );
+  const ctx = body.choiceContext ?? body.choice_context ?? body;
+  const command = {
+    ExerciseCommand: {
+      templateId: config.transferInstructionInterfaceId,
+      contractId: transferInstructionCid,
+      choice: 'TransferInstruction_Withdraw',
+      choiceArgument: { extraArgs: { context: choiceContextValues(ctx), meta: { values: {} } } },
+    },
+  };
+  return { command, disclosedContracts: mapDisclosedContracts(ctx) };
+}
+
 /** Model 1: the proxy forms AND submits the transfer (payer hosted here). */
 export async function settleCycle(
   config: V1LaneConfig,

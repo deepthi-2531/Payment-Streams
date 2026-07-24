@@ -2376,6 +2376,7 @@ app.post('/api/v1/escrows/prepare-deposit', async (req, res) => {
       payer,
       totalDeposit: String(body['totalDeposit'] ?? body['totalDeposited'] ?? ''),
       holdings: body['holdings'] as { cid: string; amount: number }[] | undefined,
+      assetKey: typeof body['assetKey'] === 'string' ? (body['assetKey'] as string) : undefined,
     });
     res.json(serializeForJson(prepared));
   } catch (err) {
@@ -2405,6 +2406,7 @@ app.post('/api/v1/escrows', async (req, res) => {
       cadenceSeconds: Number(body['cadenceSeconds'] ?? 86400),
       totalDeposit: String(body['totalDeposit'] ?? body['totalDeposited'] ?? ''),
       fundingTransferId: body['fundingTransferId'] as string | undefined,
+      assetKey: typeof body['assetKey'] === 'string' ? (body['assetKey'] as string) : undefined,
     });
     res.status(201).json(serializeForJson(created));
   } catch (err) {
@@ -2454,6 +2456,22 @@ app.get('/api/v1/escrows/:id/reconcile', async (req, res) => {
     res.json(serializeForJson(await escrowLane.reconcile(req.params['id']!, auth.party)));
   } catch (err) {
     handleError(res, err, 'reconcileEscrow');
+  }
+});
+
+/** Reclaim any release that expired locked (a non-CC offer the recipient never
+ * accepted; general assets have no auto-sweep). Returns funds to custody so they
+ * re-enter the refundable/re-releasable balance. Payer only; the streamer also
+ * does this automatically each tick. A no-op for CC. */
+app.post('/api/v1/escrows/:id/reclaim', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const esc = escrowLane.getEscrow(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', esc.originalPayer);
+    const out = await escrowLane.reclaimExpiredReleases(req.params['id']!);
+    res.json(serializeForJson(out));
+  } catch (err) {
+    handleError(res, err, 'reclaimEscrow');
   }
 });
 
