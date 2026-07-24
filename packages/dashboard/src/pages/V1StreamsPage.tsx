@@ -10,22 +10,61 @@ import { useStreamsV1 } from '../hooks/useStreams.js';
 import { useAuth } from '../store/auth.js';
 import { LaneSwitch } from '../components/streams/LaneSwitch.js';
 import { Skeleton, ErrorState, PageHeader } from '../components/common/index.js';
-import { fmtCc, displayName } from '../lib/format.js';
+import { fmtAsset, assetOfView, displayName } from '../lib/format.js';
 import type { V1StreamView } from '../api/client.js';
+
+type DateRange = 'all' | 'today' | '7d' | '30d';
+
+const RANGE_PRESETS: readonly { readonly id: DateRange; readonly label: string }[] = [
+  { id: 'all', label: 'All' },
+  { id: 'today', label: 'Today' },
+  { id: '7d', label: '7 days' },
+  { id: '30d', label: '30 days' },
+];
+
+/** Epoch-ms cutoff for a preset; 0 means no lower bound. */
+function rangeCutoff(range: DateRange): number {
+  const now = Date.now();
+  switch (range) {
+    case 'today': {
+      const d = new Date();
+      d.setHours(0, 0, 0, 0);
+      return d.getTime();
+    }
+    case '7d':
+      return now - 7 * 86_400_000;
+    case '30d':
+      return now - 30 * 86_400_000;
+    default:
+      return 0;
+  }
+}
+
+/** createdAt as epoch ms, 0 when absent/unparseable (sorts oldest/last). */
+function createdMs(s: V1StreamView): number {
+  const t = Date.parse(s.agreement.createdAt ?? '');
+  return Number.isNaN(t) ? 0 : t;
+}
 
 export function V1StreamsPage() {
   const { party } = useAuth();
   const [search, setSearch] = useState('');
+  const [range, setRange] = useState<DateRange>('all');
   const streamsQ = useStreamsV1();
 
+  // Newest first (by createdAt), filtered by the search box and the date preset.
   const visible = useMemo<V1StreamView[]>(() => {
-    if (!streamsQ.data) return [];
-    if (!search.trim()) return [...streamsQ.data];
     const q = search.trim().toLowerCase();
-    return streamsQ.data.filter((s) =>
-      `${s.agreement.payerParty} ${s.agreement.recipientParty}`.toLowerCase().includes(q),
-    );
-  }, [streamsQ.data, search]);
+    const cutoff = rangeCutoff(range);
+    return (streamsQ.data ?? [])
+      .filter(
+        (s) =>
+          !q ||
+          `${s.agreement.payerParty} ${s.agreement.recipientParty}`.toLowerCase().includes(q),
+      )
+      .filter((s) => cutoff === 0 || createdMs(s) >= cutoff)
+      .sort((a, b) => createdMs(b) - createdMs(a));
+  }, [streamsQ.data, search, range]);
 
   return (
     <div style={{ paddingTop: 28 }}>
@@ -42,20 +81,42 @@ export function V1StreamsPage() {
         }
       />
 
-      <div
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          background: 'var(--bg-elev)', border: '1px solid var(--line-2)', borderRadius: 'var(--r-md)',
-          padding: '6px 10px', minWidth: 220, maxWidth: 320, marginBottom: 18,
-        }}
-      >
-        <Search size={12} style={{ color: 'var(--fg-4)' }} />
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name…"
-          style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: 12.5, color: 'var(--fg)', width: '100%' }}
-        />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 18 }}>
+        <div
+          style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: 'var(--bg-elev)', border: '1px solid var(--line-2)', borderRadius: 'var(--r-md)',
+            padding: '6px 10px', minWidth: 220, maxWidth: 320,
+          }}
+        >
+          <Search size={12} style={{ color: 'var(--fg-4)' }} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name…"
+            style={{ background: 'transparent', border: 'none', outline: 'none', fontSize: 12.5, color: 'var(--fg)', width: '100%' }}
+          />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          {RANGE_PRESETS.map((p) => {
+            const on = range === p.id;
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => setRange(p.id)}
+                style={{
+                  cursor: 'pointer', fontSize: 11.5, padding: '6px 11px',
+                  borderRadius: 'var(--r-md)', border: '1px solid var(--line-2)',
+                  background: on ? 'var(--accent-soft)' : 'transparent',
+                  color: on ? 'var(--accent)' : 'var(--fg-3)',
+                }}
+              >
+                {p.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {streamsQ.isPending && <Skeleton.Row count={5} height={64} />}
@@ -127,7 +188,7 @@ function V1Row({
 
       {/* Rate */}
       <div>
-        <span style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtCc(agreement.ratePerPeriod)}</span>
+        <span style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtAsset(agreement.ratePerPeriod, assetOfView(agreement))}</span>
         <span style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-4)' }}>per {per}</span>
       </div>
 

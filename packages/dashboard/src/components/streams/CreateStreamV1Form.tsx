@@ -14,10 +14,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Check, Loader2, Zap } from 'lucide-react';
 import { useCreateStreamV1 } from '../../hooks/useStreams.js';
 import { useCantonCoinBalance } from '../../hooks/useCantonCoinBalance.js';
+import { useAssets } from '../../hooks/useAssets.js';
 import { useAuth } from '../../store/auth.js';
 import { FormField } from '../forms/FormField.js';
 import { FormError } from '../forms/FormError.js';
-import { fmtCc, displayName } from '../../lib/format.js';
+import { AssetSelect } from './AssetSelect.js';
+import { fmtCc, fmtAmount, instrumentLabel, displayName } from '../../lib/format.js';
 import {
   createStreamV1Schema,
   type CreateStreamV1Values,
@@ -103,6 +105,9 @@ export function CreateStreamV1Form() {
       ratePerCycle: data.ratePerCycle.trim(),
       cadence: data.cadence,
       arrearsPolicy: data.arrearsPolicy,
+      // Only send a key when the picker resolved a whitelisted asset; absent ⇒
+      // the proxy defaults to Canton Coin.
+      ...(data.assetKey ? { assetKey: data.assetKey } : {}),
     };
     try {
       const view = await createStream.mutateAsync(params);
@@ -114,13 +119,21 @@ export function CreateStreamV1Form() {
 
   const submitting = createStream.isPending;
   const cc = useCantonCoinBalance();
+  const { data: assets = [] } = useAssets();
   const watchedRate = methods.watch('ratePerCycle');
   const watchedCadence = methods.watch('cadence');
+  const watchedAssetKey = methods.watch('assetKey');
   const rateNum = Number(watchedRate);
   const hasRate = !!watchedRate && Number.isFinite(rateNum) && rateNum > 0;
   const perDayMult: Record<string, number> = { second: 86_400, minute: 1_440, hourly: 24, daily: 1 };
   const perDay = hasRate ? rateNum * (perDayMult[watchedCadence] ?? 1) : 0;
-  const lowBalance = hasRate && cc.value !== null && cc.value < rateNum;
+  // Canton Coin is the only asset with a live wallet-balance readout here, so the
+  // balance/low-funds strip is shown for CC and the amounts carry the selected
+  // asset's symbol for anything else.
+  const selectedAsset = assets.find((a) => a.key === watchedAssetKey);
+  const isCc = !watchedAssetKey || watchedAssetKey === 'cc';
+  const unit = isCc ? 'CC' : instrumentLabel(selectedAsset?.instrumentId);
+  const lowBalance = isCc && hasRate && cc.value !== null && cc.value < rateNum;
 
   return (
     <FormProvider {...methods}>
@@ -144,13 +157,17 @@ export function CreateStreamV1Form() {
             <input className="input" style={inputStyle} placeholder="Recipient's wallet address" autoComplete="off" />
           </FormField>
 
+          {/* Asset picker — writes the whitelisted `assetKey` sent to the proxy.
+              Whitelist-only (no custom): the V1 lane rejects unknown keys. */}
+          <AssetSelect keyName="assetKey" allowCustom={false} />
+
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, alignItems: 'start' }}>
             <FormField
               name="ratePerCycle"
               className=""
               label={<span style={fieldLabelStyle}>Amount per payment</span>}
               required
-              help="How much Canton Coin to send each time."
+              help="How much to send each time."
             >
               <input className="input" style={inputStyle} placeholder="10" inputMode="decimal" autoComplete="off" />
             </FormField>
@@ -180,14 +197,16 @@ export function CreateStreamV1Form() {
             }}
           >
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, fontSize: 12.5 }}>
-              <span style={{ color: 'var(--fg-3)' }}>Each payment: <strong style={{ color: 'var(--fg)' }}>{fmtCc(rateNum)}</strong></span>
-              <span style={{ color: 'var(--fg-3)' }}>Per day: <strong style={{ color: 'var(--fg)' }}>{fmtCc(perDay)}</strong></span>
-              <span style={{ color: 'var(--fg-3)' }}>
-                Your balance:{' '}
-                <strong style={{ color: lowBalance ? 'var(--warn)' : 'var(--fg)' }}>
-                  {cc.isLoading ? '…' : cc.display !== null ? fmtCc(Number(cc.display)) : '—'}
-                </strong>
-              </span>
+              <span style={{ color: 'var(--fg-3)' }}>Each payment: <strong style={{ color: 'var(--fg)' }}>{fmtAmount(rateNum)} {unit}</strong></span>
+              <span style={{ color: 'var(--fg-3)' }}>Per day: <strong style={{ color: 'var(--fg)' }}>{fmtAmount(perDay)} {unit}</strong></span>
+              {isCc && (
+                <span style={{ color: 'var(--fg-3)' }}>
+                  Your balance:{' '}
+                  <strong style={{ color: lowBalance ? 'var(--warn)' : 'var(--fg)' }}>
+                    {cc.isLoading ? '…' : cc.display !== null ? fmtCc(Number(cc.display)) : '—'}
+                  </strong>
+                </span>
+              )}
             </div>
             {lowBalance && (
               <div style={{ fontSize: 12, color: 'var(--warn)' }}>

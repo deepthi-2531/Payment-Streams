@@ -12,7 +12,7 @@
  */
 
 import { useState, type CSSProperties } from 'react';
-import { AlertCircle, ChevronRight, KeyRound, Wallet } from 'lucide-react';
+import { AlertCircle, ChevronRight, KeyRound, RefreshCw, Wallet } from 'lucide-react';
 import { useAuth } from '../../store/auth.js';
 import { walletClient } from '../../store/wallet/index.js';
 import { Signing } from './Signing.js';
@@ -69,11 +69,20 @@ const inputStyle: CSSProperties = {
 export function ConnectFlow() {
   const auth = useAuth();
   const [showDev, setShowDev] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
   const [devToken, setDevToken] = useState('');
   const [devParty, setDevParty] = useState('');
 
+  // A returning user with a remembered session sees a "Welcome back" card first;
+  // "Use a different wallet" drops to the normal picker below.
+  const showReconnect = auth.canReconnect && !showPicker;
+
   const handleConnect = () => {
     void auth.connect();
+  };
+
+  const handleReconnect = () => {
+    void auth.connect(auth.rememberedWalletId);
   };
 
   const handleDevConnect = () => {
@@ -194,7 +203,7 @@ export function ConnectFlow() {
                   color: 'var(--fg)',
                 }}
               >
-                Connect wallet
+                {showReconnect ? 'Welcome back' : 'Connect wallet'}
               </h2>
               <p
                 style={{
@@ -203,9 +212,11 @@ export function ConnectFlow() {
                   color: 'var(--fg-4)',
                 }}
               >
-                {walletClient.capabilities.hostedMultiWallet
-                  ? `${walletClient.name} · pick a wallet`
-                  : 'Splice Amulet Wallet · CIP-103'}
+                {showReconnect
+                  ? 'Reconnect your wallet to continue'
+                  : walletClient.capabilities.hostedMultiWallet
+                    ? `${walletClient.name} · pick a wallet`
+                    : 'Splice Amulet Wallet · CIP-103'}
               </p>
             </div>
           </div>
@@ -214,6 +225,13 @@ export function ConnectFlow() {
             <Signing
               label="Confirm in your wallet"
               subLabel="The picker will open in a new window if not already shown."
+            />
+          ) : showReconnect ? (
+            <ReconnectCard
+              party={auth.rememberedParty}
+              walletId={auth.rememberedWalletId}
+              onReconnect={handleReconnect}
+              onUseAnother={() => setShowPicker(true)}
             />
           ) : walletClient.capabilities.hostedMultiWallet ? (
             <WalletPicker />
@@ -350,6 +368,79 @@ export function ConnectFlow() {
       </div>
     </div>
   );
+}
+
+/** Returning-user reconnect card. Shows the remembered party/wallet and a
+ * single Reconnect button. UI only — it never implies a live session; the
+ * actual connect (and any wallet pairing) happens on click. */
+function ReconnectCard({
+  party,
+  walletId,
+  onReconnect,
+  onUseAnother,
+}: {
+  readonly party: string | null;
+  readonly walletId: string | undefined;
+  readonly onReconnect: () => void;
+  readonly onUseAnother: () => void;
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          padding: '12px 14px',
+          background: 'var(--bg-elev)',
+          border: '1px solid var(--line-2)',
+          borderRadius: 'var(--r-md)',
+        }}
+      >
+        <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>Last signed in as</span>
+        <span
+          className="mono"
+          style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)' }}
+        >
+          {party ? shortParty(party) : 'your wallet'}
+        </span>
+        {walletId && (
+          <span style={{ fontSize: 10.5, color: 'var(--fg-4)' }}>via {walletId}</span>
+        )}
+      </div>
+
+      <button
+        type="button"
+        className="btn btn-primary"
+        onClick={onReconnect}
+        style={{ width: '100%', padding: '10px 14px', fontSize: 14, justifyContent: 'center' }}
+      >
+        <RefreshCw size={14} /> Reconnect
+      </button>
+
+      <button
+        type="button"
+        onClick={onUseAnother}
+        style={{
+          background: 'transparent',
+          border: 'none',
+          color: 'var(--fg-3)',
+          fontSize: 11.5,
+          cursor: 'pointer',
+          padding: 0,
+        }}
+      >
+        Use a different wallet
+      </button>
+    </div>
+  );
+}
+
+/** Compact party-id label: keep the local name, truncate the hash. */
+function shortParty(p: string): string {
+  const sep = p.indexOf('::');
+  if (sep <= 0) return p.length > 20 ? `${p.slice(0, 10)}…${p.slice(-4)}` : p;
+  return `${p.slice(0, sep)}::${p.slice(sep + 2, sep + 10)}…`;
 }
 
 function Stat({

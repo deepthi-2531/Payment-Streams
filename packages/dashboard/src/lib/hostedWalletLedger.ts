@@ -229,6 +229,59 @@ export async function queryActiveContractsRaw(
     []) as ReadonlyArray<Record<string, unknown>>;
 }
 
+/**
+ * Like queryActiveContractsRaw, but filters by token-standard INTERFACE id(s)
+ * with the interface view included. Used to read a non-CC asset's holdings from
+ * the wallet when its concrete template id is unknown — every token holding
+ * implements the standardized Holding interface, which exposes a uniform
+ * { owner, instrumentId, amount } view.
+ */
+export async function queryActiveContractsByInterfaceRaw(
+  interfaceIds: readonly string[],
+  party: string,
+): Promise<ReadonlyArray<Record<string, unknown>>> {
+  if (!isHostedLedgerAvailable()) {
+    throw new Error('Hosted wallet ledgerApi is not available on this session');
+  }
+  if (interfaceIds.length === 0) return [];
+  const wc = walletClient.ledgerApi!;
+  const activeAtOffset = await walletLedgerEndOffset(wc);
+  const body = {
+    filter: {
+      filtersByParty: {
+        [party]: {
+          inclusive: {
+            interfaceFilters: interfaceIds.map((i) => ({
+              interfaceId: i,
+              includeInterfaceView: true,
+            })),
+          },
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset,
+  };
+  const raw = await wc({
+    requestMethod: 'post',
+    resource: '/v2/state/acs',
+    body: JSON.stringify(body),
+  });
+  const parsed: AcsActiveContractsResponse = (() => {
+    if (raw && typeof (raw as LedgerApiResponseWrapper).response === 'string') {
+      try {
+        return JSON.parse((raw as LedgerApiResponseWrapper).response!);
+      } catch {
+        return {};
+      }
+    }
+    return (raw as AcsActiveContractsResponse) ?? {};
+  })();
+  return (parsed.activeContracts ??
+    parsed.active_contracts ??
+    []) as ReadonlyArray<Record<string, unknown>>;
+}
+
 export async function queryActiveContracts(
   templateIds: readonly string[],
   party: string,
@@ -349,6 +402,52 @@ export async function submitAndWait(
     }
   }
   return raw;
+}
+
+/**
+ * Fetch a committed update by id from the connected wallet's own participant
+ * (POST /v2/updates/update-by-id). Backs wallet-side proof-of-transfer on a
+ * non-CC direct settle — the payer's participant can witness the update it just
+ * submitted, even though the proxy can't. Returns the parsed update, or null when
+ * the wallet can't answer / didn't witness it.
+ */
+export async function fetchUpdateById(updateId: string): Promise<unknown> {
+  if (!isHostedLedgerAvailable() || !updateId) return null;
+  const wc = walletClient.ledgerApi!;
+  const body = {
+    updateId,
+    updateFormat: {
+      includeTransactions: {
+        eventFormat: {
+          filtersByParty: {},
+          filtersForAnyParty: {
+            cumulative: [
+              { identifierFilter: { WildcardFilter: { value: { includeCreatedEventBlob: false } } } },
+            ],
+          },
+          verbose: false,
+        },
+        transactionShape: 'TRANSACTION_SHAPE_LEDGER_EFFECTS',
+      },
+    },
+  };
+  try {
+    const raw = await wc({
+      requestMethod: 'post',
+      resource: '/v2/updates/update-by-id',
+      body: JSON.stringify(body),
+    });
+    if (raw && typeof (raw as LedgerApiResponseWrapper).response === 'string') {
+      try {
+        return JSON.parse((raw as LedgerApiResponseWrapper).response!);
+      } catch {
+        return null;
+      }
+    }
+    return raw ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**

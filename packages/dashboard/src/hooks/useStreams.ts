@@ -15,6 +15,7 @@ import type {
 import type {
   V1CreateStreamParams,
   V1SettleParams,
+  StreamInstrument,
 } from '../api/client.js';
 import { useCantonClient } from './useCantonClient.js';
 import { useAuth } from '../store/auth.js';
@@ -294,10 +295,18 @@ export function useSettleStreamV1() {
       id,
       params,
       payerParty,
+      recipientParty,
+      asset,
     }: {
       id: string;
       params?: V1SettleParams;
       payerParty?: string;
+      /** The stream recipient — lets a non-CC settle bind its proof-of-transfer
+       *  to the delivery that lands on the recipient. */
+      recipientParty?: string;
+      /** The stream's settlement instrument (absent ⇒ Canton Coin). Threaded so
+       *  a non-CC wallet settle reads the right holdings, not Amulet. */
+      asset?: StreamInstrument;
     }) => {
       // Model 2: when the payer is a hosted (wallet-held) party, the transfer
       // must be signed + submitted through the WALLET'S participant. Otherwise
@@ -306,7 +315,13 @@ export function useSettleStreamV1() {
       // only reports adapter CAPABILITIES, so it stays true even when no wallet
       // is actually connected — gate on `!devMode` to require a real session.
       if (payerParty && !devMode && isHostedLedgerAvailable()) {
-        return settleV1ViaWallet(client!, id, payerParty, params ?? {});
+        return settleV1ViaWallet(client!, id, payerParty, {
+          ...(params ?? {}),
+          ...(recipientParty ? { recipientParty } : {}),
+          ...(asset?.id ? { assetInstrumentId: asset.id } : {}),
+          ...(asset?.admin ? { assetInstrumentAdmin: asset.admin } : {}),
+          ...(asset?.holdingTemplateId ? { assetHoldingTemplateId: asset.holdingTemplateId } : {}),
+        });
       }
       return client!.settleStreamV1(id, params);
     },

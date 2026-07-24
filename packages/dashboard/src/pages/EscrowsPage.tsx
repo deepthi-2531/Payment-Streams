@@ -11,7 +11,7 @@ import { Lock, ArrowUpRight, ArrowDownLeft } from 'lucide-react';
 import { useEscrows } from '../hooks/useEscrows.js';
 import { useAuth } from '../store/auth.js';
 import { Skeleton, ErrorState, PageHeader } from '../components/common/index.js';
-import { fmtCc, displayName } from '../lib/format.js';
+import { fmtAsset, assetOfView, displayName } from '../lib/format.js';
 import type { EscrowView } from '../api/client.js';
 
 const STATUS_LABEL: Record<EscrowView['status'], string> = {
@@ -77,6 +77,7 @@ function EscrowRow({
 }) {
   const outgoing = party != null && view.originalPayer === party;
   const counterparty = outgoing ? view.recipient : view.originalPayer;
+  const asset = assetOfView(view);
   const total = Number(view.summary.totalIn);
   const paid = Number(view.summary.totalStreamed);
   const pct = total > 0 ? Math.min(100, Math.round((paid / total) * 100)) : 0;
@@ -117,14 +118,14 @@ function EscrowRow({
           <div style={{ width: `${pct}%`, height: '100%', background: view.status === 'refunded' ? 'var(--fg-4)' : 'var(--accent)' }} />
         </div>
         <span style={{ display: 'block', fontSize: 11, color: 'var(--fg-4)', marginTop: 5 }}>
-          {fmtCc(paid)} of {fmtCc(total)} paid
+          {fmtAsset(paid, asset)} of {fmtAsset(total, asset)} paid
         </span>
       </div>
 
       {/* Payments made */}
       <div>
         <span style={{ fontSize: 13, color: 'var(--fg)' }}>
-          {fmtCc(view.ratePerCycle)}
+          {fmtAsset(view.ratePerCycle, asset)}
         </span>
         <span style={{ display: 'block', fontSize: 10.5, color: 'var(--fg-4)', marginTop: 3 }}>
           {view.summary.cyclesDelivered} sent{view.summary.cyclesPending > 0 ? ` · ${view.summary.cyclesPending} pending` : ''}

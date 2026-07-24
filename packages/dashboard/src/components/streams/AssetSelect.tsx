@@ -48,6 +48,17 @@ export interface AssetSelectProps {
   /** Form field holding the instrument id. */
   readonly idName?: string;
   /**
+   * When set, the selected asset's whitelist `key` is written to this form
+   * field too. The V1 create lane submits an `assetKey` (not an admin/id pair),
+   * so it passes `keyName="assetKey"` to thread the choice into the payload.
+   */
+  readonly keyName?: string;
+  /**
+   * Offer the "Custom asset…" escape hatch (free-text admin/id). The V1 lane
+   * only accepts server-whitelisted keys, so it passes `false`. Default true.
+   */
+  readonly allowCustom?: boolean;
+  /**
    * Preselect the first supported asset when both fields start empty, so the
    * correct network admin is prefilled. Suppressed when the fields already
    * carry values (query prefill / editing). Default true.
@@ -58,6 +69,8 @@ export interface AssetSelectProps {
 export function AssetSelect({
   adminName = 'instrumentAdmin',
   idName = 'instrumentId',
+  keyName,
+  allowCustom = true,
   autoDefault = true,
 }: AssetSelectProps) {
   const { setValue, watch } = useFormContext();
@@ -77,21 +90,27 @@ export function AssetSelect({
     if (didInit.current || isLoading) return;
     didInit.current = true;
     if (admin || id) {
-      if (!matched) setCustom(true);
+      if (!matched) {
+        if (allowCustom) setCustom(true);
+      } else if (keyName) {
+        setValue(keyName, matched.key, { shouldValidate: true });
+      }
       return;
     }
     if (autoDefault && assets.length > 0) {
       const first = assets[0]!;
       setValue(adminName, first.instrumentAdmin, { shouldValidate: true });
       setValue(idName, first.instrumentId, { shouldValidate: true });
+      if (keyName) setValue(keyName, first.key, { shouldValidate: true });
     }
-  }, [isLoading, assets, admin, id, matched, autoDefault, adminName, idName, setValue]);
+  }, [isLoading, assets, admin, id, matched, autoDefault, adminName, idName, keyName, allowCustom, setValue]);
 
   const selected = custom ? CUSTOM : matched ? matched.key : '';
 
   const onChange = (key: string) => {
     if (key === CUSTOM) {
       setCustom(true);
+      if (keyName) setValue(keyName, '', { shouldValidate: true, shouldDirty: true });
       return;
     }
     setCustom(false);
@@ -99,6 +118,7 @@ export function AssetSelect({
     if (asset) {
       setValue(adminName, asset.instrumentAdmin, { shouldValidate: true, shouldDirty: true });
       setValue(idName, asset.instrumentId, { shouldValidate: true, shouldDirty: true });
+      if (keyName) setValue(keyName, asset.key, { shouldValidate: true, shouldDirty: true });
     }
   };
 
@@ -125,7 +145,7 @@ export function AssetSelect({
               {a.displayName} · {a.instrumentId}
             </option>
           ))}
-          <option value={CUSTOM}>Custom asset…</option>
+          {allowCustom && <option value={CUSTOM}>Custom asset…</option>}
         </select>
         {!custom && matched && (
           <p className="mono" style={{ margin: '6px 0 0', fontSize: 11.5, color: 'var(--fg-4)' }}>

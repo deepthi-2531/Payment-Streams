@@ -52,6 +52,17 @@
 
 import { readFileSync, writeFileSync, existsSync, renameSync } from 'node:fs';
 import { acquireStoreLock, releaseStoreLock } from './store-lock.js';
+import { getSupportedAssets } from './assets.js';
+
+// Standardized token-standard TransferInstruction interface package NAMES. The
+// ledger ACS InterfaceFilter requires the `#package-name` form; the exercise
+// path may instead be configured with a concrete package id, so these are kept
+// separate from config.transferInstructionInterfaceId to interface-filter the
+// ACS reliably regardless of how the exercise id is configured.
+export const TI_INTERFACE_NAME_V1 =
+  '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction';
+export const TI_INTERFACE_NAME_V2 =
+  '#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction';
 
 // ---------------------------------------------------------------------------
 // Configuration (V1 lane env — see the task's envAndIds spec)
@@ -74,6 +85,10 @@ export interface V1LaneConfig {
   instrumentId: string;
   /** Concrete holding template the payer funds from. */
   holdingTemplateId: string;
+  /** Standardized token Holding interface id — used to read a non-CC custody
+   *  balance by interface view when the concrete holding template's field shape
+   *  is unknown. CC keeps its concrete Amulet template read. */
+  holdingInterfaceId: string;
   /** On-ledger record template id (StreamAdmin) for create + Sync_Iteration. */
   streamAdminTemplateId: string;
   /** Operator-signed direct-transfer index template id (StreamRecord). */
@@ -99,6 +114,8 @@ export interface V1LaneConfig {
   transferVersion: 'v1' | 'v2';
   /** TransferInstruction interface id for Accept/Withdraw of pending offers. */
   transferInstructionInterfaceId: string;
+  /** v2 TransferInstruction interface id (v2 accept/withdraw of pending offers). */
+  transferInstructionInterfaceIdV2: string;
   /** Registry AllocationFactory interface id for receiver-claim funding. */
   allocationFactoryInterfaceId: string;
   /** V1 Allocation interface id exercised through ReceiverClaimV1. */
@@ -139,6 +156,10 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     ccAdminParty: get('CC_ADMIN_PARTY'),
     instrumentId: get('INSTRUMENT_ID', 'Amulet'),
     holdingTemplateId: get('HOLDING_TEMPLATE_ID', '#splice-amulet:Splice.Amulet:Amulet'),
+    holdingInterfaceId: get(
+      'HOLDING_INTERFACE_ID',
+      '#splice-api-token-holding-v1:Splice.Api.Token.HoldingV1:Holding',
+    ),
     streamAdminTemplateId: get(
       'STREAM_ADMIN_TEMPLATE_ID',
       '#canton-streams:CantonStreams.Stream.StreamAdmin:StreamAdmin',
@@ -168,6 +189,10 @@ export function parseV1LaneConfig(e: NodeJS.ProcessEnv = process.env): V1LaneCon
     transferInstructionInterfaceId: get(
       'TRANSFER_INSTRUCTION_INTERFACE_ID',
       '#splice-api-token-transfer-instruction-v1:Splice.Api.Token.TransferInstructionV1:TransferInstruction',
+    ),
+    transferInstructionInterfaceIdV2: get(
+      'TRANSFER_INSTRUCTION_INTERFACE_ID_V2',
+      '#splice-api-token-transfer-instruction-v2:Splice.Api.Token.TransferInstructionV2:TransferInstruction',
     ),
     allocationFactoryInterfaceId: get(
       'V1_ALLOCATION_FACTORY_INTERFACE_ID',
@@ -241,6 +266,21 @@ export interface V1Agreement {
   createdAt?: string;
   /** Lifecycle: 'stopped' halts accrual + settlement. Undefined ⇒ active. */
   status?: 'active' | 'stopped';
+  /** Whitelisted asset-registry key this stream pays (e.g. 'cc', 'usdcx').
+   *  Absent ⇒ the proxy's global/default asset (CC). */
+  assetKey?: string;
+  /** Per-stream settlement instrument, resolved from the asset registry at
+   *  create time and frozen here so registry drift cannot retarget a live
+   *  stream. Absent fields fall back to the proxy's global CC config — so a
+   *  stream created without an instrument settles exactly as before. */
+  instrument?: {
+    admin: string;
+    id: string;
+    holdingTemplateId?: string;
+    registryApiUrl?: string;
+    transferVersion?: 'v1' | 'v2';
+    decimals?: number;
+  };
 }
 
 export interface CycleRecord {
@@ -248,6 +288,27 @@ export interface CycleRecord {
   amount: string;
   ref: string;
   updateId: string;
+  /** Set when a non-CC cycle was recorded against a wallet-verified delivered
+   *  transfer object (proof-of-transfer), not the interim trust path. */
+  verified?: boolean;
+}
+
+/**
+ * Wallet-side proof-of-transfer for a non-CC direct settle. The payer wallet's
+ * own participant witnessed the update it submitted (the proxy can't — both
+ * parties are remote and the asset isn't on Canton Coin's Scan), so it supplies
+ * the transfer object recorded here. Structurally validated in `recordSettle`
+ * against the agreement before any credit; a mismatch fails closed.
+ */
+export interface TransferProof {
+  sender?: string;
+  receiver: string;
+  amount: string;
+  instrumentId: string;
+  instrumentAdmin?: string;
+  /** true = a completed direct delivery (recipient Holding created); false = a
+   *  pending TransferOffer awaiting the recipient's accept. */
+  delivered: boolean;
 }
 
 export type ReceiverClaimStatus =
@@ -279,7 +340,7 @@ export interface ReceiverClaimRecord {
  * (retry) after expiry. A `pending` offer has NOT moved money — `settled`/
  * `cycles` advance only when it becomes `accepted`.
  */
-export type PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn';
+export type PendingTransferStatus = 'pending' | 'accepted' | 'withdrawn' | 'expired';
 
 export interface PendingTransferRecord {
   cycle: number;
@@ -425,8 +486,14 @@ async function assertNotUndisclosedCustody(config: V1LaneConfig, sender: string,
   }
 }
 
-async function registryPost(config: V1LaneConfig, path: string, body: unknown): Promise<any> {
-  const res = await fetch(`${config.registryApiUrl}${path}`, {
+async function registryPost(
+  config: V1LaneConfig,
+  path: string,
+  body: unknown,
+  baseUrl?: string,
+): Promise<any> {
+  const base = (baseUrl || config.registryApiUrl).replace(/\/+$/, '');
+  const res = await fetch(`${base}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body ?? {}),
@@ -495,6 +562,11 @@ function pickKey(o: any, keys: string[]): any {
 function ccInstrumentMatches(instId: unknown, config: V1LaneConfig): boolean {
   if (instId == null) return false;
   if (typeof instId === 'string') return instId === config.instrumentId;
+  // Bind the admin too when the on-chain instrument carries it: an id string
+  // ('Amulet', 'USDCx', …) is only unique within an admin, so two assets can
+  // share an id across different registrars. id alone is not a safe match.
+  const admin = pickKey(instId, ['admin']);
+  if (admin != null && String(admin) !== config.ccAdminParty) return false;
   return String(pickKey(instId, ['id', 'instrumentId'])) === config.instrumentId;
 }
 
@@ -871,9 +943,12 @@ function findCreatedInstructionCid(updateBody: string): string | undefined {
       obj['create_arguments'] !== undefined ||
       obj['createArguments'] !== undefined ||
       obj['createArgument'] !== undefined;
+    // A pending offer's contract is CC's `…:AmuletTransferInstruction` or a
+    // registry asset's `…:Transfer:TransferOffer` (USDCx). Match either, else a
+    // non-CC offer is mis-recorded as a direct delivery and never reclaimed.
     if (
       typeof tid === 'string' &&
-      tid.includes('TransferInstruction') &&
+      (tid.includes('TransferInstruction') || tid.includes('TransferOffer')) &&
       typeof cid === 'string' &&
       cid.length > 0 &&
       hasCreateArgs
@@ -890,7 +965,11 @@ interface Holding {
   amount: number;
 }
 
-async function senderHoldings(config: V1LaneConfig, party: string): Promise<Holding[]> {
+async function senderHoldings(
+  config: V1LaneConfig,
+  party: string,
+  holdingTemplateId?: string,
+): Promise<Holding[]> {
   const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
   const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
     filter: {
@@ -900,7 +979,10 @@ async function senderHoldings(config: V1LaneConfig, party: string): Promise<Hold
             {
               identifierFilter: {
                 TemplateFilter: {
-                  value: { templateId: config.holdingTemplateId, includeCreatedEventBlob: false },
+                  value: {
+                    templateId: holdingTemplateId || config.holdingTemplateId,
+                    includeCreatedEventBlob: false,
+                  },
                 },
               },
             },
@@ -915,10 +997,17 @@ async function senderHoldings(config: V1LaneConfig, party: string): Promise<Hold
     .map((r) => r.contractEntry?.JsActiveContract)
     .filter(Boolean)
     .filter((a) => a.createdEvent.createArgument.owner === party)
-    .map((a) => ({
-      cid: a.createdEvent.contractId,
-      amount: Number(a.createdEvent.createArgument.amount?.initialAmount ?? 0),
-    }));
+    // A locked holding can't be a transfer input (it's collateral in a pending
+    // transfer/allocation). Amulet has no such field so CC is unaffected; a
+    // registry holding (USDCx) sets `lock` while locked.
+    .filter((a) => a.createdEvent.createArgument.lock == null)
+    .map((a) => {
+      // Amulet nests the spendable figure as amount.initialAmount; a registry
+      // holding (USDCx) carries a flat decimal string. Tolerate both.
+      const amt = a.createdEvent.createArgument.amount;
+      const n = amt && typeof amt === 'object' ? Number(amt.initialAmount ?? 0) : Number(amt ?? 0);
+      return { cid: a.createdEvent.contractId, amount: n };
+    });
 }
 
 interface OnLedgerInstruction {
@@ -1020,37 +1109,57 @@ const TRANSFER_INSTRUCTION_RE = /TransferInstruction/;
 /** Active incoming offers: AmuletTransferInstruction where the caller is the
  *  transfer receiver. Unlike `activeTransferInstructions`, this is NOT scoped
  *  to a payer/stream — it surfaces every pending offer to the party. */
+/** The `transfer` record off a pending offer, whichever shape the ACS returned:
+ *  the concrete Amulet template exposes it as `createArgument.transfer`; a non-CC
+ *  token surfaces through the standardized TransferInstruction interface view. */
+function offerTransfer(ev: any): any {
+  if (ev?.createArgument?.transfer) return ev.createArgument.transfer;
+  for (const v of (ev?.interfaceViews ?? [])) {
+    if (v?.viewValue?.transfer) return v.viewValue.transfer;
+  }
+  return {};
+}
+
 async function incomingOffers(config: V1LaneConfig, party: string): Promise<ReceivedPendingOffer[]> {
   const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
-  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
-    filter: {
-      filtersByParty: {
-        [party]: {
-          cumulative: [
-            {
-              identifierFilter: {
-                TemplateFilter: {
-                  value: {
-                    templateId:
-                      '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
-                    includeCreatedEventBlob: false,
-                  },
-                },
-              },
-            },
-          ],
+  // CC always uses its exact, proven template filter. Only when a non-CC asset is
+  // actually whitelisted do we add the standardized TransferInstruction interface
+  // filters (by package NAME — the ACS requires it) so a non-CC pending offer
+  // surfaces without needing its concrete template id up front. This keeps the
+  // CC-only inbox byte-for-byte the pre-multi-asset query.
+  const cumulative: unknown[] = [
+    {
+      identifierFilter: {
+        TemplateFilter: {
+          value: {
+            templateId: '#splice-amulet:Splice.AmuletTransferInstruction:AmuletTransferInstruction',
+            includeCreatedEventBlob: false,
+          },
         },
       },
     },
+  ];
+  if (getSupportedAssets().some((a) => a.key !== 'cc')) {
+    for (const interfaceId of [TI_INTERFACE_NAME_V1, TI_INTERFACE_NAME_V2]) {
+      cumulative.push({
+        identifierFilter: {
+          InterfaceFilter: { value: { interfaceId, includeInterfaceView: true, includeCreatedEventBlob: false } },
+        },
+      });
+    }
+  }
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: { filtersByParty: { [party]: { cumulative } } },
     verbose: false,
     activeAtOffset: offset,
   });
-  return rows
-    .map((r) => r.contractEntry?.JsActiveContract?.createdEvent)
-    .filter(Boolean)
-    .map((ev: any) => ({ ev, tr: ev.createArgument?.transfer ?? {} }))
-    .filter(({ tr }: any) => tr.receiver === party)
-    .map(({ ev, tr }: any) => ({
+  const byCid = new Map<string, ReceivedPendingOffer>();
+  for (const r of rows) {
+    const ev = r.contractEntry?.JsActiveContract?.createdEvent;
+    if (!ev) continue;
+    const tr = offerTransfer(ev);
+    if (tr.receiver !== party) continue;
+    byCid.set(ev.contractId, {
       transferInstructionCid: ev.contractId,
       amount: String(tr.amount ?? '0'),
       sender: String(tr.sender ?? ''),
@@ -1061,7 +1170,9 @@ async function incomingOffers(config: V1LaneConfig, party: string): Promise<Rece
       requestedAt: tr.requestedAt,
       executeBefore: tr.executeBefore,
       expired: !!tr.executeBefore && Date.parse(tr.executeBefore) < Date.now(),
-    }));
+    });
+  }
+  return [...byCid.values()];
 }
 
 /** Delivered receipts: walk the party's flat update history and collect the
@@ -1146,6 +1257,7 @@ async function prepareAcceptOfferByCid(
   config: V1LaneConfig,
   party: string,
   transferInstructionCid: string,
+  registryBaseUrl?: string,
 ): Promise<PreparedInstructionAction & { amount: string; sender: string }> {
   const offer = (await incomingOffers(config, party)).find(
     (o) => o.transferInstructionCid === transferInstructionCid,
@@ -1172,23 +1284,97 @@ async function prepareAcceptOfferByCid(
     createdAt: new Date().toISOString(),
     status: 'pending',
   };
-  const prepared = await prepareInstructionActionCommand(config, record, 'accept', party);
+  const prepared = await prepareInstructionActionCommand(config, record, 'accept', party, registryBaseUrl);
   return { ...prepared, amount: offer.amount, sender: offer.sender };
 }
 
-/** Model 1 (hosted party): proxy forms AND submits the accept. */
-async function acceptOfferByCid(
+/** Model 1 (hosted party): proxy forms AND submits the accept. `registryBaseUrl`
+ *  selects the per-asset registrar for the accept choice-context; omit for CC. */
+export async function acceptOfferByCid(
   config: V1LaneConfig,
   party: string,
   transferInstructionCid: string,
+  registryBaseUrl?: string,
 ): Promise<{ updateId: string; amount: string; sender: string }> {
-  const prepared = await prepareAcceptOfferByCid(config, party, transferInstructionCid);
+  const prepared = await prepareAcceptOfferByCid(config, party, transferInstructionCid, registryBaseUrl);
   const res = await submit(config, 'recv-accept', [party], [prepared.command], prepared.disclosedContracts as unknown[]);
   const updateId = (res?.updateId ?? res?.transactionTree?.updateId) as string | undefined;
   if (!updateId) {
     throw new V1LaneError(502, 'submit_no_update', 'accept submitted but the ledger returned no updateId');
   }
   return { updateId, amount: prepared.amount, sender: prepared.sender };
+}
+
+/**
+ * The escrow's matching pending offer for a wallet-signed non-CC deposit. It must
+ * be incoming to the escrow, sent by the declared payer, of the declared
+ * instrument, unexpired, and cover the amount — so a caller can never bind a third
+ * party's offer or a different asset. Returns undefined when none matches (caller
+ * then fails closed).
+ */
+export async function findEscrowDepositOffer(
+  config: V1LaneConfig,
+  opts: { expectedSender: string; instrumentId: string; minAmount: number },
+): Promise<ReceivedPendingOffer | undefined> {
+  const escrow = config.escrowParty;
+  if (!escrow) return undefined;
+  const offers = await incomingOffers(config, escrow);
+  const matches = offers.filter(
+    (o) =>
+      o.sender === opts.expectedSender &&
+      String(o.instrumentId) === opts.instrumentId &&
+      !o.expired &&
+      Number(o.amount) + 1e-6 >= opts.minAmount,
+  );
+  // Prefer the closest-amount offer (this deposit's own offer is formed for
+  // exactly its amount), then the freshest, so a new deposit binds its own offer
+  // rather than an older larger one that would over-fund the vault.
+  matches.sort((a, b) => {
+    const da = Math.abs(Number(a.amount) - opts.minAmount);
+    const db = Math.abs(Number(b.amount) - opts.minAmount);
+    if (Math.abs(da - db) > 1e-6) return da - db;
+    return String(a.requestedAt ?? '') < String(b.requestedAt ?? '') ? 1 : -1;
+  });
+  return matches[0];
+}
+
+/**
+ * Sum the holdings the escrow OWNS and can spend (owner === escrow, unlocked) of a
+ * given concrete holding template. Used to credit a non-CC deposit by the amount
+ * the escrow's own participant confirms it actually received — never a client
+ * claim. Tolerates the Amulet-nested and flat (registry) `amount` shapes.
+ */
+export async function escrowOwnedHoldings(
+  config: V1LaneConfig,
+  holdingTemplateId: string,
+): Promise<number> {
+  if (!config.escrowParty || !holdingTemplateId) return 0;
+  const { offset } = await ledger(config, 'GET', '/v2/state/ledger-end');
+  const rows: any[] = await ledger(config, 'POST', '/v2/state/active-contracts', {
+    filter: {
+      filtersByParty: {
+        [config.escrowParty]: {
+          cumulative: [
+            {
+              identifierFilter: {
+                TemplateFilter: { value: { templateId: holdingTemplateId, includeCreatedEventBlob: false } },
+              },
+            },
+          ],
+        },
+      },
+    },
+    verbose: false,
+    activeAtOffset: offset,
+  });
+  let sum = 0;
+  for (const r of rows) {
+    const a = r.contractEntry?.JsActiveContract?.createdEvent?.createArgument;
+    if (!a || a.lock != null || String(a.owner) !== config.escrowParty) continue;
+    const amt = a.amount;
+    sum += amt && typeof amt === 'object' ? Number(amt.initialAmount ?? 0) : Number(amt ?? 0);
+  }
+  return sum;
 }
 
 // ---------------------------------------------------------------------------
@@ -1378,6 +1564,59 @@ function selectClaimRecord(
  * its own participant, so the proxy can't read them); otherwise they are read
  * from this participant's ACS (model 1: a payer this participant hosts).
  */
+/** The per-stream settlement instrument, with every field resolved to a
+ *  concrete value: the agreement's own instrument where present, else the
+ *  proxy's global CC config. The concrete TransferInstruction/holding template
+ *  for offers is NOT carried here — the registry returns it per-asset in each
+ *  choice-context response, so it is read at exercise time. */
+export interface ResolvedInstrument {
+  admin: string;
+  id: string;
+  holdingTemplateId: string;
+  registryApiUrl: string;
+  transferVersion: 'v1' | 'v2';
+  decimals: number;
+}
+
+/** Resolve a stream's effective settlement instrument. A stream created without
+ *  an instrument (every CC stream today) resolves to the global config, so its
+ *  money leg is byte-for-byte unchanged; a stream carrying a per-asset
+ *  instrument settles that asset instead. */
+export function resolveInstrument(
+  config: V1LaneConfig,
+  agreement: V1Agreement,
+): ResolvedInstrument {
+  const i = agreement.instrument;
+  return {
+    admin: i?.admin || config.ccAdminParty,
+    id: i?.id || config.instrumentId,
+    holdingTemplateId: i?.holdingTemplateId || config.holdingTemplateId,
+    registryApiUrl: (i?.registryApiUrl || config.registryApiUrl).replace(/\/+$/, ''),
+    transferVersion: i?.transferVersion || config.transferVersion,
+    decimals: typeof i?.decimals === 'number' ? i.decimals : 10,
+  };
+}
+
+/** A shallow copy of the lane config with the instrument-*identity* fields
+ *  overridden to a stream's chosen asset, so the verify helpers (which read
+ *  config.instrumentId / ccAdminParty / holdingTemplateId) match the right asset
+ *  with no signature changes; a stream with no instrument yields config
+ *  unchanged. `registryApiUrl` is deliberately NOT overridden: every asset
+ *  settles on the same synchronizer, so on-chain confirmation is read from the
+ *  one network Scan (config.registryApiUrl). The per-asset token-standard
+ *  registry base is a separate concern, passed explicitly to the registry
+ *  factory / choice-context calls (resolveInstrument().registryApiUrl). */
+export function configForStream(config: V1LaneConfig, agreement: V1Agreement): V1LaneConfig {
+  const inst = resolveInstrument(config, agreement);
+  return {
+    ...config,
+    ccAdminParty: inst.admin,
+    instrumentId: inst.id,
+    holdingTemplateId: inst.holdingTemplateId,
+    transferVersion: inst.transferVersion,
+  };
+}
+
 export async function prepareSettleCommand(
   config: V1LaneConfig,
   agreement: V1Agreement,
@@ -1386,7 +1625,9 @@ export async function prepareSettleCommand(
   holdingsIn?: HoldingInput[],
 ): Promise<PreparedSettle> {
   const ref = `${agreement.agreementId}:cycle-${cycleNo}`;
-  const holdings = holdingsIn ?? (await senderHoldings(config, agreement.payerParty));
+  const inst = resolveInstrument(config, agreement);
+  const holdings =
+    holdingsIn ?? (await senderHoldings(config, agreement.payerParty, inst.holdingTemplateId));
   const total = holdings.reduce((s, h) => s + h.amount, 0);
   if (total < amount) {
     throw new V1LaneError(
@@ -1400,20 +1641,25 @@ export async function prepareSettleCommand(
     sender: agreement.payerParty,
     receiver: agreement.recipientParty,
     amount: amount.toFixed(10),
-    instrumentId: { admin: config.ccAdminParty, id: config.instrumentId },
+    instrumentId: { admin: inst.admin, id: inst.id },
     requestedAt: new Date(Date.now() - 1000).toISOString(),
     executeBefore,
     inputHoldingCids: holdings.map((h) => h.cid),
     meta: streamMeta(agreement, ref),
   };
-  const fac = await registryPost(config, '/registry/transfer-instruction/v1/transfer-factory', {
-    choiceArguments: {
-      expectedAdmin: config.ccAdminParty,
-      transfer,
-      extraArgs: { context: { values: {} }, meta: { values: {} } },
+  const fac = await registryPost(
+    config,
+    '/registry/transfer-instruction/v1/transfer-factory',
+    {
+      choiceArguments: {
+        expectedAdmin: inst.admin,
+        transfer,
+        extraArgs: { context: { values: {} }, meta: { values: {} } },
+      },
+      excludeDebugFields: true,
     },
-    excludeDebugFields: true,
-  });
+    inst.registryApiUrl,
+  );
   const ctx = fac.choiceContext ?? {};
   const disclosed = mapDisclosedContracts(ctx);
   const command = {
@@ -1422,7 +1668,7 @@ export async function prepareSettleCommand(
       contractId: fac.factoryId,
       choice: 'TransferFactory_Transfer',
       choiceArgument: {
-        expectedAdmin: config.ccAdminParty,
+        expectedAdmin: inst.admin,
         transfer,
         extraArgs: {
           context: choiceContextValues(ctx),
@@ -1460,7 +1706,9 @@ export async function prepareSettleCommandV2(
   holdingsIn?: HoldingInput[],
 ): Promise<PreparedSettle> {
   const ref = `${agreement.agreementId}:cycle-${cycleNo}`;
-  const holdings = holdingsIn ?? (await senderHoldings(config, agreement.payerParty));
+  const inst = resolveInstrument(config, agreement);
+  const holdings =
+    holdingsIn ?? (await senderHoldings(config, agreement.payerParty, inst.holdingTemplateId));
   const total = holdings.reduce((s, h) => s + h.amount, 0);
   if (total < amount) {
     throw new V1LaneError(
@@ -1476,20 +1724,25 @@ export async function prepareSettleCommandV2(
     sender: account(agreement.payerParty),
     receiver: account(agreement.recipientParty),
     amount: amount.toFixed(10),
-    instrumentId: { admin: config.ccAdminParty, id: config.instrumentId },
+    instrumentId: { admin: inst.admin, id: inst.id },
     requestedAt: new Date(Date.now() - 5000).toISOString(),
     executeBefore,
     inputHoldingCids: holdings.map((h) => h.cid),
     meta: streamMeta(agreement, ref),
   };
-  const fac = await registryPost(config, '/registry/transfer-instruction/v2/transfer-factory', {
-    choiceArguments: {
-      transfer,
-      actors: [agreement.payerParty],
-      extraArgs: { context: { values: {} }, meta: { values: {} } },
+  const fac = await registryPost(
+    config,
+    '/registry/transfer-instruction/v2/transfer-factory',
+    {
+      choiceArguments: {
+        transfer,
+        actors: [agreement.payerParty],
+        extraArgs: { context: { values: {} }, meta: { values: {} } },
+      },
+      excludeDebugFields: true,
     },
-    excludeDebugFields: true,
-  });
+    inst.registryApiUrl,
+  );
   const ctx = fac.choiceContext ?? {};
   const disclosed = mapDisclosedContracts(ctx);
   const command = {
@@ -1705,12 +1958,14 @@ async function prepareInstructionActionCommand(
   record: PendingTransferRecord,
   action: 'accept' | 'withdraw',
   actAs: string,
+  registryBaseUrl?: string,
 ): Promise<PreparedInstructionAction> {
   const choice = action === 'accept' ? 'TransferInstruction_Accept' : 'TransferInstruction_Withdraw';
   const body = await registryPost(
     config,
     `/registry/transfer-instruction/v1/${encodeURIComponent(record.transferInstructionCid)}/choice-contexts/${action}`,
     {},
+    registryBaseUrl,
   );
   const ctx = body.choiceContext ?? body.choice_context ?? body;
   const command = {
@@ -1734,6 +1989,37 @@ async function prepareInstructionActionCommand(
   };
 }
 
+/**
+ * Build (no submit) a `TransferInstruction_Withdraw` for the offer's SENDER to
+ * reclaim the locked funds of a still-pending offer by its contract id. The
+ * sender's withdraw maps to the unguarded abort path, so it is exercisable at
+ * any time including after `executeBefore` — this is how a stuck, expired,
+ * unaccepted offer's funds are recovered when the receiver has no preapproval.
+ * `registryBaseUrl` selects the per-asset registrar; omit for CC.
+ */
+export async function buildOfferWithdrawCommand(
+  config: V1LaneConfig,
+  transferInstructionCid: string,
+  registryBaseUrl?: string,
+): Promise<{ command: unknown; disclosedContracts: unknown[] }> {
+  const body = await registryPost(
+    config,
+    `/registry/transfer-instruction/v1/${encodeURIComponent(transferInstructionCid)}/choice-contexts/withdraw`,
+    {},
+    registryBaseUrl,
+  );
+  const ctx = body.choiceContext ?? body.choice_context ?? body;
+  const command = {
+    ExerciseCommand: {
+      templateId: config.transferInstructionInterfaceId,
+      contractId: transferInstructionCid,
+      choice: 'TransferInstruction_Withdraw',
+      choiceArgument: { extraArgs: { context: choiceContextValues(ctx), meta: { values: {} } } },
+    },
+  };
+  return { command, disclosedContracts: mapDisclosedContracts(ctx) };
+}
+
 /** Model 1: the proxy forms AND submits the transfer (payer hosted here). */
 export async function settleCycle(
   config: V1LaneConfig,
@@ -1742,7 +2028,9 @@ export async function settleCycle(
   cycleNo: number,
 ): Promise<SettleResult> {
   const prepareFn =
-    config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+    resolveInstrument(config, agreement).transferVersion === 'v2'
+      ? prepareSettleCommandV2
+      : prepareSettleCommand;
   const prepared = await prepareFn(config, agreement, amount, cycleNo);
   // This is the one place the operator participant submits a transfer with a
   // party's own authority (actAs=[payerParty]). Refuse to do so for a co-hosted
@@ -2166,6 +2454,12 @@ export interface CreateV1StreamInput {
   createAdminRecord?: boolean;
   cancellable?: boolean;
   observers?: string[];
+  /** Whitelisted asset-registry key this stream pays (e.g. 'usdcx'). Absent ⇒
+   *  the proxy's default CC asset. */
+  assetKey?: string;
+  /** Resolved per-stream settlement instrument; validated against the asset
+   *  whitelist by the create route before it reaches here. */
+  instrument?: V1Agreement['instrument'];
 }
 
 export interface V1StreamView {
@@ -2363,6 +2657,8 @@ export class V1LaneService {
       ...(streamRecordCid ? { streamRecordCid } : {}),
       totalDeposited,
       createdAt: new Date().toISOString(),
+      ...(input.assetKey ? { assetKey: input.assetKey } : {}),
+      ...(input.instrument ? { instrument: input.instrument } : {}),
     };
 
     store.agreements[streamId] = agreement;
@@ -2704,7 +3000,9 @@ export class V1LaneService {
     }
     if (due <= 0) return { prepared: false, reason: 'nothing_due' };
     const prepareFn =
-      this.config.transferVersion === 'v2' ? prepareSettleCommandV2 : prepareSettleCommand;
+      resolveInstrument(this.config, agreement).transferVersion === 'v2'
+        ? prepareSettleCommandV2
+        : prepareSettleCommand;
     const prepared = await prepareFn(this.config, agreement, due, st.cycles + 1, opts.holdings);
     return { prepared: true, ...prepared };
   }
@@ -2977,7 +3275,7 @@ export class V1LaneService {
     // Bind to the exact allocation being claimed and require the committed update
     // deliver at least the tracked amount to the recipient; credit the on-chain
     // amount, never the stored figure off an unrelated transfer.
-    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(configForStream(this.config, agreement), input.updateId, {
       trackedCid: record.allocationCid || record.receiverClaimCid || input.allocationCid,
       recipient: agreement.recipientParty,
       minAmount: Number(record.amount),
@@ -3024,13 +3322,13 @@ export class V1LaneService {
    */
   async recordSettle(
     streamId: string,
-    input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
+    input: { updateId: string; amount: string; ref?: string; executeBefore?: string; transferProof?: TransferProof },
   ): Promise<SettleOutcome> {
     return this.runLocked(streamId, () => this.recordSettleImpl(streamId, input));
   }
   private async recordSettleImpl(
     streamId: string,
-    input: { updateId: string; amount: string; ref?: string; executeBefore?: string },
+    input: { updateId: string; amount: string; ref?: string; executeBefore?: string; transferProof?: TransferProof },
   ): Promise<SettleOutcome> {
     const store = loadStore(this.config);
     const agreement = store.agreements[streamId];
@@ -3049,11 +3347,74 @@ export class V1LaneService {
     if (input.updateId && updateIdRecordedElsewhere(store, streamId, input.updateId)) {
       throw new V1LaneError(409, 'update_replayed', `update ${input.updateId} is already recorded on another stream`);
     }
+    // Non-CC direct-delivery (e.g. USDCx): the proxy can't witness the transfer
+    // (both parties remote, asset not on CC's Scan), so verification is wallet-
+    // side. When the wallet supplies a transfer proof, validate it structurally
+    // against this agreement and credit the proven amount; when absent, fall back
+    // to the interim trust path (record on updateId + input.amount). The
+    // idempotency and cross-stream replay guards above hold either way, and this
+    // lane is non-custodial. CC keeps the Scan proof below.
+    const settleInst = resolveInstrument(this.config, agreement);
+    if (settleInst.id !== this.config.instrumentId) {
+      const proof = input.transferProof;
+      if (proof && typeof proof === 'object') {
+        // Fail closed on any mismatch — the proof must describe THIS stream's
+        // payer→recipient delivery of THIS instrument for at least the due amount.
+        if (proof.receiver !== agreement.recipientParty) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof receiver does not match the stream recipient; refusing to record.`);
+        }
+        if (proof.sender && proof.sender !== agreement.payerParty) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof sender does not match the stream payer; refusing to record.`);
+        }
+        if (proof.instrumentId !== settleInst.id) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof instrument ${proof.instrumentId} does not match the stream instrument ${settleInst.id}; refusing to record.`);
+        }
+        const proofAmount = Number(proof.amount);
+        const dueAmt = Number(input.amount);
+        if (!Number.isFinite(proofAmount) || proofAmount + 1e-9 < dueAmt) {
+          throw new V1LaneError(422, 'settlement_proof_mismatch',
+            `transfer proof amount ${proof.amount} is less than the cycle amount ${input.amount}; refusing to record.`);
+        }
+        const credited = Number(proofAmount.toFixed(10));
+        st.settled = Number((st.settled + credited).toFixed(10));
+        st.cycles += 1;
+        const ref = input.ref ?? `${streamId}:cycle-${st.cycles}`;
+        st.history.push({
+          at: new Date().toISOString(),
+          amount: credited.toFixed(10),
+          ref,
+          updateId: input.updateId,
+          ...(proof.delivered ? { verified: true } : {}),
+        });
+        if (st.history.length > 500) st.history.splice(0, st.history.length - 500);
+        saveStore(this.config, store);
+        console.log(
+          `v1_settle_recorded_wallet_proof stream=${streamId} asset=${agreement.assetKey ?? settleInst.id} ` +
+            `amount=${credited.toFixed(4)} updateId=${input.updateId} delivered=${proof.delivered}`,
+        );
+        return { settled: true, cycle: st.cycles, amount: credited.toFixed(10), ref, updateId: input.updateId };
+      }
+      const credited = Number(input.amount);
+      st.settled = Number((st.settled + credited).toFixed(10));
+      st.cycles += 1;
+      const ref = input.ref ?? `${streamId}:cycle-${st.cycles}`;
+      st.history.push({ at: new Date().toISOString(), amount: credited.toFixed(10), ref, updateId: input.updateId });
+      if (st.history.length > 500) st.history.splice(0, st.history.length - 500);
+      saveStore(this.config, store);
+      console.log(
+        `v1_settle_recorded_unverified stream=${streamId} asset=${agreement.assetKey ?? settleInst.id} ` +
+          `amount=${credited.toFixed(4)} updateId=${input.updateId} reason=no_scan_vantage_for_non_cc`,
+      );
+      return { settled: true, cycle: st.cycles, amount: credited.toFixed(10), ref, updateId: input.updateId };
+    }
     // The updateId is a client claim — verify the transfer committed on chain,
     // moved payer -> recipient in CC, and carries this stream's agreement tag
     // (so an unrelated transfer between the same parties can't be recorded as a
     // cycle). Credit the on-chain amount it returns, never the client's amount.
-    const { body: updateBody, amount } = await verifyDeliveryOnScan(this.config, input.updateId, {
+    const { body: updateBody, amount } = await verifyDeliveryOnScan(configForStream(this.config, agreement), input.updateId, {
       sender: agreement.payerParty,
       receiver: agreement.recipientParty,
       minAmount: 0,
@@ -3219,6 +3580,7 @@ export class V1LaneService {
       record,
       'accept',
       agreement.recipientParty,
+      resolveInstrument(this.config, agreement).registryApiUrl,
     );
     return { prepared: true, ...prepared };
   }
@@ -3273,7 +3635,7 @@ export class V1LaneService {
     // update deliver at least the tracked amount to the recipient; credit the
     // on-chain amount, so a dust or unrelated transfer can't mark the cycle
     // accepted for the full pending figure.
-    const { amount: verifiedAmount } = await verifyConsummationOnScan(this.config, input.updateId, {
+    const { amount: verifiedAmount } = await verifyConsummationOnScan(configForStream(this.config, agreement), input.updateId, {
       trackedCid: record.transferInstructionCid || input.transferInstructionCid,
       recipient: agreement.recipientParty,
       minAmount: Number(record.amount),
@@ -3342,6 +3704,7 @@ export class V1LaneService {
       record,
       'accept',
       agreement.recipientParty,
+      resolveInstrument(this.config, agreement).registryApiUrl,
     );
     const res = await submit(
       this.config,
@@ -3381,6 +3744,7 @@ export class V1LaneService {
       record,
       'withdraw',
       agreement.payerParty,
+      resolveInstrument(this.config, agreement).registryApiUrl,
     );
     return { prepared: true, ...prepared };
   }

@@ -184,3 +184,202 @@ actions stay V2-only). The path to the full feature set is:
    `transferEventsV2: true` (if the asset publishes the V2 events
    package).
 4. Done — the library integrates automatically.
+
+---
+
+## Streaming a non-CC asset at the proxy
+
+The registry above is the SDK-side asset catalogue. The **proxy** carries its
+own, narrower whitelist for the V1 transfer-instruction lane
+(`POST /api/v1/streams`): the assets it will actually create and settle a stream
+against. That whitelist is resolved from the proxy's environment at runtime by
+`getSupportedAssets()` (`packages/proxy/src/assets.ts`) and surfaced at
+`GET /api/assets`.
+
+Two asset slots are wired:
+
+* **Canton Coin** (`key: cc`) — the default. Streamable as soon as
+  `CC_ADMIN_PARTY` (or `CANTON_CC_ADMIN`) is set. CC's transfer-instruction
+  factory is served by its own Scan, so it reuses the proxy's global
+  `REGISTRY_API_URL` and needs no per-asset registry base.
+* **USDCx** (`key: usdcx`) — the reference non-CC slot. Streamable only once
+  **both** its registrar admin and its **own** registry base are configured.
+
+### Configuring a non-CC asset
+
+Set the per-asset environment before starting the proxy:
+
+| Env var | Required | Default | What it is |
+|---|---|---|---|
+| `USDCX_ADMIN_PARTY` | yes | — | Party id of the asset's registrar / issuer (the instrument admin) |
+| `USDCX_REGISTRY_API_URL` | yes | — | Base URL of this asset's transfer-instruction registry (distinct from CC's Scan) |
+| `USDCX_HOLDING_TEMPLATE_ID` | no | (empty) | Concrete holding template the asset is funded from / verified against |
+| `USDCX_INSTRUMENT_ID` | no | `USDCx` | Instrument id under that admin |
+| `USDCX_TRANSFER_VERSION` | no | `v1` | Token-standard transfer API version (`v1` / `v2`) |
+| `USDCX_DECIMALS` | no | `6` | Display decimals |
+
+Both `USDCX_ADMIN_PARTY` **and** `USDCX_REGISTRY_API_URL` must be present, or the
+asset is omitted from the whitelist entirely — a stream is never created against
+an unroutable instrument. A party id left as a `TBD` placeholder counts as unset.
+
+> There is no standardized admin → registry discovery: the registry base URL is
+> configured out-of-band, per asset. You get it from the asset's issuer, not by
+> querying the admin party.
+
+Example (placeholders — substitute your network's real values):
+
+```bash
+USDCX_ADMIN_PARTY=<usdcx-registrar-party>
+USDCX_REGISTRY_API_URL=https://<usdcx-registry-host>
+USDCX_HOLDING_TEMPLATE_ID=<package-id>:<Module>:<Template>
+USDCX_TRANSFER_VERSION=v1
+USDCX_DECIMALS=6
+```
+
+### Creating a stream against it
+
+1. Confirm the asset is whitelisted — it appears in the `GET /api/assets`
+   array under the `key` you'll use:
+
+   ```bash
+   curl -s "$PROXY_URL/api/assets" | jq '.[].key'
+   # "cc"
+   # "usdcx"
+   ```
+
+2. Create with `assetKey` in the `POST /api/v1/streams` body:
+
+   ```jsonc
+   { "streamId": "...", "recipientParty": "...", "assetKey": "usdcx" /* ... */ }
+   ```
+
+* `assetKey` **absent** or `"cc"` ⇒ Canton Coin (CC streams settle exactly as
+  before; no per-stream instrument is stored).
+* An **unknown or unconfigured** `assetKey` ⇒ `400 { "reason": "unknown_asset" }`.
+
+The chosen instrument — admin, instrument id, registry base, holding template,
+transfer version — is **frozen onto the stream at create time**. Every later
+settle and on-chain-verify for that stream reads the frozen instrument, so
+registry drift or an env change can't retarget a live stream.
+
+### Settlement is one factory for every asset
+
+CIP-56 is the token standard; every streamable asset — CC or non-CC — settles
+through the same transfer-instruction factory. There is no per-asset
+money-moving code path. USDCx's burn / mint is its **issuance** surface (how the
+asset is minted or redeemed), not part of the streaming path; a stream only ever
+moves existing holdings via a transfer.
+
+### Recipients without a TransferPreapproval
+
+If the recipient has registered a `TransferPreapproval`, each cycle delivers
+directly. If not, the cycle's transfer lands as a **pending offer** (a
+`TransferInstruction`) the recipient must `Accept` before money moves — the cycle
+counts as settled only once accepted. Each offer carries an `executeBefore`
+deadline: once it passes, the recipient can no longer accept, and the sender can
+reclaim the funds with `TransferInstruction_Withdraw`. The offer / expiry
+lifecycle itself is covered in [SETTLEMENT-DESIGN.md](../SETTLEMENT-DESIGN.md).
+
+---
+
+## Streaming a non-CC asset through the Vault (operator-custodied escrow) lane
+
+Everything above configures the **direct-transfer** lane
+(`POST /api/v1/streams`), where the payer's wallet signs every cycle. The **Vault**
+lane — operator-custodied escrow, `POST /api/v1/escrows` — is the "deposit once,
+operator streams" path: the payer funds a single deposit into the operator's
+custody party, and the operator releases it to the payee on a schedule with no
+further payer signature per cycle (custodial by construction; see
+[SETTLEMENT-DESIGN.md](../SETTLEMENT-DESIGN.md)).
+
+The Vault lane now custodies non-CC whitelisted assets too. It resolves the asset
+from the **same** proxy whitelist as the direct lane (`getSupportedAssets()`,
+surfaced at `GET /api/assets`) — there is no separate vault asset config. So once
+an asset's `<KEY>_ADMIN_PARTY` + `<KEY>_REGISTRY_API_URL` are set (see
+[Configuring a non-CC asset](#configuring-a-non-cc-asset) above), that asset is
+vault-able as well as streamable.
+
+### Creating a non-CC vault
+
+Pass `assetKey` when you fund the vault — both when the wallet forms its own
+deposit and when you create the escrow:
+
+```jsonc
+// POST /api/v1/escrows/prepare-deposit   (wallet-signed deposit path)
+{ "payer": "...", "totalDeposit": "1000.0", "assetKey": "usdcx" }
+
+// POST /api/v1/escrows
+{ "recipient": "...", "assetKey": "usdcx",
+  "totalDeposit": "1000.0", "ratePerCycle": "10.0", "cadenceSeconds": 86400 /* ... */ }
+```
+
+* `assetKey` **absent** or `"cc"` ⇒ Canton Coin — the vault deposits, releases,
+  reconciles, and caps byte-for-byte as before (no per-vault instrument stored).
+* An **unknown or unconfigured** `assetKey` ⇒ `400 { "reason": "unknown_asset" }`,
+  rejected **before** any deposit transfer fires, so funds are never moved into an
+  unroutable vault.
+
+As with a direct stream, the chosen instrument — admin, instrument id, registry
+base, holding template, transfer version — is **frozen onto the vault at create
+time**; every later release, refund, and on-chain verify reads the frozen
+instrument.
+
+### Per-asset custody cap
+
+Each asset has its own aggregate custody ceiling, so a single commingled key is
+never trusted with more than that:
+
+| Env var | Applies to | Default | What it caps |
+|---|---|---|---|
+| `ESCROW_MAX_TOTAL_CC` | Canton Coin vaults | — | Total tracked CC obligation across active CC vaults |
+| `ESCROW_MAX_TOTAL_<KEY>` | Vaults of asset `<KEY>` (upper-cased) | `0` (disabled) | Total tracked obligation across active vaults of that asset |
+
+`<KEY>` is the whitelist key upper-cased — e.g. `usdcx` ⇒ `ESCROW_MAX_TOTAL_USDCX`.
+A deposit that would raise the tracked obligation **for that asset** past its cap
+is rejected with `409 { "reason": "escrow_cap_exceeded" }`. A cap of `0` (the
+non-CC default) disables the check for that asset; CC keeps its existing
+`ESCROW_MAX_TOTAL_CC` behaviour unchanged.
+
+### Custody pools and the solvency interlock are per-asset
+
+Deposits of the same asset are commingled in the one operator custody party, but
+each asset is an **independent pool**. The obligation owed to active vaults is
+tallied per asset key, and before every release or refund the operator checks that
+the custody party's **free balance in that asset** covers the total owed **for that
+asset**. One asset's balance can never cover another's obligation, so a shortfall
+in one asset cannot reach another asset's depositors. A tripped interlock returns
+`409 { "reason": "escrow_pool_insolvent" }`. A continuous read-only drift probe
+runs the same per-asset check on a timer and logs `escrow_solvency_drift` for an
+external pager.
+
+The custody free balance is read per asset: CC from its concrete Amulet holdings,
+a non-CC asset through the standardized Holding interface view — only **unlocked**
+holdings of the matching instrument count as free balance.
+
+### Reclaiming an expired non-CC release
+
+If the recipient has no `TransferPreapproval`, a release lands as a **pending
+offer** the recipient must `Accept` (as in the direct lane), each carrying an
+`executeBefore` deadline. What happens to an offer that expires unaccepted differs
+by asset:
+
+* **CC** — an expired CC offer is swept back to the sender automatically, and
+  reconcile reverts the release. Nothing to do.
+* **A non-CC asset has no auto-sweep.** An offer the recipient never accepts would
+  otherwise strand the funds in a dead offer. Because the custody party is the
+  release's sender, it **withdraws** the expired offer
+  (`TransferInstruction_Withdraw`, exercisable even after the deadline), returning
+  the value to custody where it re-enters the vault's refundable / re-releasable
+  balance.
+
+That reclaim runs **automatically each streamer tick** for non-CC vaults, and can
+also be triggered on demand by the payer:
+
+```
+POST /api/v1/escrows/:id/reclaim      # payer only; a no-op for a CC vault
+→ { "reclaimed": <number of offers withdrawn> }
+```
+
+Only an offer still locked on-ledger past its deadline is withdrawn; one already
+accepted or previously reclaimed is left untouched. The offer / expiry lifecycle
+itself is covered in [SETTLEMENT-DESIGN.md](../SETTLEMENT-DESIGN.md).

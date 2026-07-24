@@ -104,6 +104,7 @@ import {
   V1LaneService,
   V1LaneError,
   type CreateV1StreamInput,
+  type TransferProof,
 } from './v1-lane.js';
 import {
   listStreamsViaJson,
@@ -124,7 +125,7 @@ import {
   syncIterationFlowViaJson,
   markCancelledFlowAdminViaJson,
 } from './v2-write.js';
-import { getSupportedAssets } from './assets.js';
+import { getSupportedAssets, resolveStreamAsset } from './assets.js';
 import {
   EscrowLane,
   startEscrowStreamer,
@@ -1381,6 +1382,31 @@ app.post('/api/v1/streams', async (req, res) => {
       ?? auth.party;
     enforceRole(auth.party, getRequiredRole('create'), payerParty);
 
+    // Per-stream asset (whitelist-gated). Absent or 'cc' ⇒ the default CC asset
+    // (no per-stream instrument stored, so CC streams settle exactly as before).
+    // A non-CC key must resolve to a configured, streamable asset or the create
+    // is rejected — a stream is never created against an unroutable instrument.
+    const assetKey =
+      typeof body['assetKey'] === 'string' ? (body['assetKey'] as string).trim() : undefined;
+    let instrument: CreateV1StreamInput['instrument'];
+    if (assetKey && assetKey !== 'cc') {
+      const asset = resolveStreamAsset(assetKey);
+      if (!asset) {
+        return res.status(400).json({
+          error: `unknown or unconfigured asset "${assetKey}"`,
+          reason: 'unknown_asset',
+        });
+      }
+      instrument = {
+        admin: asset.instrumentAdmin,
+        id: asset.instrumentId,
+        holdingTemplateId: asset.holdingTemplateId || undefined,
+        registryApiUrl: asset.registryApiUrl || undefined,
+        transferVersion: asset.transferVersion,
+        decimals: asset.decimals,
+      };
+    }
+
     const input: CreateV1StreamInput = {
       streamId: (body['streamId'] as string | undefined) ?? (body['id'] as string | undefined),
       appId: body['appId'] as string | undefined,
@@ -1398,6 +1424,8 @@ app.post('/api/v1/streams', async (req, res) => {
       createAdminRecord: body['createAdminRecord'] === true,
       cancellable: body['cancellable'] as boolean | undefined,
       observers: body['observers'] as string[] | undefined,
+      ...(assetKey ? { assetKey } : {}),
+      ...(instrument ? { instrument } : {}),
     };
 
     const view = await v1Lane.createStream(input);
@@ -1501,11 +1529,13 @@ app.post('/api/v1/streams/:id/record-settle', async (req, res) => {
     const view = await v1Lane.getStream(req.params['id']!, auth.party);
     enforceRole(auth.party, 'sender', view.agreement.payerParty);
     const body = (req.body ?? {}) as Record<string, unknown>;
+    const proof = body['transferProof'];
     const result = await v1Lane.recordSettle(req.params['id']!, {
       updateId: body['updateId'] as string,
       amount: body['amount'] as string,
       ref: body['ref'] as string | undefined,
       executeBefore: body['executeBefore'] as string | undefined,
+      ...(proof && typeof proof === 'object' ? { transferProof: proof as TransferProof } : {}),
     });
     res.json(serializeForJson(result));
   } catch (err) {
@@ -2349,6 +2379,7 @@ app.post('/api/v1/escrows/prepare-deposit', async (req, res) => {
       payer,
       totalDeposit: String(body['totalDeposit'] ?? body['totalDeposited'] ?? ''),
       holdings: body['holdings'] as { cid: string; amount: number }[] | undefined,
+      assetKey: typeof body['assetKey'] === 'string' ? (body['assetKey'] as string) : undefined,
     });
     res.json(serializeForJson(prepared));
   } catch (err) {
@@ -2378,6 +2409,7 @@ app.post('/api/v1/escrows', async (req, res) => {
       cadenceSeconds: Number(body['cadenceSeconds'] ?? 86400),
       totalDeposit: String(body['totalDeposit'] ?? body['totalDeposited'] ?? ''),
       fundingTransferId: body['fundingTransferId'] as string | undefined,
+      assetKey: typeof body['assetKey'] === 'string' ? (body['assetKey'] as string) : undefined,
     });
     res.status(201).json(serializeForJson(created));
   } catch (err) {
@@ -2427,6 +2459,22 @@ app.get('/api/v1/escrows/:id/reconcile', async (req, res) => {
     res.json(serializeForJson(await escrowLane.reconcile(req.params['id']!, auth.party)));
   } catch (err) {
     handleError(res, err, 'reconcileEscrow');
+  }
+});
+
+/** Reclaim any release that expired locked (a non-CC offer the recipient never
+ * accepted; general assets have no auto-sweep). Returns funds to custody so they
+ * re-enter the refundable/re-releasable balance. Payer only; the streamer also
+ * does this automatically each tick. A no-op for CC. */
+app.post('/api/v1/escrows/:id/reclaim', async (req, res) => {
+  try {
+    const auth = await authorizeRequest(req, 'create', authConfig);
+    const esc = escrowLane.getEscrow(req.params['id']!, auth.party);
+    enforceRole(auth.party, 'sender', esc.originalPayer);
+    const out = await escrowLane.reclaimExpiredReleases(req.params['id']!);
+    res.json(serializeForJson(out));
+  } catch (err) {
+    handleError(res, err, 'reclaimEscrow');
   }
 });
 

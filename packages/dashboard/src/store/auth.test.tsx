@@ -50,6 +50,7 @@ const mockWalletClient = vi.hoisted(() => ({
 
 vi.mock('./wallet/index.js', () => ({
   walletClient: mockWalletClient,
+  WALLET_LAYER: 'dapp-sdk',
 }));
 
 // Restore each mock to a clean default before every test so previous

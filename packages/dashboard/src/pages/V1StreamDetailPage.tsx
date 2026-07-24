@@ -14,7 +14,7 @@
 import { useState, type ReactNode } from 'react';
 import { useParams, Link } from 'react-router';
 import {
-  ChevronLeft, Zap, Loader2, Check, Clock, ExternalLink, Send, HandCoins, Undo2, Square,
+  ChevronLeft, Zap, Loader2, Check, Clock, ExternalLink, Send, HandCoins, Undo2, Square, ShieldCheck,
 } from 'lucide-react';
 import {
   useStreamV1,
@@ -26,6 +26,7 @@ import {
   useWithdrawTransferV1,
 } from '../hooks/useStreams.js';
 import { useCantonCoinBalance } from '../hooks/useCantonCoinBalance.js';
+import { useAssetBalance } from '../hooks/useAssetBalance.js';
 import { useAuth } from '../store/auth.js';
 import { partyShort } from '../components/primitives/PartyChip.js';
 import { explorerUpdateUrl, explorerName, isVerifiableUpdateId } from '../lib/scanLink.js';
@@ -35,6 +36,7 @@ import {
   PageHeader,
 } from '../components/common/index.js';
 import type {
+  V1Agreement,
   V1SettleResult,
   V1StreamView,
   V1ReceiverClaimRecord,
@@ -106,7 +108,11 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
   const claim = useClaimV1();
   const accept = useAcceptTransferV1();
   const withdraw = useWithdrawTransferV1();
+  const isCc = !agreement.assetKey || agreement.assetKey.trim().toLowerCase() === 'cc';
   const cc = useCantonCoinBalance();
+  // Non-CC streams show the wallet's balance of that asset, not CC.
+  const asset = useAssetBalance(agreement.payerParty, isCc ? undefined : agreement.instrument);
+  const bal = isCc ? cc : asset;
   const [force, setForce] = useState(false);
   const [result, setResult] = useState<V1SettleResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -115,6 +121,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
   const isPayer = !!party && party === agreement.payerParty;
   const isRecipient = !!party && party === agreement.recipientParty;
   const isStopped = agreement.status === 'stopped';
+  const unit = streamUnit(agreement);
 
   const onStop = async () => {
     if (!window.confirm('Stop this stream? It will no longer accrue or settle. This cannot be undone.')) return;
@@ -146,7 +153,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
   const dueNum = Number(due);
   const settleCost = force ? rateNum : dueNum > 0 ? dueNum : rateNum;
   const lowBalance =
-    isPayer && cc.value !== null && Number.isFinite(settleCost) && cc.value < settleCost;
+    isPayer && bal.value !== null && Number.isFinite(settleCost) && bal.value < settleCost;
 
   const onSettle = async () => {
     setError(null);
@@ -158,6 +165,10 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
         // Lets the hook route through the wallet (model 2) when the payer is a
         // hosted (wallet-held) party rather than one this proxy hosts.
         payerParty: agreement.payerParty,
+        // Binds a non-CC settle's proof-of-transfer to the delivery recipient.
+        recipientParty: agreement.recipientParty,
+        // Non-CC streams read the payer's holdings of their own asset, not CC.
+        asset: agreement.instrument,
       });
       // Honesty gate: a `settled` result is only real if it carries a verifiable
       // on-ledger update id. If the backend ever returns settled===true without
@@ -194,7 +205,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
         const r = rec as V1ReceiverClaimRecord;
         const who = agreement.recipientParty.split('::')[0];
         setFundNote(
-          `Escrowed ${fmtCC(r.amount)} for ${who} to claim` +
+          `Escrowed ${fmtCC(r.amount, unit)} for ${who} to claim` +
             (Date.parse(r.unlockAt) > nowMs ? ` after ${fmt(r.unlockAt)}.` : ' now.'),
         );
       }
@@ -314,7 +325,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                 color: 'var(--fg-3)',
                 cursor: 'pointer',
               }}
-              title={`Settle exactly one cycle (${fmtCC(agreement.ratePerPeriod)}) now, even if nothing has accrued yet. This still draws real CC from your wallet.`}
+              title={`Settle exactly one cycle (${fmtCC(agreement.ratePerPeriod, unit)}) now, even if nothing has accrued yet. This still draws real funds from your wallet.`}
             >
               <input
                 type="checkbox"
@@ -381,7 +392,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                 className="btn btn-primary"
                 onClick={() => onAccept(nextOffer)}
                 disabled={accept.isPending}
-                title={`Accept ${fmtCC(nextOffer.amount)} that ${agreement.payerParty.split('::')[0]} sent you.`}
+                title={`Accept ${fmtCC(nextOffer.amount, unit)} that ${agreement.payerParty.split('::')[0]} sent you.`}
                 style={{ minWidth: 160, justifyContent: 'center' }}
               >
                 {accept.isPending ? (
@@ -390,7 +401,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                   </>
                 ) : (
                   <>
-                    <HandCoins size={14} /> Accept {fmtCC(nextOffer.amount)}
+                    <HandCoins size={14} /> Accept {fmtCC(nextOffer.amount, unit)}
                   </>
                 )}
               </button>
@@ -401,7 +412,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                 disabled={claim.isPending || !claimUnlocked}
                 title={
                   claimUnlocked
-                    ? `Claim ${fmtCC(nextClaim.amount)} the sender escrowed for you.`
+                    ? `Claim ${fmtCC(nextClaim.amount, unit)} the sender escrowed for you.`
                     : `Unlocks ${fmt(nextClaim.unlockAt)} — you can claim after that.`
                 }
                 style={{ minWidth: 160, justifyContent: 'center' }}
@@ -412,7 +423,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                   </>
                 ) : claimUnlocked ? (
                   <>
-                    <HandCoins size={14} /> Claim {fmtCC(nextClaim.amount)}
+                    <HandCoins size={14} /> Claim {fmtCC(nextClaim.amount, unit)}
                   </>
                 ) : (
                   <>
@@ -497,28 +508,28 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
         >
           <div style={{ fontSize: 12.5, color: 'var(--fg-2)' }}>
             Each <strong>Settle</strong> draws{' '}
-            <span className="mono" style={{ color: 'var(--fg)' }}>{fmtCC(String(settleCost))}</span>{' '}
+            <span className="mono" style={{ color: 'var(--fg)' }}>{fmtCC(String(settleCost), unit)}</span>{' '}
             from your wallet to{' '}
             <span title={agreement.recipientParty}>{agreement.recipientParty.split('::')[0]}</span>.
           </div>
           <div style={{ fontSize: 12.5, display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ color: 'var(--fg-4)' }}>Wallet balance</span>
             <span className="mono" style={{ color: lowBalance ? 'var(--warn)' : 'var(--fg)' }}>
-              {cc.isLoading ? '…' : cc.display !== null ? fmtCC(cc.display) : '—'}
+              {bal.isLoading ? '…' : bal.display !== null ? fmtCC(bal.display, unit) : '—'}
             </span>
           </div>
           {lowBalance && (
             <div style={{ flexBasis: '100%', fontSize: 12, color: 'var(--warn)' }}>
-              Not enough CC for this cycle — top up your wallet with at least{' '}
-              {fmtCC(String(Math.max(0, settleCost - (cc.value ?? 0))))} more, then retry.
+              Not enough {unit} for this cycle — top up your wallet with at least{' '}
+              {fmtCC(String(Math.max(0, settleCost - (bal.value ?? 0))), unit)} more, then retry.
             </div>
           )}
         </div>
       )}
 
       {/* Settle result banner */}
-      {result && <SettleBanner result={result} rate={agreement.ratePerPeriod} />}
-      {error && <SettleErrorCard message={error} balance={cc.display} />}
+      {result && <SettleBanner result={result} rate={agreement.ratePerPeriod} unit={unit} />}
+      {error && <SettleErrorCard message={error} balance={bal.display} unit={unit} />}
 
       {/* Metrics */}
       <div
@@ -529,16 +540,16 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
           marginBottom: 18,
         }}
       >
-        <Metric label="Rate / cycle" value={agreement.ratePerPeriod} suffix="CC" mono />
-        <Metric label="Accrued (now)" value={accrued} suffix="CC" mono />
-        <Metric label="Due this cycle" value={due} suffix="CC" mono accent />
+        <Metric label="Rate / cycle" value={agreement.ratePerPeriod} suffix={unit} mono />
+        <Metric label="Accrued (now)" value={accrued} suffix={unit} mono />
+        <Metric label="Due this cycle" value={due} suffix={unit} mono accent />
         <Metric label="Settled cycles" value={String(state.cycles)} />
-        <Metric label="Total settled" value={String(state.settled)} suffix="CC" mono />
+        <Metric label="Total settled" value={String(state.settled)} suffix={unit} mono />
         {isPayer && (
           <Metric
             label="Wallet balance"
-            value={cc.isLoading ? '…' : cc.display ?? '—'}
-            suffix={!cc.isLoading && cc.display !== null ? 'CC' : undefined}
+            value={bal.isLoading ? '…' : bal.display ?? '—'}
+            suffix={!bal.isLoading && bal.display !== null ? unit : undefined}
             mono
           />
         )}
@@ -553,7 +564,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
           label="Reference amount"
           value={
             <span>
-              <span className="mono">{fmtCC(agreement.totalDeposited)}</span>{' '}
+              <span className="mono">{fmtCC(agreement.totalDeposited, unit)}</span>{' '}
               <span style={{ color: 'var(--fg-4)', fontSize: 11 }}>· direct-delivery mode does not prefund</span>
             </span>
           }
@@ -593,6 +604,11 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
           {[...pending].reverse().map((p, i) => {
             const expired = Date.parse(p.executeBefore) <= nowMs;
             const isOpen = p.status === 'pending';
+            // Reclaimable = an open offer whose accept-by deadline has passed (or
+            // one the proxy already flagged 'expired'). The sender's CC is still
+            // locked on-ledger and can be claimed back via the withdraw path.
+            const isExpiredStatus = p.status === 'expired';
+            const reclaimable = (isOpen && expired) || isExpiredStatus;
             const last = i === pending.length - 1;
             return (
               <div
@@ -609,16 +625,23 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                 <span className="badge" style={{ fontSize: 11, justifySelf: 'start' }}>
                   {p.ref.split(':').pop()}
                 </span>
-                <span className="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtCC(p.amount)}</span>
+                <span className="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtCC(p.amount, unit)}</span>
                 <div>
                   <span
                     className="badge"
-                    style={{ fontSize: 11, color: p.status === 'accepted' ? 'var(--accent)' : 'var(--fg-2)' }}
+                    style={{
+                      fontSize: 11,
+                      color: reclaimable
+                        ? 'var(--warn)'
+                        : p.status === 'accepted'
+                          ? 'var(--accent)'
+                          : 'var(--fg-2)',
+                    }}
                   >
-                    {pendingStatusLabel(p.status)}
+                    {reclaimable ? 'Expired — reclaimable' : pendingStatusLabel(p.status)}
                   </span>
-                  <span style={{ display: 'block', fontSize: 10.5, color: expired && isOpen ? 'var(--warn)' : 'var(--fg-4)', marginTop: 4 }}>
-                    {isOpen ? (expired ? `expired ${fmt(p.executeBefore)}` : `expires ${fmt(p.executeBefore)}`) : ''}
+                  <span style={{ display: 'block', fontSize: 10.5, color: reclaimable ? 'var(--warn)' : 'var(--fg-4)', marginTop: 4 }}>
+                    {isOpen || isExpiredStatus ? (expired ? `expired ${fmt(p.executeBefore)}` : `expires ${fmt(p.executeBefore)}`) : ''}
                   </span>
                 </div>
                 <div style={{ minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
@@ -635,20 +658,20 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                         <><HandCoins size={13} /> Accept</>
                       )}
                     </button>
-                  ) : isOpen && isPayer ? (
+                  ) : (isOpen || isExpiredStatus) && isPayer ? (
                     <button
                       className="btn btn-ghost"
                       onClick={() => onWithdraw(p)}
                       disabled={withdraw.isPending}
-                      title={expired
-                        ? 'Reclaim the locked CC so you can settle this cycle again.'
+                      title={reclaimable
+                        ? 'This offer expired unaccepted — claim the locked CC back to your wallet.'
                         : 'Reclaim the offer early (the recipient has not accepted yet).'}
                       style={{ minWidth: 96, justifyContent: 'center', padding: '6px 12px', fontSize: 12 }}
                     >
                       {withdraw.isPending ? (
                         <Loader2 size={13} style={{ animation: 'spin 800ms linear infinite' }} />
                       ) : (
-                        <><Undo2 size={13} /> {expired ? 'Retry' : 'Withdraw'}</>
+                        <><Undo2 size={13} /> {reclaimable ? 'Claim back' : 'Withdraw'}</>
                       )}
                     </button>
                   ) : isVerifiableUpdateId(p.finalUpdateId) ? (
@@ -662,9 +685,9 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                     >
                       {p.status} · {p.finalUpdateId} ↗
                     </a>
-                  ) : isOpen && expired ? (
+                  ) : (isOpen || isExpiredStatus) && expired ? (
                     <span style={{ fontSize: 11, color: 'var(--warn)' }}>
-                      {isRecipient ? 'expired — ask payer to retry' : 'expired'}
+                      {isRecipient ? 'expired — ask the payer to claim it back' : 'expired'}
                     </span>
                   ) : (
                     <span style={{ fontSize: 11, color: 'var(--fg-4)' }}>
@@ -699,7 +722,7 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
               <span className="badge" style={{ fontSize: 11, justifySelf: 'start' }}>
                 {c.ref.split(':').pop()}
               </span>
-              <span className="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtCC(c.amount)}</span>
+              <span className="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>{fmtCC(c.amount, unit)}</span>
               <div>
                 <span
                   className="badge"
@@ -776,13 +799,22 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
                 borderBottom: i === state.history.length - 1 ? 'none' : '1px solid var(--line)',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span className="badge accent" style={{ fontSize: 11 }}>
                   <Check size={11} /> {h.ref.split(':').pop()}
                 </span>
+                {h.verified && (
+                  <span
+                    className="badge"
+                    title="This cycle was recorded against a transfer object your wallet fetched and the proxy validated — a wallet-side proof of delivery."
+                    style={{ fontSize: 10.5, color: 'var(--accent)' }}
+                  >
+                    <ShieldCheck size={11} style={{ marginRight: 3 }} /> verified transfer
+                  </span>
+                )}
               </div>
               <div className="mono" style={{ fontSize: 13, color: 'var(--fg)' }}>
-                {fmtCC(h.amount)}
+                {fmtCC(h.amount, unit)}
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>{fmt(h.at)}</div>
@@ -828,9 +860,11 @@ function V1Detail({ id, view }: { readonly id: string; readonly view: V1StreamVi
 function SettleBanner({
   result,
   rate,
+  unit,
 }: {
   readonly result: V1SettleResult;
   readonly rate: string;
+  readonly unit: string;
 }) {
   // A transfer that landed as a pending offer (recipient has no pre-approval):
   // the CC is locked on-ledger, NOT delivered, until the recipient accepts. Show
@@ -850,7 +884,7 @@ function SettleBanner({
         }}
       >
         <Send size={14} style={{ color: 'var(--warn)', marginRight: 6, verticalAlign: 'middle' }} />
-        <strong style={{ color: 'var(--fg)' }}>Offer sent for {fmtCC(p.amount)}</strong> — the recipient
+        <strong style={{ color: 'var(--fg)' }}>Offer sent for {fmtCC(p.amount, unit)}</strong> — the recipient
         has no pre-approval, so the CC is locked on-ledger and waits for them to <strong>Accept</strong>{' '}
         it in their wallet (or you can withdraw/retry after {fmt(p.executeBefore)}).
         {isVerifiableUpdateId(p.createUpdateId) && (
@@ -876,7 +910,7 @@ function SettleBanner({
       >
         <Clock size={13} style={{ color: 'var(--warn)', marginRight: 6, verticalAlign: 'middle' }} />
         Nothing has accrued this cycle{result.reason ? ` (${result.reason})` : ''}. Toggle{' '}
-        “Settle one cycle now” to draw one {fmtCC(rate)} cycle immediately (spends real CC).
+        “Settle one cycle now” to draw one {fmtCC(rate, unit)} cycle immediately (spends real funds).
       </div>
     );
   }
@@ -918,7 +952,7 @@ function SettleBanner({
     >
       <Check size={14} style={{ color: 'var(--accent)', marginRight: 6, verticalAlign: 'middle' }} />
       Settled cycle {result.cycle} for{' '}
-      <span className="mono">{result.amount ? fmtCC(result.amount) : '—'}</span> · confirmed on chain.
+      <span className="mono">{result.amount ? fmtCC(result.amount, unit) : '—'}</span> · confirmed on chain.
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ color: 'var(--fg-4)' }}>update</span>
         <span
@@ -970,9 +1004,11 @@ function SettleBanner({
 function SettleErrorCard({
   message,
   balance,
+  unit = 'CC',
 }: {
   readonly message: string;
   readonly balance: string | null;
+  readonly unit?: string;
 }) {
   const funding = /insufficient|holds 0 CC|fund (it|your)|not enough|could not be read/i.test(
     message,
@@ -997,8 +1033,8 @@ function SettleErrorCard({
       <div style={{ marginTop: 4 }}>{message}</div>
       {funding && (
         <div style={{ marginTop: 6, color: 'var(--fg-4)' }}>
-          {balance !== null ? `Your wallet holds ${fmtCC(balance)}. ` : ''}
-          Top up your Loop wallet with Canton Coin, then press Settle again.
+          {balance !== null ? `Your wallet holds ${fmtCC(balance, unit)}. ` : ''}
+          Top up your wallet with {unit}, then press Settle again.
         </div>
       )}
     </div>
@@ -1050,6 +1086,8 @@ function pendingStatusLabel(status: V1PendingTransferRecord['status']): string {
       return 'Accepted';
     case 'withdrawn':
       return 'Reclaimed';
+    case 'expired':
+      return 'Expired — reclaimable';
     default:
       return status;
   }
@@ -1071,14 +1109,21 @@ function claimStatusLabel(status: V1ReceiverClaimRecord['status']): string {
   }
 }
 
-/** Format a decimal-string amount as "<value> CC", trimming trailing zeros.
- *  Non-numeric input is passed through with a CC suffix so we never hide data. */
-function fmtCC(raw: string): string {
+/** Format a decimal-string amount as "<value> <unit>", trimming trailing zeros.
+ *  `unit` defaults to CC; a non-CC stream passes its instrument id instead.
+ *  Non-numeric input is passed through with the suffix so we never hide data. */
+function fmtCC(raw: string, unit = 'CC'): string {
   const n = Number(raw);
   if (!Number.isFinite(n)) return '—';
   // Trim to a sane number of places without forcing trailing zeros.
   const trimmed = n.toLocaleString(undefined, { maximumFractionDigits: 10 });
-  return `${trimmed} CC`;
+  return `${trimmed} ${unit}`;
+}
+
+/** The display unit for a V1 stream's asset — CC unless it's a non-CC asset. */
+function streamUnit(agreement: V1Agreement): string {
+  const key = agreement.assetKey?.trim().toLowerCase();
+  return !key || key === 'cc' ? 'CC' : agreement.instrument?.id || 'CC';
 }
 
 function SectionTitle({ children }: { readonly children: ReactNode }) {

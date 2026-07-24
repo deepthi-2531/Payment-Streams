@@ -13,6 +13,7 @@ import { useNavigate, Link } from 'react-router';
 import { Lock, ArrowLeft, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
 import { useCreateEscrow } from '../hooks/useEscrows.js';
+import { useAssets } from '../hooks/useAssets.js';
 import { useCantonCoinBalance } from '../hooks/useCantonCoinBalance.js';
 import { PageHeader } from '../components/common/index.js';
 import { fmtCc, displayName } from '../lib/format.js';
@@ -33,7 +34,12 @@ export function CreateEscrowPage() {
   const [rate, setRate] = useState('1');
   const [cadenceSeconds, setCadenceSeconds] = useState<number>(86400);
   const [totalDeposit, setTotalDeposit] = useState('10');
+  const [assetKey, setAssetKey] = useState('cc');
   const [error, setError] = useState<string | null>(null);
+  const { data: assets = [] } = useAssets();
+  const selAsset = assets.find((a) => a.key === assetKey);
+  const unit = assetKey === 'cc' ? 'CC' : (selAsset?.displayName || assetKey.toUpperCase());
+  const fmtAmt = (n: number) => (assetKey === 'cc' ? fmtCc(n) : `${n} ${unit}`);
 
   const rateNum = Number(rate);
   const depositNum = Number(totalDeposit);
@@ -50,6 +56,14 @@ export function CreateEscrowPage() {
         ratePerCycle: String(rateNum),
         cadenceSeconds,
         totalDeposit: String(depositNum),
+        ...(assetKey && assetKey !== 'cc'
+          ? {
+              assetKey,
+              ...(selAsset?.instrumentId ? { assetInstrumentId: selAsset.instrumentId } : {}),
+              ...(selAsset?.instrumentAdmin ? { assetInstrumentAdmin: selAsset.instrumentAdmin } : {}),
+              ...(selAsset?.holdingTemplateId ? { assetHoldingTemplateId: selAsset.holdingTemplateId } : {}),
+            }
+          : {}),
       });
       navigate(`/v1/escrows/${encodeURIComponent(escrow.escrowId)}`);
     } catch (e) {
@@ -99,9 +113,11 @@ export function CreateEscrowPage() {
           <div style={{ fontSize: 12.5, color: 'var(--fg-2)' }} title={party ?? undefined}>
             {party ? displayName(party) : 'Not connected'}
           </div>
-          <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 3 }}>
-            Balance: {cc.isLoading ? '…' : fmtCc(cc.value ?? cc.display)}
-          </div>
+          {assetKey === 'cc' && (
+            <div style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 3 }}>
+              Balance: {cc.isLoading ? '…' : fmtCc(cc.value ?? cc.display)}
+            </div>
+          )}
         </Field>
 
         <Field label="Recipient">
@@ -119,7 +135,7 @@ export function CreateEscrowPage() {
         </Field>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-          <Field label="Amount per payment (CC)">
+          <Field label={`Amount per payment (${unit})`}>
             <input value={rate} onChange={(e) => setRate(e.target.value)} type="number" min="0" step="0.01" style={inputStyle} />
           </Field>
           <Field label="How often">
@@ -135,14 +151,24 @@ export function CreateEscrowPage() {
           </Field>
         </div>
 
-        <Field label="Total deposit (CC)">
+        {assets.length > 1 && (
+          <Field label="Asset">
+            <select value={assetKey} onChange={(e) => setAssetKey(e.target.value)} style={inputStyle}>
+              {assets.map((a) => (
+                <option key={a.key} value={a.key}>{a.displayName || a.key}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+
+        <Field label={`Total deposit (${unit})`}>
           <input value={totalDeposit} onChange={(e) => setTotalDeposit(e.target.value)} type="number" min="0" step="0.01" style={inputStyle} />
           <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 6 }}>
             Covers{' '}
             <strong style={{ color: 'var(--fg)' }}>
               {cycles > 0 ? `${cycles} ${cycles === 1 ? 'payment' : 'payments'}` : '—'}
             </strong>{' '}
-            of {rateNum > 0 ? fmtCc(rateNum) : '—'}.
+            of {rateNum > 0 ? fmtAmt(rateNum) : '—'}.
           </div>
         </Field>
 
@@ -154,7 +180,7 @@ export function CreateEscrowPage() {
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
           <button className="btn btn-primary" disabled={!canSubmit} onClick={submit}>
-            <Lock size={14} /> {createEscrow.isPending ? 'Funding…' : `Fund ${depositNum ? fmtCc(depositNum) : ''} & start`}
+            <Lock size={14} /> {createEscrow.isPending ? 'Funding…' : `Fund ${depositNum ? fmtAmt(depositNum) : ''} & start`}
           </button>
           <Link to="/v1/escrows" className="btn btn-ghost">Cancel</Link>
         </div>
