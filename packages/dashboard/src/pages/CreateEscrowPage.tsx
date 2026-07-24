@@ -13,6 +13,7 @@ import { useNavigate, Link } from 'react-router';
 import { Lock, ArrowLeft, ShieldAlert } from 'lucide-react';
 import { useAuth } from '../store/auth.js';
 import { useCreateEscrow } from '../hooks/useEscrows.js';
+import { useAssets } from '../hooks/useAssets.js';
 import { useCantonCoinBalance } from '../hooks/useCantonCoinBalance.js';
 import { PageHeader } from '../components/common/index.js';
 import { fmtCc, displayName } from '../lib/format.js';
@@ -33,7 +34,9 @@ export function CreateEscrowPage() {
   const [rate, setRate] = useState('1');
   const [cadenceSeconds, setCadenceSeconds] = useState<number>(86400);
   const [totalDeposit, setTotalDeposit] = useState('10');
+  const [assetKey, setAssetKey] = useState('cc');
   const [error, setError] = useState<string | null>(null);
+  const { data: assets = [] } = useAssets();
 
   const rateNum = Number(rate);
   const depositNum = Number(totalDeposit);
@@ -50,6 +53,7 @@ export function CreateEscrowPage() {
         ratePerCycle: String(rateNum),
         cadenceSeconds,
         totalDeposit: String(depositNum),
+        ...(assetKey && assetKey !== 'cc' ? { assetKey } : {}),
       });
       navigate(`/v1/escrows/${encodeURIComponent(escrow.escrowId)}`);
     } catch (e) {
@@ -135,7 +139,17 @@ export function CreateEscrowPage() {
           </Field>
         </div>
 
-        <Field label="Total deposit (CC)">
+        {assets.length > 1 && (
+          <Field label="Asset">
+            <select value={assetKey} onChange={(e) => setAssetKey(e.target.value)} style={inputStyle}>
+              {assets.map((a) => (
+                <option key={a.key} value={a.key}>{a.displayName || a.key}</option>
+              ))}
+            </select>
+          </Field>
+        )}
+
+        <Field label={`Total deposit (${(assetKey || 'cc').toUpperCase()})`}>
           <input value={totalDeposit} onChange={(e) => setTotalDeposit(e.target.value)} type="number" min="0" step="0.01" style={inputStyle} />
           <div style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 6 }}>
             Covers{' '}

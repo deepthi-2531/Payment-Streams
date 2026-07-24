@@ -925,6 +925,7 @@ export class CantonStreamsApi {
     payerParty?: string;
     totalDeposit: string;
     holdings?: { cid: string; amount: number }[];
+    assetKey?: string;
   }): Promise<EscrowPreparedDeposit> {
     return this.request<EscrowPreparedDeposit>('POST', '/api/v1/escrows/prepare-deposit', body);
   }
@@ -1389,6 +1390,8 @@ export interface CreateEscrowParams {
   readonly ratePerCycle: string;
   readonly cadenceSeconds: number;
   readonly totalDeposit: string;
+  /** Whitelisted asset to custody ('cc'/absent ⇒ Canton Coin). */
+  readonly assetKey?: string;
   /** When the payer's WALLET signed the deposit itself, its updateId. Omit to
    * have the proxy submit the deposit (hosted/dev payer only). */
   readonly fundingTransferId?: string;

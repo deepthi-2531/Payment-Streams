@@ -25,6 +25,7 @@ export interface EscrowWalletClient {
     payerParty?: string;
     totalDeposit: string;
     holdings?: { cid: string; amount: number }[];
+    assetKey?: string;
   }): Promise<EscrowPreparedDeposit>;
   createEscrow(params: CreateEscrowParams): Promise<EscrowView>;
 }
@@ -46,6 +47,7 @@ export async function createEscrowViaWallet(
     payerParty: params.payerParty,
     totalDeposit: params.totalDeposit,
     holdings,
+    ...(params.assetKey ? { assetKey: params.assetKey } : {}),
   });
 
   // Don't blind-sign the proxy-formed command: verify it acts as the payer and
