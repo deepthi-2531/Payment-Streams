@@ -23,6 +23,9 @@ import {
   type StreamsWalletStatus,
   type WalletLayer,
 } from './wallet/index.js';
+import { RESTORE_TIMEOUT_MS } from './wallet/config.js';
+import { hasRestorableSession } from './wallet/swkSession.js';
+import { hasVaultedLoopSession } from './wallet/loopSessionVault.js';
 
 type WalletProvider = StreamsWalletProviderInfo | null;
 
@@ -84,6 +87,10 @@ interface AuthContextValue {
   readonly provider: WalletProvider;
   readonly isAuthenticated: boolean;
   readonly isConnecting: boolean;
+  /** True while an on-load silent restore is in flight and a session might yet
+   * be adopted. The app shows a neutral splash instead of the connect screen so
+   * a returning user doesn't flash the reconnect card before restore settles. */
+  readonly isRestoring: boolean;
   readonly error: string | null;
 
   // Wallet-driven controls
@@ -121,6 +128,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accounts, setAccounts] = useState<readonly StreamsWalletAccount[]>([]);
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Hold a neutral splash on first paint only while a session we can actually
+  // restore silently is being re-adopted. A Loop-only hint is not restorable
+  // today, so those users still see the reconnect card immediately (no flash).
+  const [isRestoring, setIsRestoring] = useState<boolean>(() => {
+    try {
+      return hasRestorableSession() || hasVaultedLoopSession();
+    } catch {
+      return false;
+    }
+  });
 
   // Dev-mode fallback — populated only when no wallet is connected. This token is
   // the proxy bearer credential in dev-auth mode, so it lives in sessionStorage
@@ -175,9 +193,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await walletClient.onAccountsChanged(handleAccounts);
         await walletClient.onConnected(handleConnected);
         if (cancelled) return;
+        // Silently adopt a persisted session (SWK today; Loop once its blob
+        // lands). restore() is fail-closed: a stale / wrong-party / wrong-network
+        // session is skipped, leaving the reconnect card. Bounded so a slow
+        // gateway can't hold the splash indefinitely.
+        if (walletClient.restore) {
+          const hint = loadSession();
+          try {
+            await Promise.race([
+              walletClient.restore(
+                hint ? { layer: hint.layer, party: hint.party } : undefined,
+              ),
+              new Promise((r) => setTimeout(r, RESTORE_TIMEOUT_MS)),
+            ]);
+          } catch {
+            /* fall through to status() + reconnect card */
+          }
+          if (cancelled) return;
+        }
         const current = await walletClient.status();
         if (cancelled) return;
         setStatus(current);
+        setIsRestoring(false);
         if (current.connection.isConnected) {
           try {
             const list = await walletClient.listAccounts();
@@ -209,8 +246,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }, 4_000);
         }
       } catch (err) {
-        if (!cancelled)
+        if (!cancelled) {
           setError(err instanceof Error ? err.message : 'Failed to initialize wallet client');
+          setIsRestoring(false);
+        }
       }
     })();
 
@@ -226,25 +265,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const connect = useCallback(async (walletId?: string) => {
     setIsConnecting(true);
     setError(null);
+    const finish = async (): Promise<boolean> => {
+      const current = await walletClient.status();
+      if (!current.connection.isConnected) return false;
+      setStatus(current);
+      try {
+        setAccounts((await walletClient.listAccounts()) ?? []);
+      } catch {
+        /* ignore */
+      }
+      // Remember the wallet actually connected (its provider id — a refresh can
+      // rehydrate it), not the id we asked for, which may be a stale hint.
+      setConnectedWalletId(current.provider?.id ?? walletId);
+      setDevToken(null);
+      setDevParty(null);
+      return true;
+    };
     try {
-      const result = await walletClient.connect(walletId);
+      let result = await walletClient.connect(walletId).catch((e) => {
+        if (!walletId) throw e;
+        return { isConnected: false } as Awaited<ReturnType<typeof walletClient.connect>>;
+      });
+      // A remembered wallet id can be stale/unroutable (e.g. after a redeploy, or
+      // the picker chose it internally); fall back to the normal picker instead of
+      // dead-ending on it.
+      if (!result.isConnected && walletId) {
+        result = await walletClient.connect();
+      }
       if (!result.isConnected) {
         setError(result.reason ?? 'Wallet connection rejected');
         return;
       }
-      const current = await walletClient.status();
-      setStatus(current);
-      try {
-        const list = await walletClient.listAccounts();
-        setAccounts(list ?? []);
-      } catch {
-        /* ignore */
-      }
-      // Remember which wallet was connected so a refresh can rehydrate it.
-      setConnectedWalletId(walletId);
-      // Real wallet wins over dev-mode credentials.
-      setDevToken(null);
-      setDevParty(null);
+      await finish();
     } catch (err) {
       setError(await walletClient.describeConnectError(err));
     } finally {
@@ -302,11 +354,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (walletConnected && walletParty) {
       setRememberedParty(walletParty);
-      const walletId = connectedWalletId ?? primaryAccount?.signingProviderId ?? undefined;
+      // The connected wallet's own provider id is what connect() can route back to
+      // — not the signing-provider/participant id, which is not a wallet id.
+      const walletId = connectedWalletId ?? status?.provider?.id ?? undefined;
       if (walletId && walletId !== connectedWalletId) setConnectedWalletId(walletId);
       saveSession({ party: walletParty, layer: walletClient.layer, walletId });
     }
-  }, [walletConnected, walletParty, connectedWalletId, primaryAccount]);
+  }, [walletConnected, walletParty, connectedWalletId, status]);
 
   // Hosted wallets (Loop) can drop their in-memory session silently — a failed
   // submit or expired handshake doesn't always fire a disconnect event. Re-read
@@ -394,6 +448,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       provider: status?.provider ?? null,
       isAuthenticated,
       isConnecting,
+      isRestoring,
       error,
       connect,
       disconnect,
@@ -415,6 +470,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       status,
       isAuthenticated,
       isConnecting,
+      isRestoring,
       error,
       connect,
       disconnect,

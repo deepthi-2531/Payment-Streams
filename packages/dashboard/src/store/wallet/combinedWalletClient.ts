@@ -5,9 +5,10 @@
  * else delegates to whichever layer is active once connected.
  */
 
-import { SHOW_FULL_CATALOG } from './config.js';
+import { SHOW_FULL_CATALOG, WALLET_NETWORK } from './config.js';
 import { dappSdkWalletClient } from './dappSdkClient.js';
 import { partyLayerWalletClient } from './partyLayerClient.js';
+import { clearSwkPersistedSession } from './swkSession.js';
 import { openWalletPickerModal } from './walletPickerModal.js';
 import type {
   StreamsWalletAccount,
@@ -20,6 +21,7 @@ import type {
   StreamsWalletTxChangedHandler,
   WalletCapabilities,
   WalletLayer,
+  WalletRestoreHint,
 } from './types.js';
 
 type OwnedLayer = 'partylayer' | 'dapp-sdk';
@@ -40,6 +42,69 @@ const DISCONNECTED: StreamsWalletStatus = {
   network: null,
   session: null,
 };
+
+function clientFor(layer: OwnedLayer): StreamsWalletClient {
+  return layer === 'partylayer' ? partyLayerWalletClient : dappSdkWalletClient;
+}
+
+// Probe the last-used layer first, then the other. dapp-sdk is the only layer
+// that restores today, so it leads when there is no hint.
+function probeOrder(hint?: WalletLayer): OwnedLayer[] {
+  return hint === 'partylayer'
+    ? ['partylayer', 'dapp-sdk']
+    : ['dapp-sdk', 'partylayer'];
+}
+
+function networkKeyword(s: string | null): 'devnet' | 'testnet' | 'mainnet' | null {
+  if (!s) return null;
+  const t = s.toLowerCase();
+  if (t.includes('mainnet')) return 'mainnet';
+  if (t.includes('testnet')) return 'testnet';
+  if (t.includes('devnet')) return 'devnet';
+  return null;
+}
+
+// Adopt a restored session only when its network matches this deployment's.
+// Fail-closed: an unrecognized network id is not adopted. When the deployment
+// network is unset, don't block (nothing to compare against).
+function networkAllowed(got: string | null): boolean {
+  const expected = networkKeyword(WALLET_NETWORK);
+  if (!expected) return true;
+  if (networkKeyword(got) === expected) return true;
+  console.warn('[wallet] restore skipped: network mismatch', {
+    got,
+    expected: WALLET_NETWORK,
+  });
+  return false;
+}
+
+// Never silently adopt a session whose party differs from the one last signed
+// in as (a Loop user must not be re-adopted as a lingering SWK party). When the
+// identity of a connected session can't be determined, fail closed.
+async function partyAllowed(
+  client: StreamsWalletClient,
+  wantParty: string | undefined,
+  st: StreamsWalletStatus,
+): Promise<boolean> {
+  if (!wantParty) return true;
+  let got: string | undefined;
+  try {
+    const accts = await client.listAccounts();
+    got = accts.find((a) => a.primary)?.partyId ?? accts[0]?.partyId;
+  } catch {
+    /* fall through to the status hint */
+  }
+  got = got ?? st.session?.userId ?? undefined;
+  if (!got) {
+    console.warn('[wallet] restore skipped: restored party unknown');
+    return false;
+  }
+  if (got !== wantParty) {
+    console.warn('[wallet] restore skipped: party mismatch');
+    return false;
+  }
+  return true;
+}
 
 // PartyLayer's catalog is Console/Loop/Cantor8/Nightly/Send; only Loop works on
 // our networks, so default to it. SHOW_FULL_CATALOG lists the rest as disabled.
@@ -217,16 +282,54 @@ export const combinedWalletClient: StreamsWalletClient = {
 
   async disconnect() {
     const c = activeClient();
-    if (c) {
-      await detachAll(c);
-      await c.disconnect();
+    try {
+      if (c) {
+        await detachAll(c);
+        await c.disconnect();
+      }
+    } finally {
+      // Always clear any persisted SWK session on an explicit disconnect — even
+      // if the active layer wasn't dapp-sdk, none was adopted, or its own
+      // disconnect threw — so leftover tokens can't be silently re-adopted.
+      clearSwkPersistedSession();
+      activeLayer = null;
     }
-    activeLayer = null;
   },
 
   async status(): Promise<StreamsWalletStatus> {
     const c = activeClient();
     return c ? c.status() : DISCONNECTED;
+  },
+
+  // On load, ask each layer whether it silently restored a session (SWK today;
+  // Loop once its persistence lands). Adopt the first connected one that passes
+  // the network and party gates, wiring listeners so the dashboard receives its
+  // events — exactly as a fresh connect would. Fail-closed everywhere: a stale,
+  // wrong-network or wrong-party session is skipped, leaving the reconnect card.
+  async restore(hint?: WalletRestoreHint): Promise<StreamsWalletStatus> {
+    if (activeLayer) return activeClient()!.status();
+    for (const layer of probeOrder(hint?.layer)) {
+      const client = clientFor(layer);
+      let st: StreamsWalletStatus;
+      try {
+        st = client.restore ? await client.restore(hint) : await client.status();
+      } catch {
+        continue;
+      }
+      if (!st.connection.isConnected) continue;
+      if (!networkAllowed(st.network?.networkId ?? null)) continue;
+      if (!(await partyAllowed(client, hint?.party, st))) continue;
+      activeLayer = layer;
+      await attachAll();
+      // If the caller's mount-time race already timed out, the adopted status
+      // won't be re-read — the SDK's connected event fired during init(), before
+      // the dashboard subscribed. Push it to the buffered listeners so a late
+      // restore still reaches the app instead of stranding it on the card.
+      for (const l of listeners.connected) l(st);
+      for (const l of listeners.status) l(st);
+      return st;
+    }
+    return DISCONNECTED;
   },
 
   async listAccounts(): Promise<readonly StreamsWalletAccount[]> {

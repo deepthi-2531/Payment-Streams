@@ -53,6 +53,13 @@ export interface StreamsWalletEntry {
   readonly cip0103Native?: boolean;
 }
 
+/** Non-secret hint passed to a layer's `restore()` on load: the last-used
+ * layer and party, so a restore can be preferred and fail-closed on identity. */
+export interface WalletRestoreHint {
+  readonly layer?: WalletLayer;
+  readonly party?: string;
+}
+
 export type StreamsWalletConnectResult = StreamsWalletConnection;
 export type StreamsWalletStatusHandler = (event: StreamsWalletStatus) => void;
 export type StreamsWalletAccountsHandler = (
@@ -113,6 +120,12 @@ export interface StreamsWalletClient {
   connect(walletId?: string): Promise<StreamsWalletConnectResult>;
   disconnect(): Promise<void>;
   status(): Promise<StreamsWalletStatus>;
+  /** Attempt a popup-free restore of a persisted session on load. Returns a
+   * connected status only if a live session was silently re-adopted; a
+   * disconnected status (or a throw) means the caller falls back to the
+   * connect / reconnect screen. Optional — a layer without it never
+   * auto-restores. */
+  restore?(hint?: WalletRestoreHint): Promise<StreamsWalletStatus>;
   listAccounts(): Promise<readonly StreamsWalletAccount[]>;
   /** Only present on hosted-multi-wallet layers
    * (`capabilities.hostedMultiWallet === true`). Returns the

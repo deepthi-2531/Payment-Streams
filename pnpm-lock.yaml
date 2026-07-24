@@ -6,7 +6,7 @@ settings:
 
 patchedDependencies:
   '@fivenorth/loop-sdk@0.10.0':
-    hash: onkmctxz2z2f7zd3y3oj4joahi
+    hash: dywfr7nzegjpgylyrx4iobwedu
     path: patches/@fivenorth__loop-sdk@0.10.0.patch
   '@partylayer/adapter-loop@0.3.7':
     hash: il4cn7n3okxll4m7o3ge6fat3u
@@ -5648,7 +5648,7 @@ snapshots:
 
   '@exodus/schemasafe@1.3.0': {}
 
-  '@fivenorth/loop-sdk@0.10.0(patch_hash=onkmctxz2z2f7zd3y3oj4joahi)(typescript@5.9.3)':
+  '@fivenorth/loop-sdk@0.10.0(patch_hash=dywfr7nzegjpgylyrx4iobwedu)(typescript@5.9.3)':
     dependencies:
       '@types/qrcode': 1.5.6
       qrcode: 1.5.4
@@ -5856,7 +5856,7 @@ snapshots:
 
   '@partylayer/adapter-loop@0.3.7(patch_hash=il4cn7n3okxll4m7o3ge6fat3u)(typescript@5.9.3)':
     dependencies:
-      '@fivenorth/loop-sdk': 0.10.0(patch_hash=onkmctxz2z2f7zd3y3oj4joahi)(typescript@5.9.3)
+      '@fivenorth/loop-sdk': 0.10.0(patch_hash=dywfr7nzegjpgylyrx4iobwedu)(typescript@5.9.3)
       '@partylayer/core': 0.3.1
     transitivePeerDependencies:
       - typescript

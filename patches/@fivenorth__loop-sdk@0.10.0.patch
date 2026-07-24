@@ -1,26 +1,33 @@
 diff --git a/dist/index.js b/dist/index.js
-index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0ffe13296f 100644
+index c51ba741e2d971319984a06c2755f4c738f551cf..d86bedcd3daf5d6ec07f3b9398fe0ac61446b5a7 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -2099,6 +2099,7 @@ class Connection {
+@@ -2099,6 +2099,11 @@ class Connection {
    ws = null;
    network = "main";
    ticketId = null;
 +  ticketAuthToken = null;
++  // true once the pairing handshake is done (handshake_accept) OR the session
++  // was restored from storage. Both mean the single-use pairing ticket is
++  // consumed, so the primary pairing socket must NOT auto-redial it.
++  _handshakeComplete = false;
    onMessageHandler = null;
    reconnectPromise = null;
    status = "disconnected";
-@@ -2251,7 +2252,8 @@ class Connection {
+@@ -2251,7 +2256,11 @@ class Connection {
      };
      return account;
    }
 -  connectWebSocket(ticketId, onMessage) {
 +  connectWebSocket(ticketId, ticketAuthToken, onMessage) {
 +    this._pairReconnects = 0;
++    // a fresh pairing dial opens the pre-accept window during which the primary
++    // socket may auto-reconnect to survive an idle drop while the user signs in.
++    this._handshakeComplete = false;
      if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING) && this.ticketId !== ticketId) {
        this.ws.close();
        this.ws = null;
-@@ -2261,8 +2263,16 @@ class Connection {
+@@ -2261,8 +2270,16 @@ class Connection {
      }
      this.onMessageHandler = onMessage;
      this.ticketId = ticketId;
@@ -38,7 +45,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
    }
    reconnect() {
      if (!this.ticketId || !this.onMessageHandler) {
-@@ -2270,7 +2280,7 @@ class Connection {
+@@ -2270,7 +2287,7 @@ class Connection {
      }
      return new Promise((resolve, reject) => {
        let opened = false;
@@ -47,7 +54,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
          opened = true;
          resolve();
        }, () => {
-@@ -2289,29 +2299,60 @@ class Connection {
+@@ -2289,29 +2306,60 @@ class Connection {
    websocketUrl(ticketId) {
      return `${this.network === "local" ? "ws" : "wss"}://${this.apiUrl.replace("https://", "").replace("http://", "")}/api/v1/.connect/pair/ws/${encodeURIComponent(ticketId)}`;
    }
@@ -90,7 +97,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
 +      // closes (logout / HANDSHAKE_REJECT / superseding ticket) are clean 1000
 +      // closes and are naturally excluded. Managed reconnect() sockets pass an
 +      // onOpen callback and are excluded so they are not double-driven.
-+      if (wasCurrent && !onOpen && this.ticketId && this.onMessageHandler && event && event.wasClean === false && (this._pairReconnects | 0) < 5) {
++      if (wasCurrent && !onOpen && !this._handshakeComplete && this.ticketId && this.onMessageHandler && event && event.wasClean === false && (this._pairReconnects | 0) < 5) {
 +        this._pairReconnects = (this._pairReconnects | 0) + 1;
 +        const delay = Math.min(1000 * this._pairReconnects, 5000);
 +        console.log("[LoopSDK] Ticket-server dropped uncleanly; reconnecting (attempt " + this._pairReconnects + "/5) in " + delay + "ms.");
@@ -114,7 +121,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
        onError?.(event);
      };
      this.ws = ws;
-@@ -2565,21 +2606,26 @@ var STORAGE_KEY_LOOP_CONNECT = "loop_connect";
+@@ -2565,21 +2613,26 @@ var STORAGE_KEY_LOOP_CONNECT = "loop_connect";
  class SessionInfo {
    sessionId;
    ticketId;
@@ -143,7 +150,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
      this.save();
    }
    authorized() {
-@@ -2602,6 +2648,7 @@ class SessionInfo {
+@@ -2602,6 +2655,7 @@ class SessionInfo {
      this.sessionId = generateRequestId();
      this._isAuthorized = false;
      this.ticketId = undefined;
@@ -151,7 +158,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
      this.authToken = undefined;
      this.partyId = undefined;
      this.publicKey = undefined;
-@@ -2626,6 +2673,7 @@ class SessionInfo {
+@@ -2626,6 +2680,7 @@ class SessionInfo {
      return JSON.stringify({
        sessionId: this.sessionId,
        ticketId: this.ticketId,
@@ -159,16 +166,36 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
        authToken: this.authToken,
        partyId: this.partyId,
        publicKey: this.publicKey,
-@@ -2802,7 +2850,7 @@ class LoopSDK {
+@@ -2778,6 +2833,12 @@ class LoopSDK {
+       if (err instanceof UnauthorizedError) {
+         console.error("Unauthorized error when verifying session.", err);
+         this.session.reset();
++        // a restored session whose bearer authToken has expired cannot be
++        // re-authorized silently (Loop has no client-side refresh). Signal the
++        // adapter NOW so restore fails fast + clean to the reconnect card
++        // instead of hanging to its 5s auto-connect timeout. Our connect() path
++        // pre-clears loop_connect, so a fresh connect never reaches this branch.
++        this.onReject?.();
+         return;
+       }
+       console.error("[LoopSDK] Failed to verify session.", err);
+@@ -2802,7 +2863,14 @@ class LoopSDK {
          hooks: this.createProviderHooks()
        });
        this.onAccept?.(this.provider);
 -      this.connection.connectWebSocket(this.session.ticketId, this.handleWebSocketMessage.bind(this));
-+      this.connection.connectWebSocket(this.session.ticketId, this.session.ticketAuthToken, this.handleWebSocketMessage.bind(this));
++      // restored (or already-authorized) session: the single-use pairing ticket
++      // is consumed and the Provider is HTTP + authToken, so DO NOT re-dial the
++      // pairing socket here. Re-dialing a consumed ticket just draws an
++      // unauthorized frame + reconnect churn (and previously tore the session
++      // down). Mark the handshake complete so any later transaction-time
++      // reconnect() is never auto-redialed. Reads/holdings/verifySession all go
++      // over HTTP; a submit lazily reopens the socket via ensureConnected().
++      this.connection._handshakeComplete = true;
        return Promise.resolve();
      }
    }
-@@ -2818,12 +2866,12 @@ class LoopSDK {
+@@ -2818,12 +2886,12 @@ class LoopSDK {
        return;
      }
      try {
@@ -185,3 +212,29 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..26ae46a6402f95e767db9d535b8c5d0f
        }
        this.showQrCode(this.buildConnectUrl(this.session.ticketId));
      } catch (error) {
+@@ -2838,6 +2906,14 @@ class LoopSDK {
+       console.warn("[LoopSDK] Detected session invalidation:", errCode, {
+         message
+       });
++      // an unauth frame on the pairing socket AFTER the session is already
++      // authorized is the consumed single-use pairing ticket being re-dialed by
++      // the auto-reconnect, not a real revocation — do NOT tear down a live or
++      // just-restored session. Ignore it; a genuinely revoked session is still
++      // caught by verifySession on the next load.
++      if (this.session && this.session.isAuthorized()) {
++        return;
++      }
+       this.logout();
+       return;
+     }
+@@ -2861,6 +2937,10 @@ class LoopSDK {
+           this.session.email = email;
+           this.session.authorized();
+           this.session.save();
++          // pairing ticket is now consumed; stop the primary socket from
++          // auto-redialing it after any later idle drop (that re-dial draws an
++          // unauth frame ~2s post sign-in). Transactions reopen on demand.
++          if (this.connection) this.connection._handshakeComplete = true;
+           this.onAccept?.(this.provider);
+           this.hideQrCode();
+           console.log("[LoopSDK] HANDSHAKE_ACCEPT: closing popup (if exists)");

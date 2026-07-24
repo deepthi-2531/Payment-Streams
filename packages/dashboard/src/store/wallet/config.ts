@@ -34,3 +34,16 @@ export const PARTYLAYER_NETWORK =
 
 export const PARTYLAYER_APP_NAME =
   env.VITE_PARTYLAYER_APP_NAME ?? 'Canton Payment Streams';
+
+/** The Canton network this deployment targets. An on-load session restore only
+ * adopts a persisted session whose network matches this. */
+export const WALLET_NETWORK = env.VITE_WALLET_NETWORK ?? PARTYLAYER_NETWORK;
+
+/** Upper bound (ms) on how long the on-load silent restore may hold the neutral
+ * splash before falling back to the connect / reconnect screen. A malformed
+ * value falls back to the default rather than firing the timeout immediately. */
+export const RESTORE_TIMEOUT_MS = (() => {
+  // Default covers Loop's 5s autoConnect so a Loop restore isn't cut short.
+  const n = Number(env.VITE_WALLET_RESTORE_TIMEOUT_MS ?? '6000');
+  return Number.isFinite(n) && n > 0 ? n : 6000;
+})();

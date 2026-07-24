@@ -17,6 +17,7 @@ import type {
   StreamsWalletTxChangedHandler,
 } from './types.js';
 import { PARTYLAYER_APP_NAME, PARTYLAYER_NETWORK } from './config.js';
+import { clearLoopVault, rehydrateLoopSession } from './loopSessionVault.js';
 
 // Minimal structural type — keeps this file from importing the full
 // `@partylayer/sdk` value namespace at module load. The runtime types
@@ -122,6 +123,11 @@ async function ensureClient(): Promise<PartyLayerClientLike> {
   if (!clientPromise) {
     clientPromise = (async () => {
       clearStaleLoopSession();
+      // Rehydrate the plaintext loop_connect from the encrypted vault BEFORE the
+      // SDK is constructed — its constructor kicks off restoreSession(), whose
+      // LoopAdapter.restore() drives loop.autoConnect() reading loop_connect. So
+      // the blob must be in place first for a silent (zero-click) restore.
+      await rehydrateLoopSession();
       const mod = await import('@partylayer/sdk');
       // The default adapter set includes Console, Loop, Cantor8, Nightly,
       // and Send. Bron requires app-specific OAuth configuration.
@@ -157,8 +163,71 @@ function emptyStatus(): StreamsWalletStatus {
   };
 }
 
+// Upper bound on how long we wait for the SDK's own on-construct restore to
+// settle before probing getActiveSession. Kept just above the Loop adapter's
+// 5s auto-connect timeout and under RESTORE_TIMEOUT_MS, so a stuck restore can
+// never hold the splash. With the loop-sdk fast-fail this cap is rarely hit.
+const INITIAL_RESTORE_CAP_MS = 5500;
+const PARTYLAYER_SESSION_KEY = 'partylayer_active_session';
+
+function hasPersistedPartyLayerSession(): boolean {
+  try {
+    return typeof localStorage !== 'undefined' && Boolean(localStorage.getItem(PARTYLAYER_SESSION_KEY));
+  } catch {
+    return false;
+  }
+}
+
+// The SDK constructor kicks off restoreSession() (fire-and-forget) — but its
+// restoreSession is NOT memoized, so calling getActiveSession() while that
+// first restore is still in flight starts a SECOND concurrent restore of the
+// same singleton Loop session. The losing restore then resolves null and calls
+// removeSession() → emits `session:expired`, which tears down the session the
+// winning restore just adopted (the intermittent "restore, then 2s bounce").
+// Gate our first getActiveSession behind the constructor restore settling so
+// only one restore ever runs. Memoized: every caller shares one wait.
+let initialRestoreGate: Promise<void> | null = null;
+function awaitInitialRestore(client: PartyLayerClientLike): Promise<void> {
+  if (!initialRestoreGate) {
+    initialRestoreGate = (async () => {
+      // Nothing persisted → the SDK's restore resolves to null WITHOUT emitting
+      // an event, so there is nothing to wait for.
+      if (!hasPersistedPartyLayerSession()) return;
+      const readActive = () =>
+        (client as unknown as { activeSession?: unknown }).activeSession;
+      if (readActive()) return;
+      await new Promise<void>((resolve) => {
+        let done = false;
+        const finish = () => {
+          if (done) return;
+          done = true;
+          for (const off of offs) {
+            try {
+              off();
+            } catch {
+              /* ignore */
+            }
+          }
+          clearTimeout(timer);
+          resolve();
+        };
+        const offs = [
+          client.on('session:connected', finish),
+          client.on('session:expired', finish),
+          client.on('error', finish),
+        ];
+        const timer = setTimeout(finish, INITIAL_RESTORE_CAP_MS);
+        // Cover the read→subscribe gap in case restore settled in between.
+        if (readActive()) finish();
+      });
+    })();
+  }
+  return initialRestoreGate;
+}
+
 async function snapshotStatus(): Promise<StreamsWalletStatus> {
   const client = await ensureClient();
+  await awaitInitialRestore(client);
   const session = await client.getActiveSession();
   if (!session) return emptyStatus();
   // PartyLayer's session has the party and wallet ids; the provider status
@@ -214,6 +283,7 @@ async function snapshotStatus(): Promise<StreamsWalletStatus> {
 
 async function snapshotAccounts(): Promise<readonly StreamsWalletAccount[]> {
   const client = await ensureClient();
+  await awaitInitialRestore(client);
   const session = await client.getActiveSession();
   if (!session) return [];
   return [
@@ -358,7 +428,13 @@ export const partyLayerWalletClient: StreamsWalletClient = {
 
   async disconnect() {
     const client = await ensureClient();
-    await client.disconnect();
+    try {
+      await client.disconnect();
+    } finally {
+      // Drop the encrypted vault (and any plaintext copy) so an explicitly
+      // abandoned Loop session can't be silently restored on the next load.
+      clearLoopVault();
+    }
   },
 
   async status() {
