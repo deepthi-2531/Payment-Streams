@@ -270,7 +270,7 @@ This prevents invalid contracts from ever existing on the ledger.
 
 ## Settlement Mode Security
 
-As of 1.0.0-rc.1, the only supported settlement mode for new streams is
+As of 1.0.0, the only supported settlement mode for new streams is
 `TokenStandardCustody`. Within that mode, the SDK supports the CIP-56 V2 lane
 via CIP-0112 `AllocationRequest` and a transitional V1 allocation lane for
 registered assets that have not yet published V2. The legacy non-token
@@ -403,7 +403,7 @@ The service token should:
 
 1. **Enable TLS** on all connections (proxy-to-Canton, client-to-proxy).
 2. **Use `TokenStandardCustody`** for all real-asset settlement — it is
-   the only supported settlement mode as of 1.0.0-rc.1.
+   the only supported settlement mode as of 1.0.0.
 3. **Configure JWKS** with a production identity provider. Disable dev mode.
 4. **Deploy the proxy behind a load balancer** with TLS termination and
    rate limiting.

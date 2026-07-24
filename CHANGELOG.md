@@ -4,6 +4,36 @@ All notable changes to Canton Payment Streams are documented here. The format is
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-07-23
+
+First stable release. Consolidates the CIP-56 V2 Token Standard settlement path with an operator-custodied streaming option, and lands a security-hardening pass over the settlement and custody code.
+
+### Added
+
+- **Operator-custodied escrow/settlement lane** (`packages/proxy/src/escrow.ts`, backed by the `OperatorEscrow` Daml template): the "deposit once, operator streams" path for wallets that cannot vet the `canton-streams` DAR. This is a disclosed operator-custodial model — the escrow party's keys are the validator node's keys. Hardened with holding-only delivery verification (deposits require a delivered holding; reason `deposit_undelivered`), an aggregate custody cap (`ESCROW_MAX_TOTAL_CC`; reason `escrow_cap_exceeded`), a pre-release solvency interlock and continuous pool-vs-owed drift monitor (`ESCROW_SOLVENCY_MONITOR_SECONDS`; reason `escrow_pool_insolvent`, log tag `escrow_solvency_drift`), and a co-hosting custody-disclosure gate (`ESCROW_DISCLOSED_CUSTODY`; reasons `undisclosed_custody` / `undisclosed_custody_probe_failed`).
+- **Cross-process single-writer store lock** (`packages/proxy/src/store-lock.ts`): serializes every read-modify-write of the proxy's JSON stores across processes on one host, preventing last-writer-wins clobbering during redeploy or replica overlap (reason `store_lock_timeout`).
+- **Received / Inbox view** — a ledger-backed `GET /api/v1/received` and a dashboard Inbox so a recipient sees pending incoming CC offers and delivered transfers; a recipient without a transfer pre-approval receives a pending offer to accept.
+- **Asset picker** — the create-stream and flow instrument fields resolve from `GET /api/assets` (CC, USDCx, or custom), driven by `config/asset-registry.json`.
+- **Published security register** — `docs/SECURITY-FINDINGS.md` and `docs/AUDIT-SCOPE.md`, a redacted account of the internal review and the control addressing each finding, surfaced on the hosted documentation site.
+- **Daml CI** — the `interfaces/main/test/scripts` build and the acceptance suite (linear, cliff, stepped, renewable, invariants, cancel-time soundness) run automatically on Daml-affecting changes.
+
+### Changed
+
+- **Settlement is structurally bound to the stream.** Every recording path decodes the committed on-ledger update and credits the on-chain amount; an accept, claim, or withdraw must consume the exact offer contract (not merely reference it); a single update backs at most one recorded cycle; and a payer may not stream to itself (reason `self_stream`).
+- New proxy env vars: `ESCROW_DISCLOSED_CUSTODY`, `ESCROW_MAX_TOTAL_CC`, `ESCROW_SOLVENCY_MONITOR_SECONDS`, `PROXY_ALLOW_INSECURE_WALLET_URL`.
+- New settlement-lane reason codes: `settlement_mismatch`, `deposit_undelivered`, `self_stream`, `undisclosed_custody`, `undisclosed_custody_probe_failed`, `escrow_cap_exceeded`, `escrow_pool_insolvent`, `store_lock_timeout`.
+
+### Security
+
+- **Cancel settles at ledger time.** `Cancel_Stream` and `MutualCancel_Stream` price accrual at `getTime`, never at a caller-supplied `cancelTime` (kept as an audit record and rejected if in the future), so a backdated cancel cannot claw back value the recipient has already vested. Regression tests: `Test/Stream/CancelTimeSoundness.daml`.
+- **The non-custodial mandate enforces the schedule on-ledger.** `StreamMandate` gates each pull on `getTime`: per-cycle rate, cadence between cycles, an optional cap, and the stream's start/end bounds.
+- **HTTPS wallet-gateway enforcement**: the proxy and the SDK signing transport reject a non-`https` wallet gateway URL unless the host is loopback; the proxy honors `PROXY_ALLOW_INSECURE_WALLET_URL=true` as a trusted-private-network escape hatch.
+- Per-cycle releases use a deterministic command id (crash-idempotent); the recipient auto-accept signer fails closed unless the wallet gateway echoes the exact action and offer it prepared.
+
+### Fixed
+
+- The `canton-streams-scripts` Daml package referenced a stale `canton-streams-1.1.0` dependency and could not build; it now tracks the current `1.3.0` package, so the full Daml build loop completes.
+
 ## [1.0.0-rc.1] - 2026-06-11
 
 ### Added

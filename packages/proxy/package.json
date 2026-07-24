@@ -1,6 +1,6 @@
 {
   "name": "@canton-streams/proxy",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "private": true,
   "description": "REST proxy bridging the browser dashboard to the Node gRPC SDK",
   "license": "Apache-2.0",

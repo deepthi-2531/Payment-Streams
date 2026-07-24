@@ -1,6 +1,6 @@
 {
   "name": "@canton-streams/sdk",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "description": "TypeScript SDK for Canton Payment Streams — gRPC-first continuous payment streaming",
   "license": "Apache-2.0",
   "type": "module",

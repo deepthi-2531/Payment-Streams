@@ -211,6 +211,6 @@ Templates live next to the gitignored counterparts (`config/local.testnet.exampl
 
 ## Versioning
 
-- npm packages use `1.0.0-rc.1`; the main Daml DAR carries its own numeric version, currently `1.3.0` (bumped from `1.2.0` to add `OperatorEscrow`).
+- npm packages use `1.0.0`; the main Daml DAR carries its own numeric version, currently `1.3.0` (bumped from `1.2.0` to add `OperatorEscrow`).
 - DAR filenames are `canton-streams-<version>.dar`.
 - See [RELEASING.md](../RELEASING.md) for the tag-driven npm release process.
