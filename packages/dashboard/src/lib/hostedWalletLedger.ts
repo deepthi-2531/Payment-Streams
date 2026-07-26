@@ -143,6 +143,46 @@ export function formatHostedTemplateId(
 }
 
 /**
+ * True when a wallet error is the host API explicitly throttling us. Only some
+ * adapters keep the status: Loop's ACS read rethrows a bare "Failed to get
+ * active contracts" and DISCARDS the 429, so a false here is not proof the
+ * wallet is healthy. Used to decide whether retrying is worthwhile, never to
+ * claim what went wrong.
+ */
+export function isWalletRateLimited(err: unknown): boolean {
+  const raw = err instanceof Error ? err.message : String(err);
+  return /too many requests|rate[ -]?limit(?:ed|ing)?|\b(?:http|status)[^0-9]{0,10}429\b/i.test(raw);
+}
+
+/**
+ * A holdings/ACS read that did not complete. Distinct from "the wallet holds
+ * nothing" so the UI can keep the last known balance rather than show a dash
+ * that reads as zero. Keeps the adapter's original error as `cause`.
+ */
+export class WalletReadFailedError extends Error {
+  constructor(cause: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Couldn't read holdings from your wallet: ${detail}. The wallet API may be ` +
+        'throttling requests (HTTP 429) or briefly unavailable — wait a few seconds and retry.',
+    );
+    this.name = 'WalletReadFailedError';
+    this.cause = cause;
+  }
+}
+
+/**
+ * The read succeeded and the wallet holds nothing spendable of this asset. The
+ * counterpart to WalletReadFailedError: only this one means "zero".
+ */
+export class HoldingsEmptyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HoldingsEmptyError';
+  }
+}
+
+/**
  * Read the connected wallet's current ledger-end offset — the snapshot point a
  * v2 ACS query must be pinned to. Returns 0 if the wallet can't answer (older
  * adapters); the caller degrades a failed read to an empty list.
@@ -150,6 +190,9 @@ export function formatHostedTemplateId(
 async function walletLedgerEndOffset(
   wc: NonNullable<typeof walletClient.ledgerApi>,
 ): Promise<number> {
+  // Deliberately NOT cached: an ACS snapshot pinned to a stale offset can miss a
+  // just-created contract (or return a just-archived one), which would break the
+  // read-after-write the settle and post-mutation refreshes depend on.
   try {
     const raw = await wc({ requestMethod: 'get', resource: '/v2/state/ledger-end' });
     const parsed: { offset?: number | string } =
@@ -211,6 +254,10 @@ export async function queryActiveContractsRaw(
     requestMethod: 'post',
     resource: '/v2/state/acs',
     body: JSON.stringify(body),
+  }).catch((err: unknown) => {
+    // The read didn't complete. Adapters flatten the cause (Loop drops the 429
+    // status entirely), so classify by outcome, not by message.
+    throw new WalletReadFailedError(err);
   });
   // Loop wraps the response as `{ response: "<stringified json>" }`.
   // Other adapters may return the parsed object directly. Handle both.
@@ -266,6 +313,10 @@ export async function queryActiveContractsByInterfaceRaw(
     requestMethod: 'post',
     resource: '/v2/state/acs',
     body: JSON.stringify(body),
+  }).catch((err: unknown) => {
+    // The read didn't complete. Adapters flatten the cause (Loop drops the 429
+    // status entirely), so classify by outcome, not by message.
+    throw new WalletReadFailedError(err);
   });
   const parsed: AcsActiveContractsResponse = (() => {
     if (raw && typeof (raw as LedgerApiResponseWrapper).response === 'string') {

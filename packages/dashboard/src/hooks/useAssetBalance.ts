@@ -9,7 +9,11 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { readPayerHoldings } from '../lib/settleV1Wallet.js';
-import { isHostedLedgerAvailable } from '../lib/hostedWalletLedger.js';
+import {
+  HoldingsEmptyError,
+  isHostedLedgerAvailable,
+  isWalletRateLimited,
+} from '../lib/hostedWalletLedger.js';
 import type { StreamInstrument } from '../api/client.js';
 
 export interface AssetBalance {
@@ -42,9 +46,13 @@ export function useAssetBalance(
   const q = useQuery<number | null>({
     queryKey: ['asset-balance', party, instrumentId, instrument?.admin, instrument?.holdingTemplateId],
     enabled,
-    refetchInterval: 15_000,
-    staleTime: 12_000,
-    retry: 1,
+    // Hosted wallets rate-limit their holdings API, and this polls per open tab.
+    // Keep it slow and skip focus refetches; the settle path reads fresh anyway.
+    refetchInterval: 60_000,
+    staleTime: 45_000,
+    refetchOnWindowFocus: false,
+    retry: (attempt, err) => (isWalletRateLimited(err) ? attempt < 2 : attempt < 1),
+    retryDelay: (attempt) => Math.min(30_000, 5_000 * 2 ** attempt),
     queryFn: async () => {
       try {
         const holdings = await readPayerHoldings(party!, {
@@ -53,10 +61,14 @@ export function useAssetBalance(
           ...(instrument?.holdingTemplateId ? { holdingTemplateId: instrument.holdingTemplateId } : {}),
         });
         return holdings.reduce((sum, h) => sum + h.amount, 0);
-      } catch {
-        // readPayerHoldings throws when the wallet holds no spendable holdings of
-        // this asset — surface that as "no readable balance" (a dash), not 0.
-        return null;
+      } catch (err) {
+        // Only a completed read that found nothing means "no balance" (a dash).
+        // A failed read (throttled, transport, adapter) must surface as an error
+        // so react-query keeps the last known balance instead of flipping to a
+        // dash that reads as zero. Loop flattens its 429 into a generic message,
+        // so classify on the error type, not the text.
+        if (err instanceof HoldingsEmptyError) return null;
+        throw err;
       }
     },
   });

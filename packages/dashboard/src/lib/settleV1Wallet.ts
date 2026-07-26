@@ -23,6 +23,7 @@
  */
 
 import {
+  HoldingsEmptyError,
   queryActiveContractsRaw,
   queryActiveContractsByInterfaceRaw,
   submitAndWait,
@@ -286,7 +287,7 @@ export async function readPayerHoldings(
           .map((r) => decodeInterfaceHolding(r, wantId, opts?.instrumentAdmin))
           .filter((h): h is Holding => h !== null);
     if (holdings.length === 0) {
-      throw new Error(
+      throw new HoldingsEmptyError(
         `No spendable ${wantId} holdings found in your wallet. This wallet must OWN unlocked ` +
           `${wantId} (holdings you only receive-and-hold through a registrar's custody are not ` +
           `spendable). Fund it with ${wantId} you control, then try again.`,
@@ -302,7 +303,7 @@ export async function readPayerHoldings(
 
   if (holdings.length === 0) {
     if (rows.length === 0) {
-      throw new Error(
+      throw new HoldingsEmptyError(
         'No Canton Coin holdings found in your wallet. Fund your Loop wallet with CC, ' +
           'then press Settle again — V1 draws each cycle live from your wallet.',
       );
