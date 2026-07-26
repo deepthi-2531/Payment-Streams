@@ -9,6 +9,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { getWalletHoldings, type WalletHoldingsResult } from '../lib/walletHoldings.js';
+import { isWalletRateLimited } from '../lib/hostedWalletLedger.js';
 import { walletClient } from '../store/wallet/index.js';
 
 export function useWalletHoldings() {
@@ -18,8 +19,13 @@ export function useWalletHoldings() {
     // Only fetch when we're on a PartyLayer session — the dapp-sdk
     // path uses its own holdings UI today.
     enabled: walletClient.layer === 'partylayer',
-    refetchInterval: 15_000,
-    staleTime: 12_000,
-    retry: 1,
+    // Hosted wallets rate-limit their holdings API; poll gently.
+    refetchInterval: 60_000,
+    staleTime: 45_000,
+    refetchOnWindowFocus: false,
+    // Loop's REST holdings call surfaces a real "HTTP 429" — worth a backed-off
+    // retry rather than showing the user a failure they can't act on.
+    retry: (attempt, err) => (isWalletRateLimited(err) ? attempt < 2 : attempt < 1),
+    retryDelay: (attempt) => Math.min(30_000, 5_000 * 2 ** attempt),
   });
 }

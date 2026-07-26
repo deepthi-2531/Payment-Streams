@@ -22,8 +22,10 @@ export function useLoopHoldings() {
     queryKey: ['loop-holdings'],
     queryFn: getLoopHoldings,
     enabled: isLoopWalletActive(),
-    refetchInterval: 15_000,
-    staleTime: 12_000,
+    // Loop rate-limits this endpoint; poll gently and skip focus refetches.
+    refetchInterval: 60_000,
+    staleTime: 45_000,
+    refetchOnWindowFocus: false,
     retry: 1,
   });
 }

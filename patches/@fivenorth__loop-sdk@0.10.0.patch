@@ -1,5 +1,5 @@
 diff --git a/dist/index.js b/dist/index.js
-index c51ba741e2d971319984a06c2755f4c738f551cf..d86bedcd3daf5d6ec07f3b9398fe0ac61446b5a7 100644
+index c51ba741e2d971319984a06c2755f4c738f551cf..bc4887da4818a66817334ae9f8cc443636ba290c 100644
 --- a/dist/index.js
 +++ b/dist/index.js
 @@ -2099,6 +2099,11 @@ class Connection {
@@ -179,23 +179,24 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..d86bedcd3daf5d6ec07f3b9398fe0ac6
          return;
        }
        console.error("[LoopSDK] Failed to verify session.", err);
-@@ -2802,7 +2863,14 @@ class LoopSDK {
+@@ -2802,7 +2863,15 @@ class LoopSDK {
          hooks: this.createProviderHooks()
        });
        this.onAccept?.(this.provider);
 -      this.connection.connectWebSocket(this.session.ticketId, this.handleWebSocketMessage.bind(this));
-+      // restored (or already-authorized) session: the single-use pairing ticket
-+      // is consumed and the Provider is HTTP + authToken, so DO NOT re-dial the
-+      // pairing socket here. Re-dialing a consumed ticket just draws an
-+      // unauthorized frame + reconnect churn (and previously tore the session
-+      // down). Mark the handshake complete so any later transaction-time
-+      // reconnect() is never auto-redialed. Reads/holdings/verifySession all go
-+      // over HTTP; a submit lazily reopens the socket via ensureConnected().
++      // restored (or already-authorized) session: wire the pairing transport.
++      // ledgerApi reads and submits go through sendRequest -> ensureConnected,
++      // and reconnect() can only redial once connectWebSocket has recorded the
++      // ticket and message handler — without this every request on a restored
++      // session fails with "Cannot reconnect without a known ticket".
++      this.connection.connectWebSocket(this.session.ticketId, this.session.ticketAuthToken, this.handleWebSocketMessage.bind(this));
++      // the ticket is already consumed, so suppress the background idle-close
++      // redial; requests reopen the socket on demand via ensureConnected().
 +      this.connection._handshakeComplete = true;
        return Promise.resolve();
      }
    }
-@@ -2818,12 +2886,12 @@ class LoopSDK {
+@@ -2818,12 +2887,12 @@ class LoopSDK {
        return;
      }
      try {
@@ -212,7 +213,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..d86bedcd3daf5d6ec07f3b9398fe0ac6
        }
        this.showQrCode(this.buildConnectUrl(this.session.ticketId));
      } catch (error) {
-@@ -2838,6 +2906,14 @@ class LoopSDK {
+@@ -2838,6 +2907,14 @@ class LoopSDK {
        console.warn("[LoopSDK] Detected session invalidation:", errCode, {
          message
        });
@@ -227,7 +228,7 @@ index c51ba741e2d971319984a06c2755f4c738f551cf..d86bedcd3daf5d6ec07f3b9398fe0ac6
        this.logout();
        return;
      }
-@@ -2861,6 +2937,10 @@ class LoopSDK {
+@@ -2861,6 +2938,10 @@ class LoopSDK {
            this.session.email = email;
            this.session.authorized();
            this.session.save();

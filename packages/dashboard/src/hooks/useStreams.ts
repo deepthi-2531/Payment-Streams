@@ -328,6 +328,10 @@ export function useSettleStreamV1() {
     onSuccess: (_result, { id }) => {
       queryClient.invalidateQueries({ queryKey: ['streams-v1'] });
       queryClient.invalidateQueries({ queryKey: ['stream-v1', id] });
+      // A settle just drew from the wallet — refresh the balances the funding
+      // strip reads, otherwise they poll slowly and show a pre-settle figure.
+      queryClient.invalidateQueries({ queryKey: ['wallet-holdings'] });
+      queryClient.invalidateQueries({ queryKey: ['asset-balance'] });
     },
   });
 }
