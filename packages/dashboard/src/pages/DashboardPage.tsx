@@ -16,6 +16,7 @@ import {
 } from '../components/common/index.js';
 import type { WalletHolding } from '../lib/walletHoldings.js';
 import { AssetGlyph } from '../components/primitives/AssetGlyph.js';
+import { Copyable } from '../components/primitives/Copyable.js';
 import { displayName, instrumentLabel } from '../lib/format.js';
 
 export function DashboardPage() {
@@ -84,7 +85,16 @@ export function DashboardPage() {
   return (
     <div style={{ paddingTop: 28 }}>
       <PageHeader
-        title={`Hello, ${partyHint}.`}
+        title={
+          party ? (
+            <>
+              Hello,{' '}
+              <Copyable value={party} display={partyHint} variant="inline" />.
+            </>
+          ) : (
+            `Hello, ${partyHint}.`
+          )
+        }
         subtitle={
           <span>
             {activeStreams.length} active stream{activeStreams.length === 1 ? '' : 's'}
