@@ -8,6 +8,7 @@ import { useState, type CSSProperties } from 'react';
 import { NavLink, useLocation } from 'react-router';
 import { Icons } from '../primitives/Icons.js';
 import { Avatar } from '../primitives/Avatar.js';
+import { Copyable } from '../primitives/Copyable.js';
 import { useAuth } from '../../store/auth.js';
 import { useStreamsV1 } from '../../hooks/useStreams.js';
 
@@ -167,20 +168,16 @@ export function Sidebar() {
                   identity={{ name: auth.party.split('::')[0] }}
                   size={30}
                 />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div
-                    style={{
-                      fontSize: 12.5,
-                      fontWeight: 500,
-                      color: 'var(--fg)',
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                    title={auth.party}
-                  >
-                    {auth.party.split('::')[0]}
-                  </div>
+                <div style={{ minWidth: 0, flex: 1, marginLeft: -6 }}>
+                  {/* Click to copy the FULL party id (prefix::fingerprint); the
+                     card only has room for the prefix. */}
+                  <Copyable
+                    value={auth.party}
+                    display={auth.party.split('::')[0]}
+                    size={12.5}
+                    color="var(--fg)"
+                    truncate
+                  />
                 </div>
                 <button
                   className="btn-ghost"

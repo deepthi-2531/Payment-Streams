@@ -10,9 +10,14 @@ export interface CopyableProps {
   readonly value: string;
   readonly display?: string;
   readonly size?: number;
+  /** Ellipsis-truncate the display text so a long value (e.g. a party id) fits
+   * a constrained container; the copy icon stays visible. */
+  readonly truncate?: boolean;
+  /** Override the display text colour (defaults to the muted `--fg-3`). */
+  readonly color?: string;
 }
 
-export function Copyable({ value, display, size = 12 }: CopyableProps) {
+export function Copyable({ value, display, size = 12, truncate, color }: CopyableProps) {
   const [copied, setCopied] = useState(false);
 
   const handleClick = (e: MouseEvent<HTMLButtonElement>) => {
@@ -36,7 +41,8 @@ export function Copyable({ value, display, size = 12 }: CopyableProps) {
         borderRadius: 4,
         fontFamily: 'var(--font-mono)',
         fontSize: size,
-        color: 'var(--fg-3)',
+        color: color ?? 'var(--fg-3)',
+        ...(truncate ? { maxWidth: '100%', minWidth: 0 } : {}),
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.background = 'var(--card-2)';
@@ -44,9 +50,17 @@ export function Copyable({ value, display, size = 12 }: CopyableProps) {
       onMouseLeave={(e) => {
         e.currentTarget.style.background = 'transparent';
       }}
-      title={value}
+      title={copied ? 'Copied' : `Copy ${value}`}
     >
-      {display ?? value}
+      <span
+        style={
+          truncate
+            ? { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }
+            : undefined
+        }
+      >
+        {display ?? value}
+      </span>
       {copied ? <Icons.Check size={11} /> : <Icons.Copy size={11} />}
     </button>
   );
